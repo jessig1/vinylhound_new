@@ -1,0 +1,12 @@
+{
+  "name": "@vinylhound/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@vinylhound/contracts": "0.1.0",
+    "openai": "7.5.0",
+    "zod": "4.4.3"
+  }
+}
