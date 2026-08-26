@@ -6,9 +6,12 @@ export default tseslint.config(
   {
     ignores: [
       "**/.next/**",
+      "**/.next-e2e/**",
       "**/coverage/**",
       "**/dist/**",
       "**/node_modules/**",
+      "**/playwright-report/**",
+      "**/test-results/**",
     ],
   },
   eslint.configs.recommended,

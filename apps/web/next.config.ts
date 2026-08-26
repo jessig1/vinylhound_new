@@ -7,6 +7,9 @@ loadEnvConfig(path.resolve(process.cwd(), "../.."));
 
 const nextConfig: NextConfig = {
   agentRules: false,
+  // Allows the e2e suite to build/serve from .next-e2e without touching the
+  // development server's .next directory.
+  distDir: process.env.NEXT_DIST_DIR ?? ".next",
   poweredByHeader: false,
   serverExternalPackages: ["sharp"],
   transpilePackages: [

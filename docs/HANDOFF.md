@@ -30,29 +30,23 @@ the log.
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** none in flight. The upload-rejection bug ("The decoded file type
-does not match the declared image type") is fixed and committed: the client
-now derives the declared MIME type from magic bytes via `detectImageMimeType`
-in `packages/contracts/src/upload.ts` instead of the extension-based
-`File.type`, with unit tests in `packages/contracts/src/upload.test.ts`.
-HEIC/HEIF files are rejected client-side with a conversion hint before any
-upload. Server-side validation is unchanged and remains authoritative.
+**Task:** the last open Milestone 1 item — the small private AI eval baseline
+(`docs/OPENAI_INTEGRATION.md` and `docs/TESTING.md` define the gate, metrics,
+and dataset shape). It needs consented, labeled cover photos from the
+maintainer; the audit trail (model, prompt version, tokens, outcome per
+attempt) is already persisted to support it.
 
-The fix is verified against the live pipeline: genuine WebP variants (VP8,
-VP8L, VP8X) pass end-to-end, and JPEG bytes declared as `image/webp`
-reproduce the original 422 exactly. A post-fix retry of the original file
-still failed only because the browser ran the pre-fix bundle — it declared
-`image/webp` for byte-identical non-WebP content, which only the old
-`File.type` code path does. Remedy: restart `npm run dev` and hard-refresh
-before retrying. The diagnostic script is kept at `tmp/diagnose-upload.mjs`
-(gitignored).
+Recently completed, for context:
 
-**Next**, the roadmap's declared next steps are:
-
-1. End-to-end phone-browser coverage for the capture-to-confirm path
-   (`docs/TESTING.md` names this the next test layer).
-2. A small private AI eval baseline (`docs/OPENAI_INTEGRATION.md` and
-   `docs/TESTING.md` define the gate, metrics, and dataset shape).
+- Upload MIME sniffing fix (client declares content-derived type; HEIC gets a
+  pre-upload hint), verified end-to-end. The full capture-to-confirm path is
+  confirmed working with a real photo, worker, and OpenAI analysis.
+- Phone-sized Playwright e2e suite (`npm run test:e2e`): production build on
+  port 3100 from `.next-e2e`, dedicated `vinylhound_e2e` database and queue,
+  synthetic worker in `apps/worker/src/e2e-worker.ts` (no OpenAI calls).
+  Covers misnamed-file upload, review, refresh recovery, confirmation into
+  the collection, and pre-upload rejections. One-time setup:
+  `npx playwright install chromium`.
 
 ## Known gaps and risks
 
@@ -70,6 +64,11 @@ before retrying. The diagnostic script is kept at `tmp/diagnose-upload.mjs`
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
 
+- **2026-08-26 — Claude (fifth session).** Confirmed the full pipeline works
+  with real analysis. Built the phone-sized Playwright e2e suite (3 tests,
+  passing): isolated production server, e2e database/queue, synthetic worker.
+  Updated `docs/TESTING.md` and `docs/ROADMAP.md`; only the AI eval baseline
+  remains in Milestone 1. `npm run check` and `npm run build` pass.
 - **2026-08-26 — Claude (fourth session).** Investigated a post-fix 422 on
   the same `.webp` file. Proved via database checksums and a live end-to-end
   reproduction (`tmp/diagnose-upload.mjs`) that the server pipeline is

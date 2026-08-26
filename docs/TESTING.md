@@ -43,6 +43,7 @@ npm run lint
 npm run check
 npm run build
 npm run test:integration
+npm run test:e2e
 ```
 
 `npm run test:integration` requires the local Compose services. It applies pending
@@ -56,5 +57,15 @@ secret-free and infrastructure-free.
 
 The database integration suite also verifies reviewed confirmation, idempotent
 replay, release normalization, and transactional wishlist-to-collection
-conversion. Phone-sized browser automation for camera/file input, upload
-progress, refresh recovery, and form interaction remains the next test layer.
+conversion.
+
+`npm run test:e2e` runs Playwright at a phone viewport against a production
+build served from `.next-e2e` on port 3100, fully isolated from a running dev
+server: a dedicated `vinylhound_e2e` database (created and migrated by the
+global setup), a dedicated queue name, and a synthetic worker
+(`apps/worker/src/e2e-worker.ts`) that exercises the real outbox, queue,
+storage, and persistence path without calling OpenAI. It covers upload of a
+misnamed cover file (content sniffing), identification review, refresh
+recovery, confirmation into the collection, the collection listing, and
+pre-upload rejection messaging for non-image and HEIC files. It requires the
+Docker Compose services and a one-time `npx playwright install chromium`.

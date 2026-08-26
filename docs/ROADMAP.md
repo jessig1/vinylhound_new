@@ -13,6 +13,7 @@
 - [x] Call the OpenAI adapter, persist candidates/audit metadata, and poll scan status.
 - [x] Build mobile capture/upload, result review/correction, and add-to-list UI.
 - [x] Add provider-boundary and confirmation integration tests.
+- [x] Add phone-sized end-to-end coverage for the capture-to-confirm path.
 - [ ] Establish a small private AI eval baseline.
 
 Exit criterion: one phone photo can become a user-confirmed collection or wishlist item, with retry and failure visibility.
@@ -36,6 +37,7 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 
-The next recommended task is end-to-end phone-browser coverage for the completed
-capture-to-confirm path, followed by a small private AI eval baseline. Avoid
+The next recommended task is the small private AI eval baseline: collect a
+handful of consented, labeled cover photos and measure the configured model
+against `docs/TESTING.md`'s metrics before any model or prompt change. Avoid
 building broad collection features before the path is measurable.

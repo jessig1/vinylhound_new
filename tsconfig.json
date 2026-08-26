@@ -26,5 +26,5 @@
     "prettier.config.mjs",
     "vitest.config.ts"
   ],
-  "exclude": ["**/node_modules", "**/.next", "**/dist"]
+  "exclude": ["**/node_modules", "**/.next", "**/.next-e2e", "**/dist"]
 }

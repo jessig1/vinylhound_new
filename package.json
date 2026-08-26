@@ -23,6 +23,7 @@
     "test:queue": "npm run test:integration --workspace @vinylhound/queue",
     "test:worker": "npm run test:integration --workspace @vinylhound/worker",
     "test:integration": "npm run test:database && npm run test:storage && npm run test:queue && npm run test:worker",
+    "test:e2e": "npm run test:e2e --workspace @vinylhound/web",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "lint": "eslint .",
