@@ -103,3 +103,9 @@ Upload completion reads the stored object server-side and verifies its actual by
 length, SHA-256 digest, signed `Content-Type`, binary signature, decoded dimensions,
 decoder validity, and frame count. Invalid or animated objects are rejected and
 removed from object storage.
+
+The web client derives the declared MIME type from the file's magic bytes rather
+than the browser's extension-based `File.type`, so a misnamed file uploads under
+its actual format instead of failing server validation, and unsupported formats
+such as HEIC are rejected before any upload begins. Server-side validation remains
+authoritative.

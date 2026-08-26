@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 
 import {
   CreateScanResponseSchema,
+  detectImageMimeType,
+  IMAGE_SNIFF_BYTE_LENGTH,
   SignedUploadSchema,
   SubmitScanResponseSchema,
 } from "@vinylhound/contracts";
@@ -72,6 +74,21 @@ export default function ScanPage() {
 
     try {
       setPhase("hashing");
+      // File.type comes from the filename extension, so derive the declared
+      // MIME type from the file's magic bytes instead; a misnamed file would
+      // otherwise fail server-side validation after a full upload.
+      const detected = detectImageMimeType(
+        new Uint8Array(
+          await file.slice(0, IMAGE_SNIFF_BYTE_LENGTH).arrayBuffer(),
+        ),
+      );
+      if (detected.kind !== "supported") {
+        throw new Error(
+          detected.kind === "heif_like"
+            ? "This photo is in HEIC/HEIF format, which is not supported yet. Export or convert it to JPEG and try again."
+            : "That file is not a JPEG, PNG, WebP, or GIF image.",
+        );
+      }
       const checksumSha256 = await sha256(file);
 
       setPhase("preparing");
@@ -85,7 +102,11 @@ export default function ScanPage() {
           body: JSON.stringify({ source }),
         }),
       );
-      if (!scan.limits.acceptedMimeTypes.some((type) => type === file.type)) {
+      if (
+        !scan.limits.acceptedMimeTypes.some(
+          (type) => type === detected.mimeType,
+        )
+      ) {
         throw new Error("Choose a JPEG, PNG, WebP, or GIF image.");
       }
       if (file.size > scan.limits.maxImageSizeBytes) {
@@ -101,7 +122,7 @@ export default function ScanPage() {
           },
           body: JSON.stringify({
             filename: file.name || "cover-photo",
-            mimeType: file.type,
+            mimeType: detected.mimeType,
             sizeBytes: file.size,
             checksumSha256,
           }),
