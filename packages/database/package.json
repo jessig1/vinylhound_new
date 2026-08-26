@@ -1,5 +1,22 @@
 {
   "name": "@vinylhound/database",
   "version": "0.1.0",
-  "private": true
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "db:migrate": "node --env-file-if-exists=../../.env ../../node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir migrations --migrations-table vinylhound_migrations --single-transaction",
+    "db:migration:create": "node ../../node_modules/node-pg-migrate/bin/node-pg-migrate.js create --migrations-dir migrations --migration-filename-format index --migration-file-language sql",
+    "test:integration": "node --env-file-if-exists=../../.env ../../node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@vinylhound/contracts": "^0.1.0",
+    "@vinylhound/domain": "^0.1.0",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "node-pg-migrate": "^9.0.0"
+  }
 }

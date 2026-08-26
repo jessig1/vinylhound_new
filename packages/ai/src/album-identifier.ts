@@ -1,4 +1,7 @@
-import type { AlbumIdentification } from "@vinylhound/contracts";
+import type {
+  AlbumIdentification,
+  ProviderErrorCategory,
+} from "@vinylhound/contracts";
 
 export interface AlbumIdentificationRequest {
   scanId: string;
@@ -11,6 +14,11 @@ export interface AlbumIdentificationMetadata {
   model: string;
   promptVersion: string;
   providerResponseId: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  } | null;
 }
 
 export interface AlbumIdentificationResponse {
@@ -22,4 +30,15 @@ export interface AlbumIdentifier {
   identify(
     request: AlbumIdentificationRequest,
   ): Promise<AlbumIdentificationResponse>;
+}
+
+export class AlbumIdentificationError extends Error {
+  constructor(
+    readonly category: ProviderErrorCategory,
+    readonly retryable: boolean,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AlbumIdentificationError";
+  }
 }

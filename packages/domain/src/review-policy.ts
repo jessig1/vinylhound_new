@@ -7,12 +7,14 @@ export type ReviewOutcome =
   | { status: "identified"; reason: "high_confidence_clear_lead" }
   | {
       status: "needs_review";
-      reason: "low_confidence" | "ambiguous_candidates";
+      reason:
+        "provider_review_reason" | "low_confidence" | "ambiguous_candidates";
     }
   | { status: "unresolved"; reason: "no_candidates" };
 
 export function determineReviewOutcome(
   candidates: readonly AlbumCandidate[],
+  needsReviewReasons: readonly string[] = [],
 ): ReviewOutcome {
   const ranked = [...candidates].sort(
     (left, right) => right.confidence - left.confidence,
@@ -21,6 +23,10 @@ export function determineReviewOutcome(
 
   if (!first) {
     return { status: "unresolved", reason: "no_candidates" };
+  }
+
+  if (needsReviewReasons.length > 0) {
+    return { status: "needs_review", reason: "provider_review_reason" };
   }
 
   if (first.confidence < AUTO_ACCEPT_CONFIDENCE) {

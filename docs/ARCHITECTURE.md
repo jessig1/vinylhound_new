@@ -8,11 +8,11 @@ VinylHound starts as a modular monolith with two processes: a Next.js web applic
 flowchart LR
   Phone[Phone camera or uploads] --> Web[Next.js web app]
   Web -->|signed upload| Objects[(Object storage)]
-  Web -->|scan and library data| DB[(PostgreSQL)]
-  Web -->|enqueue scan ID| Queue[(Redis queue)]
+  Web -->|scan + transactional outbox| DB[(PostgreSQL)]
+  DB -->|outbox publisher| Queue[(Redis queue)]
   Queue --> Worker[Background worker]
-  Worker -->|short-lived read URL| Objects
-  Worker -->|image inputs + schema| OpenAI[OpenAI Responses API]
+  Worker -->|validated object read| Objects
+  Worker -->|request-scoped image data + schema| OpenAI[OpenAI Responses API]
   Worker -->|candidates + audit metadata| DB
   DB --> Review[User review]
   Review --> Lists[Collection or wishlist]
@@ -27,11 +27,16 @@ Camera uploads and batch analysis are slower and less reliable than normal HTTP 
 1. Web creates a scan in `awaiting_upload` and returns signed upload instructions.
 2. Browser uploads directly to object storage and reports completed image metadata/checksums.
 3. Web validates ownership/completeness, atomically marks the scan `queued`, and publishes an idempotent job.
-4. Worker claims the job, marks it `processing`, creates short-lived image URLs, and calls the AI adapter.
+4. Worker claims the job, marks it `processing`, reads the authoritative validated objects, creates request-scoped Base64 data URLs, and calls the AI adapter.
 5. Structured output is validated. Domain policy independently determines whether the result can be presented as identified or needs review.
-6. User confirmation creates or selects a canonical release and adds a library item in one transaction.
+6. User confirmation creates or selects a canonical release and adds or converts
+   a library item in one transaction. The confirmation retains the selected AI
+   candidate, reviewed corrections, and originating scan.
 
-Use a transactional outbox or equivalent atomic enqueue pattern when persistence is implemented; a database commit must not leave a scan permanently unqueued.
+Submission writes the `queued` scan state and a versioned outbox message in one
+PostgreSQL transaction. The worker publishes pending messages to BullMQ using a
+deterministic job ID and only then marks them published. A crash between those
+steps causes a safe duplicate publication attempt instead of a lost scan.
 
 ## Boundaries
 

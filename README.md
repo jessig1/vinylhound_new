@@ -2,7 +2,13 @@
 
 VinylHound is a mobile-first application for identifying vinyl albums from cover photos and organizing the results into a collection or wishlist. It supports camera capture, single-photo upload, and batch ingestion.
 
-This repository currently contains the project foundation: a working web shell, shared contracts and domain policy, an OpenAI adapter boundary, background-worker and infrastructure seams, and the documentation needed to implement the first vertical slice safely.
+This repository contains the completed project foundation and a working first
+vertical slice: the mobile web flow captures or selects a cover, uploads it with
+progress, survives analysis through a refresh-safe status page, presents ranked
+candidates for correction, and atomically adds the reviewed release to collection
+or wishlist. PostgreSQL persistence, signed S3-compatible uploads, server-side
+validation, transactional queue delivery, OpenAI analysis, and the complete audit
+trail sit behind the web and worker boundaries.
 
 ## Product shape
 
@@ -40,12 +46,18 @@ Requirements: Node.js 22 or newer, npm 10 or newer, Docker, and Docker Compose.
 npm install
 copy .env.example .env
 docker compose up -d
+npm run db:migrate
 npm run dev
 ```
 
 On macOS or Linux, use `cp .env.example .env`. Open `http://localhost:3000`.
 
 The web shell does not require an OpenAI key. Before wiring or running image analysis, create an OpenAI API project/key and set `OPENAI_API_KEY` only in the server/worker environment. The consumer ChatGPT product is not called directly; VinylHound uses the OpenAI API.
+
+Run `npm run dev:worker` in a second terminal to publish committed outbox rows to
+Redis. When `OPENAI_API_KEY` is non-empty, the same process starts the BullMQ
+analysis consumer. Without a key, publication still runs and analysis jobs remain
+waiting without making billable API calls.
 
 Run the repository checks with:
 

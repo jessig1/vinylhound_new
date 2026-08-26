@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
+  "scripts": {
+    "test:integration": "node --env-file-if-exists=../../.env ../../node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts"
+  },
   "dependencies": {
-    "@vinylhound/contracts": "0.1.0"
+    "@vinylhound/contracts": "0.1.0",
+    "bullmq": "^6.2.2",
+    "ioredis": "^6.0.0"
   }
 }

@@ -33,6 +33,18 @@ describe("determineReviewOutcome", () => {
     });
   });
 
+  it("honors explicit provider review reasons", () => {
+    expect(
+      determineReviewOutcome(
+        [candidate(0.99)],
+        ["The pressing cannot be established from the front cover."],
+      ),
+    ).toEqual({
+      status: "needs_review",
+      reason: "provider_review_reason",
+    });
+  });
+
   it("requires review when the leading candidates are too close", () => {
     expect(
       determineReviewOutcome([candidate(0.97), candidate(0.9, "Blue Train")]),

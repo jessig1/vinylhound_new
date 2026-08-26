@@ -42,4 +42,19 @@ npm run typecheck
 npm run lint
 npm run check
 npm run build
+npm run test:integration
 ```
+
+`npm run test:integration` requires the local Compose services. It applies pending
+database migrations and exercises PostgreSQL constraints plus a real signed upload
+against local MinIO. It also exercises BullMQ against local Redis, including
+deterministic-job deduplication and a real consumer. The worker integration suite
+uses a synthetic in-process identifier to verify success, review routing,
+transient retry, terminal failure, audit persistence, status projection, and
+succeeded redelivery without making OpenAI calls. Unit and CI checks remain
+secret-free and infrastructure-free.
+
+The database integration suite also verifies reviewed confirmation, idempotent
+replay, release normalization, and transactional wishlist-to-collection
+conversion. Phone-sized browser automation for camera/file input, upload
+progress, refresh recovery, and form interaction remains the next test layer.

@@ -6,6 +6,10 @@ This file is durable guidance for humans and coding agents working in this repos
 
 Read `README.md`, then the relevant file under `docs/`. Architecture decisions live in `docs/decisions/`; add an ADR when a change affects service boundaries, persistence, public contracts, or providers.
 
+## Multi-agent handoff
+
+OpenAI Codex is the primary implementation agent; Claude is the continuation and review agent (see `CLAUDE.md`). Cross-session state lives in `docs/HANDOFF.md`: read it at session start, and update its current state, resume point, and session log before ending any session that changed files or reached a decision.
+
 ## Commands
 
 - `npm install` — install all workspace dependencies.

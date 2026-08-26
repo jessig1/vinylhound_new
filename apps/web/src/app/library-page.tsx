@@ -1,17 +1,28 @@
-import type { Album } from "./data";
+import Link from "next/link";
+
+import type { LibraryList } from "@vinylhound/contracts";
+import { listLibraryItemsForUser } from "@vinylhound/database";
+
+import { getServerContext } from "@/server/context";
+
 import { Art, Icon } from "./ui";
 
-export function LibraryPage({
-  albums,
+export async function LibraryPage({
   description,
+  list,
   title,
-  wishlist = false,
 }: {
-  albums: Album[];
   description: string;
+  list: LibraryList;
   title: string;
-  wishlist?: boolean;
 }) {
+  const context = getServerContext();
+  const library = await listLibraryItemsForUser(context.database.db, {
+    userId: context.config.DEVELOPMENT_USER_ID,
+    list,
+  });
+  const wishlist = list === "wishlist";
+
   return (
     <main className="content-page library-page">
       <header className="page-heading">
@@ -37,25 +48,68 @@ export function LibraryPage({
         </button>
       </div>
 
-      <section className="album-grid album-grid--library" aria-label={title}>
-        {albums.map((album) => (
-          <article className="album-card album-card--large" key={album.id}>
-            <div className="album-card__art-wrap">
-              <Art title={album.title} tone={album.tone} />
-              {wishlist ? (
-                <span className="heart-badge">
-                  <Icon name="heart" size={17} />
-                </span>
-              ) : null}
-            </div>
-            <h2>{album.title}</h2>
-            <p>{album.artist}</p>
-            <small>
-              {album.year} · {album.genre}
-            </small>
-          </article>
-        ))}
-      </section>
+      {library.items.length ? (
+        <section className="album-grid album-grid--library" aria-label={title}>
+          {library.items.map((item) => {
+            const release = item.release;
+            const facts = [
+              release.releaseYear?.toString(),
+              release.label,
+            ].filter(Boolean);
+            return (
+              <article className="album-card album-card--large" key={item.id}>
+                <div className="album-card__art-wrap">
+                  <Art title={release.title} tone={toneFor(item.id)} />
+                  {wishlist ? (
+                    <span className="heart-badge">
+                      <Icon name="heart" size={17} />
+                    </span>
+                  ) : null}
+                </div>
+                <h2>{release.title}</h2>
+                <p>{release.artist}</p>
+                <small>{facts.join(" · ") || "Release details not set"}</small>
+              </article>
+            );
+          })}
+        </section>
+      ) : (
+        <section className="library-empty">
+          <span className="upload-card__icon">
+            <Icon name={wishlist ? "heart" : "collection"} size={27} />
+          </span>
+          <h2>
+            {wishlist
+              ? "Nothing on your wishlist yet."
+              : "Your shelf is empty."}
+          </h2>
+          <p>Scan a cover, review the match, and save the record here.</p>
+          <Link className="primary-button" href="/scan">
+            <Icon name="camera" size={18} /> Scan a record
+          </Link>
+        </section>
+      )}
     </main>
   );
+}
+
+const tones = [
+  "blue",
+  "cream",
+  "sun",
+  "crosswalk",
+  "classroom",
+  "chrome",
+  "ocean",
+  "green",
+  "snow",
+  "red",
+  "rainbow",
+  "water",
+] as const;
+
+function toneFor(id: string) {
+  let value = 0;
+  for (const character of id) value = (value + character.charCodeAt(0)) % 997;
+  return tones[value % tones.length]!;
 }

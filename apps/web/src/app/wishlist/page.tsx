@@ -1,13 +1,13 @@
-import { wishlist } from "../data";
 import { LibraryPage } from "../library-page";
+
+export const dynamic = "force-dynamic";
 
 export default function WishlistPage() {
   return (
     <LibraryPage
-      albums={wishlist}
-      description="The records you’re keeping an eye out for."
+      description="The records you're keeping an eye out for."
+      list="wishlist"
       title="Your wishlist"
-      wishlist
     />
   );
 }

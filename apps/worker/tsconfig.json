@@ -8,5 +8,6 @@
     "moduleResolution": "NodeNext",
     "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.integration.ts"]
 }
