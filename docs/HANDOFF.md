@@ -38,10 +38,14 @@ in `packages/contracts/src/upload.ts` instead of the extension-based
 HEIC/HEIF files are rejected client-side with a conversion hint before any
 upload. Server-side validation is unchanged and remains authoritative.
 
-Worth a manual confirmation: retry the original `.webp` file that triggered
-the failure. If it still fails, its first bytes are something outside the
-accepted set entirely; the new client error message will now say so before
-uploading.
+The fix is verified against the live pipeline: genuine WebP variants (VP8,
+VP8L, VP8X) pass end-to-end, and JPEG bytes declared as `image/webp`
+reproduce the original 422 exactly. A post-fix retry of the original file
+still failed only because the browser ran the pre-fix bundle — it declared
+`image/webp` for byte-identical non-WebP content, which only the old
+`File.type` code path does. Remedy: restart `npm run dev` and hard-refresh
+before retrying. The diagnostic script is kept at `tmp/diagnose-upload.mjs`
+(gitignored).
 
 **Next**, the roadmap's declared next steps are:
 
@@ -66,6 +70,11 @@ uploading.
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
 
+- **2026-08-26 — Claude (fourth session).** Investigated a post-fix 422 on
+  the same `.webp` file. Proved via database checksums and a live end-to-end
+  reproduction (`tmp/diagnose-upload.mjs`) that the server pipeline is
+  correct for all WebP variants and the retry ran the stale pre-fix browser
+  bundle. Removed the diagnostic scans and objects. No code changed.
 - **2026-08-26 — Claude (third session).** Committed the vertical slice
   (`8c692ed`). Fixed the upload rejection: added magic-byte sniffing to
   `packages/contracts` with tests, switched the scan page to declare the
