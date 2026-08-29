@@ -13,17 +13,19 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-08-26
+## Current state — verified 2026-08-29
 
 - Milestone 1 (single-image vertical slice) is functionally complete except
   the private AI eval baseline (`docs/ROADMAP.md`).
 - `npm run check` passes: Prettier, ESLint, typecheck, and 22/22 unit tests.
 - `npm run build` passes: the Next.js web app (17 routes) and the worker
   compile cleanly.
-- Integration tests were not run this session; they require the Docker Compose
-  services.
+- Integration and Playwright e2e tests were not rerun on 2026-08-29 because
+  Docker Desktop is stopped. The committed e2e suite is present and documented;
+  it requires Compose services and the Chromium Playwright browser.
 - The vertical slice is committed on `main` (`8c692ed`), followed by the
-  upload MIME-sniffing fix. Nothing has been pushed to `origin`.
+  upload MIME-sniffing fix and Playwright e2e coverage. `main` is two commits
+  ahead of `origin/main`.
 
 ## Resume point
 
@@ -50,9 +52,9 @@ Recently completed, for context:
 
 ## Known gaps and risks
 
-- No end-to-end browser tests; the completed UI flow is verified manually
-  only.
 - No AI eval baseline; model or prompt changes are currently unmeasurable.
+- The committed browser e2e suite needs an independent rerun whenever Docker
+  Desktop is available; it is not part of `npm run check`.
 - Authentication is the single development user. All rows are user-scoped, so
   swapping in real identity issuance later does not change the data model.
 - Library `PATCH`/`DELETE` endpoints are documented as planned, not
@@ -64,6 +66,11 @@ Recently completed, for context:
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
 
+- **2026-08-29 — Codex.** Read-only project-state evaluation. Verified a
+  clean working tree, `npm run check` (22/22 tests), and `npm run build`.
+  Docker Desktop is stopped, so integration and e2e tests were not rerun.
+  Corrected the stale claim that no browser e2e suite exists and recorded that
+  `main` is two commits ahead of `origin/main`.
 - **2026-08-26 — Claude (fifth session).** Confirmed the full pipeline works
   with real analysis. Built the phone-sized Playwright e2e suite (3 tests,
   passing): isolated production server, e2e database/queue, synthetic worker.
