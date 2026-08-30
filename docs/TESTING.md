@@ -63,8 +63,13 @@ succeeded redelivery without making OpenAI calls. Unit and CI checks remain
 secret-free and infrastructure-free.
 
 The database integration suite also verifies reviewed confirmation, idempotent
-replay, release normalization, and transactional wishlist-to-collection
-conversion.
+replay, release normalization, transactional wishlist-to-collection
+conversion, batch grouping (idempotent batch creation, scans linked under one
+batch, cross-batch isolation), retrying a failed scan as a new attempt with
+idempotent replay of a pending retry, and canceling a queued scan so the
+outbox dispatcher skips its job without publishing it. The worker integration
+suite additionally verifies that a scan canceled after being queued is
+skipped without a provider call.
 
 `npm run test:e2e` runs Playwright at a phone viewport against a production
 build served from `.next-e2e` on port 3100, fully isolated from a running dev
@@ -72,10 +77,13 @@ server: a dedicated `vinylhound_e2e` database (created and migrated by the
 global setup), a dedicated queue name, and a synthetic worker
 (`apps/worker/src/e2e-worker.ts`) that exercises the real outbox, queue,
 storage, and persistence path without calling OpenAI. It covers grouping
-labeled front/back/spine photos into one multi-view scan, upload of a misnamed
-cover file (content sniffing), identification review, refresh recovery,
-confirmation into the collection, the collection listing, and pre-upload
-rejection messaging for non-image and HEIC files. It requires the Docker
-Compose services and a one-time `npx playwright install chromium` (Linux/WSL
-also needs the browser's OS shared libraries: `sudo npx playwright
+labeled front/back/spine photos into one multi-view scan, grouping two
+front-cover photos into an independently trackable batch (mode toggle on
+`/scan`, parallel per-item upload, the `/scans/batch/{batchId}` progress page,
+and cross-navigation back from a batch item's review page), upload of a
+misnamed cover file (content sniffing), identification review, refresh
+recovery, confirmation into the collection, the collection listing, and
+pre-upload rejection messaging for non-image and HEIC files. It requires the
+Docker Compose services and a one-time `npx playwright install chromium`
+(Linux/WSL also needs the browser's OS shared libraries: `sudo npx playwright
 install-deps` once per machine).

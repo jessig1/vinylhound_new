@@ -828,6 +828,10 @@ label:has(input[type="file"]) {
   background: #fff0d9;
   color: #a66320;
 }
+.status--error {
+  background: #f7e2df;
+  color: #a13f2e;
+}
 .dashboard-columns {
   display: grid;
   gap: 32px;
@@ -1230,6 +1234,33 @@ label:has(input[type="file"]) {
 }
 .multi-view-upload > .form-error {
   margin-top: 18px;
+}
+.capture-mode-toggle {
+  display: inline-flex;
+  width: fit-content;
+  margin: 18px auto 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #faf9f5;
+}
+.capture-mode-toggle button {
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+.capture-mode-toggle button.is-active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+}
+.capture-mode-toggle button:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 .scan-tip {
   display: flex;

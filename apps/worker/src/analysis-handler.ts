@@ -38,7 +38,10 @@ export function createScanAnalysisHandler(options: ScanAnalysisHandlerOptions) {
       model: options.configuredModel,
       promptVersion: options.promptVersion,
     });
-    if (prepared.status === "already_succeeded") {
+    if (
+      prepared.status === "already_succeeded" ||
+      prepared.status === "canceled"
+    ) {
       return;
     }
 

@@ -2,10 +2,11 @@
 
 This is the intended HTTP surface for the first vertical slice. Runtime schemas belong in `packages/contracts`; generated OpenAPI should eventually be derived from the same source.
 
-The create-scan, request-upload, complete-upload, submit, scan-status, and
-confirmation endpoints are implemented. They currently use the configured
-development identity; production authentication will replace identity issuance
-without changing user-scoped persistence.
+The create-scan, request-upload, complete-upload, submit, scan-status,
+confirmation, retry, cancel, batch, and scan-list endpoints are implemented.
+They currently use the configured development identity; production
+authentication will replace identity issuance without changing user-scoped
+persistence.
 
 ## Conventions
 
@@ -20,15 +21,25 @@ without changing user-scoped persistence.
 
 | Method | Path                                         | Purpose                                       |
 | ------ | -------------------------------------------- | --------------------------------------------- |
+| GET    | `/scans`                                     | List the user's scans, newest first           |
 | POST   | `/scans`                                     | Create a camera/single/batch scan shell       |
 | POST   | `/scans/{scanId}/uploads`                    | Request signed upload instructions            |
 | POST   | `/scans/{scanId}/uploads/{imageId}/complete` | Confirm upload and integrity metadata         |
 | POST   | `/scans/{scanId}/submit`                     | Validate and enqueue the scan                 |
 | GET    | `/scans/{scanId}`                            | Read status, progress, candidates, and errors |
 | POST   | `/scans/{scanId}/retry`                      | Create a new attempt for a retryable scan     |
+| POST   | `/scans/{scanId}/cancel`                     | Stop a scan that has not yet completed        |
 | POST   | `/scans/{scanId}/confirm`                    | Confirm/correct and add to the chosen list    |
 
-Batch creation returns independent scan IDs; batch progress is a projection of those scans. Photos of several views of one record belong to one scan, not several jobs.
+Photos of several views of one record belong to one scan, not several jobs
+(`viewType`, below). Photos of several _different_ records belong to one
+**batch** instead: each photo becomes its own independent scan, and the batch
+is only a grouping.
+
+`POST /scans` accepts an optional `batchId`; every scan created with the same
+`batchId` shares that grouping. `GET /scans` and `GET /scans/{scanId}` both
+return the owning `batchId` (`null` for an ungrouped scan) so the client can
+link back to batch progress.
 
 Each requested upload declares a `viewType` (`front`, `back`, `spine`, `label`,
 `barcode`, `runout`, or `other`; defaults to `front` when omitted, preserving
@@ -37,6 +48,35 @@ image's `viewType` alongside its filename and MIME type. The worker sends every
 completed image to the identifier in one request, each paired with its view
 label, so the model can combine cover and edition evidence from the same
 physical record instead of treating extra photos as separate scans.
+
+`POST /scans/{scanId}/retry` requires `Idempotency-Key` and no request body.
+It is valid only for a `failed` or `unresolved` scan and reuses its
+already-uploaded, completed images to start a new attempt through the same
+outbox/worker path as the original submission (`202` for the new attempt,
+`200` for a scan already `queued`/`processing` from an earlier retry).
+`needs_review` is not retryable — a scan with a reviewable result is handled
+by confirmation or manual correction, not a new attempt.
+
+`POST /scans/{scanId}/cancel` requires `Idempotency-Key` and no request body.
+It is valid from `awaiting_upload`, `queued`, or `processing` and always
+returns `200` with `{ "status": "canceled" }`, including on replay of an
+already-canceled scan. Canceling before the worker has dispatched the job
+skips it for good; canceling while an attempt is already processing does not
+abort that in-flight provider call — it finishes and persists a result, but
+no further attempt is queued afterward. See ADR-0006.
+
+## Batch endpoints
+
+| Method | Path                 | Purpose                                           |
+| ------ | -------------------- | ------------------------------------------------- |
+| POST   | `/batches`           | Create an empty batch shell                       |
+| GET    | `/batches/{batchId}` | Read every member scan's status and top candidate |
+
+`POST /batches` requires `Idempotency-Key` and an empty JSON body (`{}`). The
+returned `batchId` is then passed to `POST /scans` for each photo. A batch has
+no status of its own — `GET /batches/{batchId}` always recomputes each
+member scan's current state from `scans`/`scan_attempts`, so it can never
+drift out of sync with `GET /scans/{scanId}` for the same scan.
 
 ## Library endpoints
 
@@ -83,7 +123,8 @@ Provider deliveries are append-only audit rows. Transient timeout, rate-limit,
 and provider-availability failures return the scan to `queued` for BullMQ retry.
 Refusal, invalid-image, schema, and unknown failures become visible `failed`
 states. A succeeded logical attempt is skipped on redelivery before another
-provider call is made.
+provider call is made. If the scan was canceled before the worker picked up
+the job, the worker skips analysis entirely and makes no provider call.
 
 `POST /scans/{scanId}/confirm` requires `Idempotency-Key` and accepts the
 selected candidate ID (or `null` for a manual identification), reviewed release

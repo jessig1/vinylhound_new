@@ -24,7 +24,12 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 
 - [x] Group front/back/spine/label images per scan, sent as one labeled
       identification request; preserves the single-image flow and audit trail.
-- [ ] Multi-select batch setup, independent item progress, cancellation, and retry.
+- [x] Multi-select batch setup, independent item progress, cancellation, and
+      retry (ADR-0006). Each photo in a batch becomes its own independently
+      tracked scan; the `/scan` page gains a "One record" / "Multiple
+      records" mode toggle, and `/scans/batch/{batchId}` shows per-item
+      status with cancel/retry actions. `/scans` now lists real persisted
+      scan history instead of demo data.
 - [ ] Thumbnail/normalization pipeline and worker concurrency limits.
 - [ ] Batch and provider-cost dashboards.
 
@@ -40,7 +45,7 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 
-The next recommended task is the second Milestone 2 slice: multi-select batch
-setup with independent per-item progress, cancellation, and retry. Keep the
-formal private AI evaluation as a gate before public rollout or model/cost
-optimization.
+The next recommended task is the third Milestone 2 slice: a thumbnail/
+normalization pipeline and worker concurrency limits, followed by batch and
+provider-cost dashboards. Keep the formal private AI evaluation as a gate
+before public rollout or model/cost optimization.

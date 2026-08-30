@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, lt } from "drizzle-orm";
 
 import type {
   AlbumIdentification,
@@ -22,6 +22,7 @@ export interface PrepareScanAnalysisInput {
 
 export type PrepareScanAnalysisResult =
   | { status: "already_succeeded" }
+  | { status: "canceled" }
   | {
       status: "ready";
       attemptId: string;
@@ -61,6 +62,10 @@ export async function prepareScanAnalysis(
     });
     if (succeeded) {
       return { status: "already_succeeded" };
+    }
+
+    if (scan.status === "canceled") {
+      return { status: "canceled" };
     }
 
     if (scan.status !== "queued" && scan.status !== "processing") {
@@ -349,6 +354,7 @@ export async function getScanForUser(
 
   return {
     scanId: scan.id,
+    batchId: scan.batchId,
     source: scan.source,
     status: scan.status,
     createdAt: scan.createdAt.toISOString(),
@@ -387,19 +393,102 @@ export async function getScanForUser(
           outcomeReason: attempt.outcomeReason as ReviewOutcomeReason | null,
         }
       : null,
-    candidates: candidates.map((candidate) => ({
-      id: candidate.id,
-      rank: candidate.rank,
-      artist: candidate.artist,
-      title: candidate.title,
-      releaseYear: candidate.releaseYear,
-      label: candidate.label,
-      catalogNumber: candidate.catalogNumber,
-      barcode: candidate.barcode,
-      confidence: candidate.confidence,
-      evidence: candidate.evidence,
-      warnings: candidate.warnings,
-    })),
+    candidates: candidates.map(toCandidateResult),
     confirmation,
+  };
+}
+
+function toCandidateResult(candidate: typeof scanCandidates.$inferSelect) {
+  return {
+    id: candidate.id,
+    rank: candidate.rank,
+    artist: candidate.artist,
+    title: candidate.title,
+    releaseYear: candidate.releaseYear,
+    label: candidate.label,
+    catalogNumber: candidate.catalogNumber,
+    barcode: candidate.barcode,
+    confidence: candidate.confidence,
+    evidence: candidate.evidence,
+    warnings: candidate.warnings,
+  };
+}
+
+async function getTopCandidateForScan(db: Database, scanId: string) {
+  const [attempt] = await db
+    .select({ id: scanAttempts.id })
+    .from(scanAttempts)
+    .where(
+      and(
+        eq(scanAttempts.scanId, scanId),
+        eq(scanAttempts.status, "succeeded"),
+      ),
+    )
+    .orderBy(
+      desc(scanAttempts.attemptNumber),
+      desc(scanAttempts.deliveryAttempt),
+    )
+    .limit(1);
+  if (!attempt) {
+    return null;
+  }
+
+  const [candidate] = await db
+    .select()
+    .from(scanCandidates)
+    .where(eq(scanCandidates.scanAttemptId, attempt.id))
+    .orderBy(asc(scanCandidates.rank))
+    .limit(1);
+  return candidate ? toCandidateResult(candidate) : null;
+}
+
+export async function listScanSummariesForUser(
+  db: Database,
+  input: { userId: string; scanIds: readonly string[] },
+) {
+  const summaries = await Promise.all(
+    input.scanIds.map(async (scanId) => {
+      const scan = await db.query.scans.findFirst({
+        where: and(eq(scans.id, scanId), eq(scans.userId, input.userId)),
+      });
+      if (!scan) {
+        throw new DatabaseCommandError("not_found", "Scan not found.");
+      }
+      return {
+        scanId: scan.id,
+        batchId: scan.batchId,
+        status: scan.status,
+        createdAt: scan.createdAt.toISOString(),
+        completedAt: scan.completedAt?.toISOString() ?? null,
+        topCandidate: await getTopCandidateForScan(db, scan.id),
+      };
+    }),
+  );
+  return summaries;
+}
+
+export async function listScansForUser(
+  db: Database,
+  input: { userId: string; limit: number; before?: Date },
+) {
+  const rows = await db
+    .select({ id: scans.id, createdAt: scans.createdAt })
+    .from(scans)
+    .where(
+      input.before
+        ? and(eq(scans.userId, input.userId), lt(scans.createdAt, input.before))
+        : eq(scans.userId, input.userId),
+    )
+    .orderBy(desc(scans.createdAt), desc(scans.id))
+    .limit(input.limit);
+
+  const summaries = await listScanSummariesForUser(db, {
+    userId: input.userId,
+    scanIds: rows.map((row) => row.id),
+  });
+  const last = rows.at(-1);
+  return {
+    summaries,
+    nextCursor: rows.length === input.limit && last ? last.createdAt : null,
   };
 }

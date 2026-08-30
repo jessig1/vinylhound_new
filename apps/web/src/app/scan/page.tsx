@@ -6,12 +6,14 @@ import { useRouter } from "next/navigation";
 
 import {
   CompleteImageUploadResponseSchema,
+  CreateBatchResponseSchema,
   CreateScanResponseSchema,
   detectImageMimeType,
   IMAGE_SNIFF_BYTE_LENGTH,
   type ImageMimeType,
   type ImageViewType,
   MAX_IMAGES_PER_SCAN,
+  MAX_SCANS_PER_BATCH,
   SignedUploadSchema,
   SubmitScanResponseSchema,
 } from "@vinylhound/contracts";
@@ -52,10 +54,13 @@ const viewOptions: Array<{ value: ImageViewType; label: string }> = [
   { value: "label", label: "Record label" },
 ];
 
+type CaptureMode = "single" | "batch";
+
 export default function ScanPage() {
   const router = useRouter();
   const workflow = useRef<UploadWorkflow | null>(null);
   const imagesRef = useRef<SelectedImage[]>([]);
+  const [mode, setMode] = useState<CaptureMode>("single");
   const [images, setImages] = useState<SelectedImage[]>([]);
   const [source, setSource] = useState<"camera" | "single_upload">(
     "single_upload",
@@ -67,6 +72,18 @@ export default function ScanPage() {
   );
   const [error, setError] = useState<string | null>(null);
   const busy = phase !== "ready";
+  const maxImages =
+    mode === "batch" ? MAX_SCANS_PER_BATCH : MAX_IMAGES_PER_SCAN;
+
+  function switchMode(nextMode: CaptureMode) {
+    if (nextMode === mode || busy) return;
+    for (const image of images) URL.revokeObjectURL(image.preview);
+    setImages([]);
+    setMode(nextMode);
+    setError(null);
+    setUploadProgress({});
+    workflow.current = null;
+  }
 
   useEffect(() => {
     imagesRef.current = images;
@@ -86,8 +103,12 @@ export default function ScanPage() {
     const selected = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (!selected.length) return;
-    if (images.length + selected.length > MAX_IMAGES_PER_SCAN) {
-      setError(`One record can include up to ${MAX_IMAGES_PER_SCAN} views.`);
+    if (images.length + selected.length > maxImages) {
+      setError(
+        mode === "batch"
+          ? `One batch can include up to ${maxImages} records.`
+          : `One record can include up to ${maxImages} views.`,
+      );
       return;
     }
 
@@ -95,7 +116,8 @@ export default function ScanPage() {
       clientId: crypto.randomUUID(),
       file,
       preview: URL.createObjectURL(file),
-      viewType: suggestedView(images.length + index),
+      viewType:
+        mode === "batch" ? "front" : suggestedView(images.length + index),
     }));
     setImages([...images, ...added]);
     if (images.length === 0) setSource(nextSource);
@@ -225,6 +247,53 @@ export default function ScanPage() {
     }
   }
 
+  async function identifyBatch() {
+    if (!images.length || busy) return;
+    setError(null);
+    setUploadProgress({});
+    setPhase("hashing");
+    try {
+      const prepared = await Promise.all(images.map(prepareImage));
+
+      setPhase("preparing");
+      const batch = CreateBatchResponseSchema.parse(
+        await requestJson("/api/v1/batches", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": `batch-${crypto.randomUUID()}`,
+          },
+          body: JSON.stringify({}),
+        }),
+      );
+
+      let completed = 0;
+      const results = await Promise.allSettled(
+        prepared.map(async (image) => {
+          await uploadOneImageScan(image, source, batch.batchId);
+          completed += 1;
+          setActiveImage(completed);
+        }),
+      );
+
+      const failedCount = results.filter(
+        (result) => result.status === "rejected",
+      ).length;
+      const query = failedCount > 0 ? `?failed=${failedCount}` : "";
+      router.push(`/scans/batch/${batch.batchId}${query}`);
+    } catch (caught) {
+      setPhase("ready");
+      setActiveImage(0);
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "The batch could not be started. Please try again.",
+      );
+    }
+  }
+
+  const identify = mode === "batch" ? identifyBatch : identifyAlbum;
+
   return (
     <main className="content-page scan-page">
       <header className="page-heading">
@@ -238,6 +307,25 @@ export default function ScanPage() {
         </div>
       </header>
 
+      <div className="capture-mode-toggle" role="group" aria-label="Scan mode">
+        <button
+          className={mode === "single" ? "is-active" : ""}
+          disabled={busy}
+          onClick={() => switchMode("single")}
+          type="button"
+        >
+          One record
+        </button>
+        <button
+          className={mode === "batch" ? "is-active" : ""}
+          disabled={busy}
+          onClick={() => switchMode("batch")}
+          type="button"
+        >
+          Multiple records
+        </button>
+      </div>
+
       <section className="upload-card" aria-busy={busy}>
         {images.length ? (
           <div className="multi-view-upload">
@@ -247,12 +335,14 @@ export default function ScanPage() {
                 {phaseLabel(phase, activeImage, images.length)}
               </span>
               <h2>
-                {images.length} {images.length === 1 ? "view" : "views"} of one
-                record
+                {mode === "batch"
+                  ? `${images.length} ${images.length === 1 ? "record" : "records"} in this batch`
+                  : `${images.length} ${images.length === 1 ? "view" : "views"} of one record`}
               </h2>
               <p>
-                Label each photo so the model can combine cover and edition
-                evidence correctly.
+                {mode === "batch"
+                  ? "Each photo becomes its own scan. Track and retry them independently from the batch page."
+                  : "Label each photo so the model can combine cover and edition evidence correctly."}
               </p>
             </div>
 
@@ -264,25 +354,27 @@ export default function ScanPage() {
                     src={image.preview}
                   />
                   <div className="view-card__body">
-                    <label>
-                      <span>Photo type</span>
-                      <select
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateView(
-                            image.clientId,
-                            event.target.value as ImageViewType,
-                          )
-                        }
-                        value={image.viewType}
-                      >
-                        {viewOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    {mode === "single" ? (
+                      <label>
+                        <span>Photo type</span>
+                        <select
+                          disabled={busy}
+                          onChange={(event) =>
+                            updateView(
+                              image.clientId,
+                              event.target.value as ImageViewType,
+                            )
+                          }
+                          value={image.viewType}
+                        >
+                          {viewOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                     <small title={image.file.name}>
                       {image.file.name || "Record photo"}
                     </small>
@@ -321,18 +413,21 @@ export default function ScanPage() {
               <button
                 className="primary-button"
                 disabled={busy}
-                onClick={identifyAlbum}
+                onClick={identify}
                 type="button"
               >
                 <Icon name="sparkle" size={18} />
                 {busy
                   ? phaseLabel(phase, activeImage, images.length)
-                  : "Identify album"}
+                  : mode === "batch"
+                    ? "Identify all records"
+                    : "Identify album"}
               </button>
               <label
                 className={`secondary-button${busy ? " is-disabled" : ""}`}
               >
-                <Icon name="upload" size={18} /> Add views
+                <Icon name="upload" size={18} />{" "}
+                {mode === "batch" ? "Add records" : "Add views"}
                 <input
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   disabled={busy}
@@ -360,10 +455,13 @@ export default function ScanPage() {
             <span className="upload-card__icon">
               <Icon name="camera" size={28} />
             </span>
-            <h2>Add record photos</h2>
+            <h2>
+              {mode === "batch" ? "Add several records" : "Add record photos"}
+            </h2>
             <p>
-              Start with the front cover. You can then add the back, spine, or
-              record label to the same scan.
+              {mode === "batch"
+                ? "Choose one front-cover photo per record. Each becomes its own scan, tracked together as a batch."
+                : "Start with the front cover. You can then add the back, spine, or record label to the same scan."}
             </p>
             {error ? (
               <p className="form-error" role="alert">
@@ -381,7 +479,8 @@ export default function ScanPage() {
                 />
               </label>
               <label className="secondary-button">
-                <Icon name="upload" size={18} /> Upload images
+                <Icon name="upload" size={18} />{" "}
+                {mode === "batch" ? "Upload photos" : "Upload images"}
                 <input
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   multiple
@@ -391,8 +490,10 @@ export default function ScanPage() {
               </label>
             </div>
             <small>
-              JPEG, PNG, WebP, or GIF · Up to 10 MB each · {MAX_IMAGES_PER_SCAN}{" "}
-              views maximum
+              JPEG, PNG, WebP, or GIF · Up to 10 MB each ·{" "}
+              {mode === "batch"
+                ? `${MAX_SCANS_PER_BATCH} records maximum`
+                : `${MAX_IMAGES_PER_SCAN} views maximum`}
             </small>
           </>
         )}
@@ -403,9 +504,9 @@ export default function ScanPage() {
         <div>
           <strong>For the best match</strong>
           <p>
-            Avoid glare, keep details in focus, and only group photos of the
-            same physical record. A front cover identifies the album; back,
-            spine, and label views can support edition details.
+            {mode === "batch"
+              ? "Each photo in a batch is treated as a different physical record. To combine several views of the same record, switch to “One record” instead."
+              : "Avoid glare, keep details in focus, and only group photos of the same physical record. A front cover identifies the album; back, spine, and label views can support edition details."}
           </p>
         </div>
       </aside>
@@ -433,6 +534,62 @@ function phaseLabel(phase: Phase, activeImage: number, imageCount: number) {
     default:
       return "Ready to scan";
   }
+}
+
+async function uploadOneImageScan(
+  image: PreparedImage,
+  source: "camera" | "single_upload",
+  batchId: string,
+) {
+  const scan = CreateScanResponseSchema.parse(
+    await requestJson("/api/v1/scans", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": `scan-${crypto.randomUUID()}`,
+      },
+      body: JSON.stringify({ source, batchId }),
+    }),
+  );
+  validateAgainstScanLimits([image], scan.limits);
+
+  const signedUpload = SignedUploadSchema.parse(
+    await requestJson(`/api/v1/scans/${scan.scanId}/uploads`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": `upload-${crypto.randomUUID()}`,
+      },
+      body: JSON.stringify({
+        filename: image.file.name || `${image.viewType}-photo`,
+        viewType: image.viewType,
+        mimeType: image.mimeType,
+        sizeBytes: image.file.size,
+        checksumSha256: image.checksumSha256,
+      }),
+    }),
+  );
+
+  await uploadFile(signedUpload, image.file, () => {});
+
+  CompleteImageUploadResponseSchema.parse(
+    await requestJson(
+      `/api/v1/scans/${scan.scanId}/uploads/${signedUpload.imageId}/complete`,
+      {
+        method: "POST",
+        headers: { "idempotency-key": `complete-${crypto.randomUUID()}` },
+      },
+    ),
+  );
+
+  SubmitScanResponseSchema.parse(
+    await requestJson(`/api/v1/scans/${scan.scanId}/submit`, {
+      method: "POST",
+      headers: { "idempotency-key": `submit-${crypto.randomUUID()}` },
+    }),
+  );
+
+  return scan.scanId;
 }
 
 async function prepareImage(image: SelectedImage): Promise<PreparedImage> {

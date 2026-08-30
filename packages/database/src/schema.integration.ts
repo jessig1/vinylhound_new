@@ -3,15 +3,24 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import type { AnalyzeScanJob } from "@vinylhound/contracts";
+
 import { createDatabase } from "./database.js";
-import { getScanForUser } from "./analysis-repository.js";
+import {
+  getScanForUser,
+  listScanSummariesForUser,
+} from "./analysis-repository.js";
 import { confirmScan } from "./confirmation-repository.js";
 import { listLibraryItemsForUser } from "./library-repository.js";
 import {
+  cancelScan,
   completeImageUpload,
+  createOrGetBatch,
   createOrGetImageUpload,
   createOrGetScan,
   dispatchNextOutboxMessage,
+  getBatchForUser,
+  retryScan,
   submitScan,
 } from "./scan-repository.js";
 import {
@@ -38,6 +47,36 @@ const userId = randomUUID();
 beforeAll(async () => {
   await database.db.insert(users).values({ id: userId });
 });
+
+/**
+ * The outbox table is shared across tests in this file, so a prior test's
+ * unpublished row can be dispatched before the one under test. Dispatch
+ * repeatedly (draining unrelated rows with a no-op publish) until the target
+ * job ID is reached.
+ */
+async function dispatchUntil(
+  targetJobId: string,
+  publishTarget: (job: AnalyzeScanJob) => Promise<void>,
+) {
+  for (let attempts = 0; attempts < 50; attempts += 1) {
+    const result = await dispatchNextOutboxMessage(
+      database.db,
+      async (job, idempotencyKey) => {
+        if (idempotencyKey === targetJobId) {
+          await publishTarget(job);
+        }
+      },
+      new Date(Date.now() + 1_000),
+    );
+    if (result.status === "idle") {
+      throw new Error(`Target job ${targetJobId} was never dispatched.`);
+    }
+    if (result.jobId === targetJobId) {
+      return result;
+    }
+  }
+  throw new Error(`Target job ${targetJobId} was not reached in time.`);
+}
 
 afterAll(async () => {
   await database.db.delete(users).where(eq(users.id, userId));
@@ -446,5 +485,177 @@ describe("initial scan persistence schema", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "conflict" });
+  });
+});
+
+describe("batch grouping and scan lifecycle", () => {
+  it("groups independent scans under one batch and projects their status", async () => {
+    const batch = await createOrGetBatch(database.db, {
+      userId,
+      idempotencyKey: `batch-${randomUUID()}`,
+    });
+    const replayedBatch = await createOrGetBatch(database.db, {
+      userId,
+      idempotencyKey: batch.record.idempotencyKey,
+    });
+    expect(batch.created).toBe(true);
+    expect(replayedBatch.created).toBe(false);
+    expect(replayedBatch.record.id).toBe(batch.record.id);
+
+    const first = await createOrGetScan(database.db, {
+      userId,
+      source: "single_upload",
+      idempotencyKey: `batch-scan-1-${randomUUID()}`,
+      batchId: batch.record.id,
+    });
+    const second = await createOrGetScan(database.db, {
+      userId,
+      source: "single_upload",
+      idempotencyKey: `batch-scan-2-${randomUUID()}`,
+      batchId: batch.record.id,
+    });
+    expect(first.record.batchId).toBe(batch.record.id);
+    expect(second.record.batchId).toBe(batch.record.id);
+
+    const { batch: loadedBatch, scanIds } = await getBatchForUser(database.db, {
+      userId,
+      batchId: batch.record.id,
+    });
+    expect(loadedBatch.id).toBe(batch.record.id);
+    expect(scanIds).toEqual([first.record.id, second.record.id]);
+
+    const summaries = await listScanSummariesForUser(database.db, {
+      userId,
+      scanIds,
+    });
+    expect(summaries.map((summary) => summary.status)).toEqual([
+      "awaiting_upload",
+      "awaiting_upload",
+    ]);
+
+    await expect(
+      createOrGetScan(database.db, {
+        userId,
+        source: "single_upload",
+        idempotencyKey: `batch-scan-missing-${randomUUID()}`,
+        batchId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("retries a failed scan as a new attempt and rejects retrying an active scan", async () => {
+    const scan = await createOrGetScan(database.db, {
+      userId,
+      source: "single_upload",
+      idempotencyKey: `retry-scan-${randomUUID()}`,
+    });
+    const upload = await createOrGetImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `retry-upload-${randomUUID()}`,
+      filename: "front.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 512,
+      checksumSha256: "e".repeat(64),
+      maxImages: 12,
+    });
+    await completeImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      imageId: upload.record.id,
+      width: 800,
+      height: 800,
+    });
+
+    await expect(
+      retryScan(database.db, { userId, scanId: scan.record.id }),
+    ).rejects.toMatchObject({ code: "invalid_state" });
+
+    await database.db
+      .update(scans)
+      .set({ status: "failed", completedAt: new Date() })
+      .where(eq(scans.id, scan.record.id));
+    await database.db.insert(scanAttempts).values({
+      scanId: scan.record.id,
+      attemptNumber: 1,
+      status: "failed",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      errorCategory: "unknown",
+      errorMessage: "synthetic failure",
+      durationMs: 10,
+      completedAt: new Date(),
+    });
+
+    const retried = await retryScan(database.db, {
+      userId,
+      scanId: scan.record.id,
+    });
+    expect(retried.created).toBe(true);
+    expect(retried.job.attemptNumber).toBe(2);
+    expect(retried.record.status).toBe("queued");
+
+    const replayedRetry = await retryScan(database.db, {
+      userId,
+      scanId: scan.record.id,
+    });
+    expect(replayedRetry.created).toBe(false);
+    expect(replayedRetry.jobId).toBe(retried.jobId);
+  });
+
+  it("cancels a queued scan and skips its outbox dispatch", async () => {
+    const scan = await createOrGetScan(database.db, {
+      userId,
+      source: "single_upload",
+      idempotencyKey: `cancel-scan-${randomUUID()}`,
+    });
+    const upload = await createOrGetImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `cancel-upload-${randomUUID()}`,
+      filename: "front.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 512,
+      checksumSha256: "f".repeat(64),
+      maxImages: 12,
+    });
+    await completeImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      imageId: upload.record.id,
+      width: 800,
+      height: 800,
+    });
+    const submitted = await submitScan(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `cancel-submit-${randomUUID()}`,
+    });
+
+    const canceled = await cancelScan(database.db, {
+      userId,
+      scanId: scan.record.id,
+    });
+    expect(canceled.created).toBe(true);
+    expect(canceled.record.status).toBe("canceled");
+
+    const replayedCancel = await cancelScan(database.db, {
+      userId,
+      scanId: scan.record.id,
+    });
+    expect(replayedCancel.created).toBe(false);
+    expect(replayedCancel.record.status).toBe("canceled");
+
+    const dispatch = await dispatchUntil(submitted.jobId, async () => {
+      throw new Error("must not publish a canceled scan's job");
+    });
+    expect(dispatch).toMatchObject({
+      status: "canceled",
+      jobId: submitted.jobId,
+    });
+
+    await expect(
+      cancelScan(database.db, { userId, scanId: scan.record.id }),
+    ).resolves.toMatchObject({ created: false });
   });
 });

@@ -54,6 +54,39 @@ test("groups front, back, and spine photos into one labeled multi-view scan", as
   await expect(page.getByText("combined 3 labeled views")).toBeVisible();
 });
 
+test("groups two front-cover photos into an independently trackable batch", async ({
+  page,
+}) => {
+  await page.goto("/scan");
+  await page.getByRole("button", { name: "Multiple records" }).click();
+
+  await page.setInputFiles(uploadInput, [
+    { name: "record-a.jpg", mimeType: "image/jpeg", buffer: coverJpeg },
+    { name: "record-b.jpg", mimeType: "image/jpeg", buffer: backJpeg },
+  ]);
+
+  await expect(page.getByText("2 records in this batch")).toBeVisible();
+  await expect(page.locator(".view-card select")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Identify all records" }).click();
+
+  await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/, { timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "2 records" })).toBeVisible();
+  await expect(page.getByText("Matched")).toHaveCount(2, { timeout: 30_000 });
+  await expect(
+    page.getByText("All records in this batch have finished."),
+  ).toBeVisible();
+
+  await page.getByRole("link", { name: "Review" }).first().click();
+  await page.waitForURL(/\/scans\/[0-9a-f-]{36}/, { timeout: 30_000 });
+  await expect(
+    page.getByRole("heading", { name: "Check the match." }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "View batch progress" }),
+  ).toBeVisible();
+});
+
 test("identifies a misnamed cover photo and confirms it into the collection", async ({
   page,
 }) => {

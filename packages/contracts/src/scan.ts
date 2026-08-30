@@ -22,7 +22,10 @@ export const ScanStatusSchema = z.enum([
   "needs_review",
   "unresolved",
   "failed",
+  "canceled",
 ]);
+
+export const RETRYABLE_SCAN_STATUSES = ["failed", "unresolved"] as const;
 
 export const ScanAttemptStatusSchema = z.enum([
   "processing",
@@ -113,6 +116,7 @@ export type AnalyzeScanJob = z.infer<typeof AnalyzeScanJobSchema>;
 export const CreateScanRequestSchema = z
   .object({
     source: IngestionSourceSchema,
+    batchId: z.string().uuid().optional(),
   })
   .strict();
 
@@ -136,6 +140,22 @@ export const SubmitScanResponseSchema = z
     status: z.literal("queued"),
     attemptNumber: z.number().int().positive(),
     jobId: z.string().min(1).max(255),
+  })
+  .strict();
+
+export const RetryScanResponseSchema = z
+  .object({
+    scanId: z.string().uuid(),
+    status: z.literal("queued"),
+    attemptNumber: z.number().int().positive(),
+    jobId: z.string().min(1).max(255),
+  })
+  .strict();
+
+export const CancelScanResponseSchema = z
+  .object({
+    scanId: z.string().uuid(),
+    status: z.literal("canceled"),
   })
   .strict();
 
@@ -187,6 +207,7 @@ export const ScanAttemptSummarySchema = z
 export const GetScanResponseSchema = z
   .object({
     scanId: z.string().uuid(),
+    batchId: z.string().uuid().nullable(),
     source: IngestionSourceSchema,
     status: ScanStatusSchema,
     createdAt: z.string().datetime(),
@@ -199,10 +220,34 @@ export const GetScanResponseSchema = z
   })
   .strict();
 
+export const MAX_SCANS_PER_PAGE = 50;
+
+export const ScanListItemSchema = z
+  .object({
+    scanId: z.string().uuid(),
+    batchId: z.string().uuid().nullable(),
+    status: ScanStatusSchema,
+    createdAt: z.string().datetime(),
+    completedAt: z.string().datetime().nullable(),
+    topCandidate: ScanCandidateResultSchema.nullable(),
+  })
+  .strict();
+
+export const ListScansResponseSchema = z
+  .object({
+    scans: z.array(ScanListItemSchema).max(MAX_SCANS_PER_PAGE),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+
 export type CreateScanRequest = z.infer<typeof CreateScanRequestSchema>;
 export type CreateScanResponse = z.infer<typeof CreateScanResponseSchema>;
 export type SubmitScanResponse = z.infer<typeof SubmitScanResponseSchema>;
+export type RetryScanResponse = z.infer<typeof RetryScanResponseSchema>;
+export type CancelScanResponse = z.infer<typeof CancelScanResponseSchema>;
 export type ScanCandidateResult = z.infer<typeof ScanCandidateResultSchema>;
 export type ScanImageSummary = z.infer<typeof ScanImageSummarySchema>;
 export type ScanAttemptSummary = z.infer<typeof ScanAttemptSummarySchema>;
 export type GetScanResponse = z.infer<typeof GetScanResponseSchema>;
+export type ScanListItem = z.infer<typeof ScanListItemSchema>;
+export type ListScansResponse = z.infer<typeof ListScansResponseSchema>;

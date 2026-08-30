@@ -14,6 +14,7 @@ import {
   type ImageViewType,
 } from "@vinylhound/contracts";
 import {
+  cancelScan,
   completeImageUpload,
   createDatabase,
   createOrGetImageUpload,
@@ -290,6 +291,31 @@ describe("scan analysis handler", () => {
     });
     expect(status.status).toBe("identified");
     expect(status.attempt?.deliveryAttempt).toBe(2);
+  });
+
+  it("skips analysis for a scan canceled after it was queued", async () => {
+    const submitted = await createQueuedScan();
+    await cancelScan(database.db, { userId, scanId: submitted.record.id });
+    let identifyCalls = 0;
+    const analyze = handler(
+      successfulIdentifier(identification(), () => {
+        identifyCalls += 1;
+      }),
+    );
+
+    await analyze(submitted.job, {
+      jobId: submitted.jobId,
+      deliveryAttempt: 1,
+      maxAttempts: 5,
+    });
+
+    expect(identifyCalls).toBe(0);
+    const status = await getScanForUser(database.db, {
+      userId,
+      scanId: submitted.record.id,
+    });
+    expect(status.status).toBe("canceled");
+    expect(status.attempt).toBeNull();
   });
 
   it("makes a terminal provider error visible without retrying", async () => {

@@ -30,6 +30,7 @@ export const scanStatusEnum = pgEnum("scan_status", [
   "needs_review",
   "unresolved",
   "failed",
+  "canceled",
 ]);
 
 export const imageMimeTypeEnum = pgEnum("image_mime_type", [
@@ -77,6 +78,30 @@ export const users = pgTable("users", {
     .notNull(),
 });
 
+export const batches = pgTable(
+  "batches",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("batches_user_id_idempotency_key_unique").on(
+      table.userId,
+      table.idempotencyKey,
+    ),
+    check(
+      "batches_idempotency_key_length_check",
+      sql`char_length(${table.idempotencyKey}) between 1 and 255`,
+    ),
+  ],
+);
+
 export const scans = pgTable(
   "scans",
   {
@@ -84,6 +109,9 @@ export const scans = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    batchId: uuid("batch_id").references(() => batches.id, {
+      onDelete: "cascade",
+    }),
     source: ingestionSourceEnum("source").notNull(),
     status: scanStatusEnum("status").default("awaiting_upload").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -107,6 +135,7 @@ export const scans = pgTable(
       table.status,
       table.createdAt,
     ),
+    index("scans_batch_id_idx").on(table.batchId),
     check(
       "scans_idempotency_key_length_check",
       sql`char_length(${table.idempotencyKey}) between 1 and 255`,
@@ -518,6 +547,8 @@ export const scanConfirmations = pgTable(
 
 export type UserRow = typeof users.$inferSelect;
 export type NewUserRow = typeof users.$inferInsert;
+export type BatchRow = typeof batches.$inferSelect;
+export type NewBatchRow = typeof batches.$inferInsert;
 export type ScanRow = typeof scans.$inferSelect;
 export type NewScanRow = typeof scans.$inferInsert;
 export type ImageAssetRow = typeof imageAssets.$inferSelect;

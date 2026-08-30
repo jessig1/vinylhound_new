@@ -19,35 +19,47 @@ the log.
   Sol + `high` + prompt-v2 artist/title quality for the early build; the formal
   private AI eval baseline is deferred until public rollout or model/cost
   optimization (`docs/ROADMAP.md`).
-- Milestone 2's first slice is complete: front/back/spine/label/barcode/runout
-  photos of one physical record can be grouped into a single scan and sent to
-  the identifier as one request, each image paired with its view label
-  (`album-identification.v3`). The single-image flow, audit trail, and
-  existing scan/upload contracts are preserved — `viewType` defaults to
-  `front` when omitted.
+- Milestone 2's first slice (multi-view) is complete: front/back/spine/label/
+  barcode/runout photos of one physical record can be grouped into a single
+  scan and sent to the identifier as one request, each image paired with its
+  view label (`album-identification.v3`).
+- Milestone 2's second slice (batch) is complete (ADR-0006): several
+  _distinct_ records can be captured together as one batch, where each photo
+  becomes its own independently tracked scan. `POST /batches` creates a
+  grouping shell; `POST /scans` accepts an optional `batchId`; `GET
+/batches/{batchId}` projects each member scan's status/top candidate with
+  no persisted batch-level state. `POST /scans/{scanId}/retry` (new attempt
+  from `failed`/`unresolved`, reusing uploaded images) and `POST
+/scans/{scanId}/cancel` (new terminal `canceled` status; skips
+  not-yet-dispatched outbox jobs, lets an in-flight attempt finish) are both
+  implemented and used from both the single-scan result page and the new
+  `/scans/batch/{batchId}` progress page. `/scan` gained a "One record" /
+  "Multiple records" mode toggle. `/scans` (history) now server-renders real
+  persisted scans via a new `GET /scans` list endpoint instead of demo data.
 - `npm run check` passes in WSL on Node 22.23.2: formatting, ESLint, typecheck,
-  and 39/39 unit tests.
-- `npm run build` passes: the Next.js web app (16 routes), worker, and eval
+  and 46/46 unit tests.
+- `npm run build` passes: the Next.js web app (21 routes), worker, and eval
   package compile cleanly.
-- `npm run test:integration` passes in WSL/Docker: database (6), storage (1),
-  queue (1), and worker (5, including the new multi-view worker test) suites,
-  13/13 total. Migration `007_image_view_type.sql` applied cleanly to the
-  running Postgres container.
-- `npm run test:e2e` passes in WSL: 4/4 Playwright tests, including a new
-  front/back/spine grouping scenario, against a production build with the
-  synthetic worker. Chromium and its OS shared libraries
-  (`sudo npx playwright install-deps`) are now installed on this machine's WSL.
+- `npm run test:integration` passes in WSL/Docker: database (9), storage (1),
+  queue (1), and worker (6) suites, 17/17 total. Migration
+  `008_batches_and_scan_lifecycle.sql` (adds `canceled` to `scan_status`, the
+  `batches` table, `scans.batch_id`) applied cleanly to the running Postgres
+  container.
+- `npm run test:e2e` passes in WSL: 5/5 Playwright tests, including a new
+  batch-mode scenario (mode toggle, two independent scans, the batch progress
+  page, cross-navigation back via "View batch progress"), against a
+  production build with the synthetic worker.
 - Docker Compose services (postgres, redis, minio) are running and healthy.
 - This session's changes are uncommitted on `main`; `main` remains two commits
-  ahead of `origin/main` from the prior session (nothing pushed).
+  ahead of `origin/main` from before this session (nothing pushed).
 - The maintainer's private dataset folder contains 52 JPEG cover photos plus a
   draft `manifest.json` and `LABELING_PROMPT.md`. These files remain outside
   the repository and still need app-assisted labels and maintainer verification.
 - `packages/evals` provides a private, checkpointed Sol/Terra/Luna comparison
   runner with verified-label/consent gates, per-attempt audit output, aggregate
   quality/routing/latency/token/cost metrics, and non-billable unit coverage.
-  Its single-image request path now passes the case's `viewType` through to
-  the identifier so it stays contract-compatible with the multi-view change.
+  Unaffected by the batch change (it only ever submits single-image, ungrouped
+  cases).
 - Production album identification defaults to `gpt-5.6-sol` + `high` image
   detail. The ignored local `.env` is synchronized to the Sol default.
 
@@ -56,33 +68,43 @@ the log.
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** the second Milestone 2 slice: multi-select batch setup — group
-several distinct records (not just views of one record) into one batch with
-independent per-item progress, cancellation, and retry. The current `/scan`
-UI groups multiple photos into views of a _single_ record only; batching
-across records is new UI, and likely a new `batch` grouping concept above
-`scan` (see `docs/API.md`: "Batch creation returns independent scan IDs;
-batch progress is a projection of those scans"). After that: thumbnail/
-normalization pipeline, worker concurrency limits, and batch/cost dashboards.
+**Task:** the third Milestone 2 slice: a thumbnail/normalization pipeline and
+worker concurrency limits, followed by batch and provider-cost dashboards.
 The private AI matrix remains deferred until public rollout or model/cost
 optimization.
 
 Recently completed, for context:
 
-- Multi-view grouping: `packages/contracts` gained `ImageViewTypeSchema`
-  (`front`/`back`/`spine`/`label`/`barcode`/`runout`/`other`); `image_assets`
-  gained a `view_type` column (migration 007); `GetScanResponse` now returns
-  each scan's `images` array with per-image `viewType`; the OpenAI adapter
-  sends every image with an `input_text` view label ahead of it
-  (`buildAlbumIdentificationContent` in `packages/ai`); prompt v3 tells the
-  model to combine complementary evidence across labeled views of the same
-  physical record. The `/scan` page UI now shows a view grid with a per-photo
-  "Photo type" selector instead of a single upload slot.
-- Upload MIME sniffing fix (client declares content-derived type; HEIC gets a
-  pre-upload hint), verified end-to-end.
-- Phone-sized Playwright e2e suite (`npm run test:e2e`): production build on
-  port 3100 from `.next-e2e`, dedicated `vinylhound_e2e` database and queue,
-  synthetic worker in `apps/worker/src/e2e-worker.ts` (no OpenAI calls).
+- Batch capture (ADR-0006, `docs/API.md`): `batches` table (id, user_id,
+  idempotency_key) and nullable `scans.batch_id` (migration 008); new
+  `ScanStatusSchema` value `canceled`; `createOrGetBatch`/`getBatchForUser` in
+  `packages/database/src/scan-repository.ts`; `listScanSummariesForUser`/
+  `listScansForUser` in `analysis-repository.ts` (shared top-candidate
+  projection used by both the batch page and scan history). `retryScan` picks
+  the next attempt number from `scan_attempts`, replays idempotently by
+  returning the latest pending outbox message for an already-`queued`/
+  `processing` scan (not a stored request key — see ADR-0006's tradeoff
+  note). `cancelScan` is a straightforward terminal-state transition;
+  `dispatchNextOutboxMessage` now checks the owning scan's status and marks a
+  canceled scan's row published-without-publishing so the poller stops
+  retrying it; `prepareScanAnalysis` returns a `"canceled"` result the worker
+  treats as a no-op. The `/scan` page's batch mode uploads each photo through
+  its own scan/upload/submit cycle in parallel
+  (`Promise.allSettled`); a partial failure still routes to the batch page
+  with a `?failed=N` banner rather than losing the successfully created scans.
+- Two real bugs were caught and fixed by integration tests before commit: an
+  off-by-one in `retryScan`'s replay-detection outbox lookup, and a
+  cross-test outbox-row leak in the new database integration tests that a
+  naive `dispatchNextOutboxMessage` call would pick up (fixed with a
+  `dispatchUntil` test helper that drains unrelated rows first). A `.strict()`
+  schema mismatch (`GetBatchResponseSchema` rejecting an extra `batchId` key)
+  was caught by the e2e suite, not unit/integration tests — worth remembering
+  that `.strict()` response schemas need an e2e or route-level check, not just
+  a repository-level one.
+- Multi-view grouping (prior session): `packages/contracts` gained
+  `ImageViewTypeSchema`; `image_assets` gained `view_type` (migration 007);
+  `GetScanResponse.images[].viewType`; the OpenAI adapter labels each image
+  with `buildAlbumIdentificationContent`; prompt v3.
 
 ## Known gaps and risks
 
@@ -92,12 +114,17 @@ Recently completed, for context:
   Man_, and Cows / _Sexy Pee Story_) in 8.1-25.2 seconds. Production now uses
   the maintainer-accepted Sol + `high` + prompt-v2 path, but still uses
   uncropped images with no catalog retrieval. Multi-view sends more images per
-  request, which raises per-scan token/latency cost proportionally; not yet
-  measured against the deferred eval baseline.
+  request, which raises per-scan token/latency cost proportionally; a batch
+  of N records now also means N independent provider calls instead of one.
+  Neither is yet measured against the deferred eval baseline.
 - A fresh Linux/WSL machine needs `sudo npx playwright install-deps` once,
   in addition to `npx playwright install chromium`, or Chromium fails to
-  launch with a missing-shared-library error (`libnspr4.so` and similar). Not
-  previously documented; now noted in `docs/TESTING.md`.
+  launch with a missing-shared-library error (`libnspr4.so` and similar).
+- Cancellation is best-effort: a scan canceled while its attempt is already
+  `processing` can still complete and show a result, since no in-flight
+  OpenAI call is aborted (ADR-0006, accepted tradeoff). No worker
+  concurrency limit exists yet, so a large batch submits all its jobs to
+  BullMQ at once — the next roadmap slice adds concurrency limits.
 - Authentication is the single development user. All rows are user-scoped, so
   swapping in real identity issuance later does not change the data model.
 - Library `PATCH`/`DELETE` endpoints are documented as planned, not
@@ -109,6 +136,24 @@ Recently completed, for context:
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
 
+- **2026-08-30 - Claude (second session).** Implemented Milestone 2's batch
+  slice end to end: contracts (`batch.ts`, `canceled` status, `RetryScanResponse`/
+  `CancelScanResponse`/`ListScansResponse`), migration 008 (`batches` table,
+  `scans.batch_id`, `canceled` enum value), repository functions
+  (`createOrGetBatch`, `getBatchForUser`, `retryScan`, `cancelScan`,
+  `listScanSummariesForUser`, `listScansForUser`), an outbox/worker change so
+  a canceled scan's job is skipped rather than dispatched or analyzed, five
+  new API routes, a `/scan` mode toggle for batch capture, a new
+  `/scans/batch/{batchId}` progress page with per-item cancel/retry, and a
+  real-data rewrite of `/scans`. Wrote ADR-0006 recording the batch-as-
+  grouping and best-effort-cancellation design. Found and fixed two real bugs
+  via integration tests before they could ship (see "Recently completed"
+  above for detail) and one `.strict()` schema mismatch via the e2e suite.
+  Verified in WSL/Node 22.23.2: 46/46 unit tests, lint, typecheck, build
+  (21 routes), 17/17 integration tests, and 5/5 e2e tests, including a new
+  batch e2e scenario. Updated `docs/API.md`, `docs/TESTING.md`,
+  `docs/ROADMAP.md`, and this file. Nothing committed or pushed; the
+  maintainer should review before commit.
 - **2026-08-30 - Claude.** Resumed the Milestone 2 multi-view slice that Codex
   had left uncommitted (no handoff entry for it). Reviewed the full diff
   (contracts, schema/migration 007, repositories, AI adapter/prompt v3,

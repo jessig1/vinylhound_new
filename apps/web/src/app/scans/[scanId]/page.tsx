@@ -6,9 +6,11 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import {
+  CancelScanResponseSchema,
   ConfirmScanRequestSchema,
   ConfirmScanResponseSchema,
   GetScanResponseSchema,
+  RetryScanResponseSchema,
   type GetScanResponse,
   type ScanCandidateResult,
 } from "@vinylhound/contracts";
@@ -49,6 +51,8 @@ export default function ScanResultPage() {
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionPending, setActionPending] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -172,6 +176,67 @@ export default function ScanResultPage() {
     }
   }
 
+  async function retry() {
+    if (!scan || actionPending) return;
+    setActionError(null);
+    setActionPending(true);
+    try {
+      const response = await fetch(`/api/v1/scans/${scan.scanId}/retry`, {
+        method: "POST",
+        headers: { "idempotency-key": `retry-${crypto.randomUUID()}` },
+      });
+      const body = (await response.json()) as {
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        throw new Error(
+          body.error?.message ?? "The retry could not be started.",
+        );
+      }
+      RetryScanResponseSchema.parse(body);
+      draftInitialized.current = false;
+      setScan({ ...scan, status: "queued", attempt: null, candidates: [] });
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error
+          ? caught.message
+          : "The retry could not be started.",
+      );
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  async function cancel() {
+    if (!scan || actionPending) return;
+    setActionError(null);
+    setActionPending(true);
+    try {
+      const response = await fetch(`/api/v1/scans/${scan.scanId}/cancel`, {
+        method: "POST",
+        headers: { "idempotency-key": `cancel-${crypto.randomUUID()}` },
+      });
+      const body = (await response.json()) as {
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        throw new Error(
+          body.error?.message ?? "The scan could not be canceled.",
+        );
+      }
+      CancelScanResponseSchema.parse(body);
+      setScan({ ...scan, status: "canceled" });
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error
+          ? caught.message
+          : "The scan could not be canceled.",
+      );
+    } finally {
+      setActionPending(false);
+    }
+  }
+
   if (!scan && !loadingError) return <LoadingState title="Loading scan…" />;
   if (!scan && loadingError) {
     return (
@@ -225,6 +290,13 @@ export default function ScanResultPage() {
             : "Reading the cover…"
         }
         message={`Analyzing ${scan.images.length} labeled ${scan.images.length === 1 ? "view" : "views"}. You can leave this page and return from the same link.`}
+        error={actionError}
+        secondaryAction={{
+          label: actionPending ? "Canceling…" : "Cancel scan",
+          onClick: cancel,
+          disabled: actionPending,
+        }}
+        batchId={scan.batchId}
       />
     );
   }
@@ -234,6 +306,17 @@ export default function ScanResultPage() {
         title="This scan is waiting for an image."
         message="Start a new scan to choose and upload a cover photo."
         action="Choose a photo"
+        batchId={scan.batchId}
+      />
+    );
+  }
+  if (scan.status === "canceled") {
+    return (
+      <MessageState
+        title="This scan was canceled."
+        message="No result was saved. Start a new scan to identify this record."
+        action="Start a new scan"
+        batchId={scan.batchId}
       />
     );
   }
@@ -246,6 +329,13 @@ export default function ScanResultPage() {
           "The scan failed before a reviewable result was produced."
         }
         action="Try another photo"
+        error={actionError}
+        secondaryAction={{
+          label: actionPending ? "Retrying…" : "Retry this scan",
+          onClick: retry,
+          disabled: actionPending,
+        }}
+        batchId={scan.batchId}
       />
     );
   }
@@ -263,9 +353,36 @@ export default function ScanResultPage() {
             to save it. This result combined {scan.images.length} labeled{" "}
             {scan.images.length === 1 ? "view" : "views"}.
           </p>
+          {scan.batchId ? <BatchLink batchId={scan.batchId} /> : null}
         </div>
         <StatusBadge status={scan.status} />
       </header>
+
+      {scan.status === "unresolved" ? (
+        <aside className="scan-tip scan-tip--result">
+          <Icon name="info" size={20} />
+          <div>
+            <strong>No confident match was found</strong>
+            <p>
+              Enter the album details yourself below, or{" "}
+              <button
+                className="text-button"
+                disabled={actionPending}
+                onClick={retry}
+                type="button"
+              >
+                {actionPending ? "retrying…" : "retry this scan"}
+              </button>
+              .
+            </p>
+            {actionError ? (
+              <p className="form-error" role="alert">
+                {actionError}
+              </p>
+            ) : null}
+          </div>
+        </aside>
+      ) : null}
 
       {scan.attempt?.needsReviewReasons.length ? (
         <aside className="scan-tip scan-tip--result">
@@ -520,12 +637,24 @@ function StatusBadge({ status }: { status: GetScanResponse["status"] }) {
   );
 }
 
+type SecondaryAction = {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+};
+
 function LoadingState({
   title,
   message = "Fetching the latest status…",
+  error,
+  secondaryAction,
+  batchId,
 }: {
   title: string;
   message?: string;
+  error?: string | null;
+  secondaryAction?: SecondaryAction;
+  batchId?: string | null;
 }) {
   return (
     <main className="content-page scan-result-page">
@@ -534,6 +663,22 @@ function LoadingState({
         <p className="section-kicker">Scan in progress</p>
         <h1>{title}</h1>
         <p>{message}</p>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {secondaryAction ? (
+          <button
+            className="text-button"
+            disabled={secondaryAction.disabled}
+            onClick={secondaryAction.onClick}
+            type="button"
+          >
+            {secondaryAction.label}
+          </button>
+        ) : null}
+        {batchId ? <BatchLink batchId={batchId} /> : null}
       </section>
     </main>
   );
@@ -543,10 +688,16 @@ function MessageState({
   title,
   message,
   action,
+  error,
+  secondaryAction,
+  batchId,
 }: {
   title: string;
   message: string;
   action: string;
+  error?: string | null;
+  secondaryAction?: SecondaryAction;
+  batchId?: string | null;
 }) {
   return (
     <main className="content-page scan-result-page">
@@ -556,11 +707,37 @@ function MessageState({
         </span>
         <h1>{title}</h1>
         <p>{message}</p>
-        <Link className="primary-button" href="/scan">
-          {action}
-        </Link>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="button-row">
+          <Link className="primary-button" href="/scan">
+            {action}
+          </Link>
+          {secondaryAction ? (
+            <button
+              className="secondary-button"
+              disabled={secondaryAction.disabled}
+              onClick={secondaryAction.onClick}
+              type="button"
+            >
+              {secondaryAction.label}
+            </button>
+          ) : null}
+        </div>
+        {batchId ? <BatchLink batchId={batchId} /> : null}
       </section>
     </main>
+  );
+}
+
+function BatchLink({ batchId }: { batchId: string }) {
+  return (
+    <Link className="text-button" href={`/scans/batch/${batchId}`}>
+      View batch progress
+    </Link>
   );
 }
 

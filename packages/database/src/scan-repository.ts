@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, count, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNull, lte, sql } from "drizzle-orm";
 
 import {
   ANALYZE_SCAN_JOB,
   AnalyzeScanJobSchema,
+  RETRYABLE_SCAN_STATUSES,
   type AnalyzeScanJob,
   type ImageMimeType,
   type ImageViewType,
@@ -12,7 +13,14 @@ import {
 } from "@vinylhound/contracts";
 
 import type { Database } from "./database.js";
-import { imageAssets, outboxMessages, scans, users } from "./schema.js";
+import {
+  batches,
+  imageAssets,
+  outboxMessages,
+  scanAttempts,
+  scans,
+  users,
+} from "./schema.js";
 
 export type DatabaseCommandErrorCode =
   "conflict" | "invalid_state" | "not_found" | "scan_image_limit";
@@ -37,41 +45,64 @@ export async function createOrGetScan(
     userId: string;
     source: IngestionSource;
     idempotencyKey: string;
+    batchId?: string;
   },
 ) {
-  const [created] = await db
-    .insert(scans)
-    .values(input)
-    .onConflictDoNothing({
-      target: [scans.userId, scans.idempotencyKey],
-    })
-    .returning();
+  return db.transaction(async (transaction) => {
+    if (input.batchId) {
+      const batch = await transaction.query.batches.findFirst({
+        where: and(
+          eq(batches.id, input.batchId),
+          eq(batches.userId, input.userId),
+        ),
+      });
+      if (!batch) {
+        throw new DatabaseCommandError("not_found", "Batch not found.");
+      }
+    }
 
-  if (created) {
-    return { record: created, created: true } as const;
-  }
+    const [created] = await transaction
+      .insert(scans)
+      .values({
+        userId: input.userId,
+        source: input.source,
+        idempotencyKey: input.idempotencyKey,
+        batchId: input.batchId ?? null,
+      })
+      .onConflictDoNothing({
+        target: [scans.userId, scans.idempotencyKey],
+      })
+      .returning();
 
-  const existing = await db.query.scans.findFirst({
-    where: and(
-      eq(scans.userId, input.userId),
-      eq(scans.idempotencyKey, input.idempotencyKey),
-    ),
+    if (created) {
+      return { record: created, created: true } as const;
+    }
+
+    const existing = await transaction.query.scans.findFirst({
+      where: and(
+        eq(scans.userId, input.userId),
+        eq(scans.idempotencyKey, input.idempotencyKey),
+      ),
+    });
+
+    if (!existing) {
+      throw new DatabaseCommandError(
+        "conflict",
+        "The scan idempotency key could not be resolved.",
+      );
+    }
+    if (
+      existing.source !== input.source ||
+      existing.batchId !== (input.batchId ?? null)
+    ) {
+      throw new DatabaseCommandError(
+        "conflict",
+        "That idempotency key was already used with different scan data.",
+      );
+    }
+
+    return { record: existing, created: false } as const;
   });
-
-  if (!existing) {
-    throw new DatabaseCommandError(
-      "conflict",
-      "The scan idempotency key could not be resolved.",
-    );
-  }
-  if (existing.source !== input.source) {
-    throw new DatabaseCommandError(
-      "conflict",
-      "That idempotency key was already used with different scan data.",
-    );
-  }
-
-  return { record: existing, created: false } as const;
 }
 
 export interface CreateImageUploadInput {
@@ -329,10 +360,203 @@ export async function submitScan(
   });
 }
 
+export async function retryScan(
+  db: Database,
+  input: { userId: string; scanId: string },
+) {
+  return db.transaction(async (transaction) => {
+    const [scan] = await transaction
+      .select()
+      .from(scans)
+      .where(and(eq(scans.id, input.scanId), eq(scans.userId, input.userId)))
+      .for("update");
+
+    if (!scan) {
+      throw new DatabaseCommandError("not_found", "Scan not found.");
+    }
+
+    const retryableStatuses: readonly string[] = RETRYABLE_SCAN_STATUSES;
+    if (!retryableStatuses.includes(scan.status)) {
+      if (scan.status === "queued" || scan.status === "processing") {
+        const [latestOutboxMessage] = await transaction
+          .select()
+          .from(outboxMessages)
+          .where(
+            and(
+              eq(outboxMessages.aggregateId, scan.id),
+              eq(outboxMessages.topic, ANALYZE_SCAN_JOB),
+            ),
+          )
+          .orderBy(desc(outboxMessages.attemptNumber))
+          .limit(1);
+        if (latestOutboxMessage) {
+          return {
+            record: scan,
+            job: AnalyzeScanJobSchema.parse(latestOutboxMessage.payload),
+            jobId: latestOutboxMessage.idempotencyKey,
+            created: false,
+          } as const;
+        }
+      }
+      throw new DatabaseCommandError(
+        "invalid_state",
+        `A scan in ${scan.status} state cannot be retried.`,
+      );
+    }
+
+    const [latestAttempt] = await transaction
+      .select({ attemptNumber: scanAttempts.attemptNumber })
+      .from(scanAttempts)
+      .where(eq(scanAttempts.scanId, scan.id))
+      .orderBy(desc(scanAttempts.attemptNumber))
+      .limit(1);
+    const nextAttemptNumber = (latestAttempt?.attemptNumber ?? 0) + 1;
+
+    const images = await transaction
+      .select({ id: imageAssets.id, completedAt: imageAssets.completedAt })
+      .from(imageAssets)
+      .where(eq(imageAssets.scanId, scan.id))
+      .orderBy(asc(imageAssets.createdAt), asc(imageAssets.id));
+    if (images.length === 0 || images.some((image) => !image.completedAt)) {
+      throw new DatabaseCommandError(
+        "invalid_state",
+        "The scan is missing completed images to retry.",
+      );
+    }
+
+    const requestedAt = new Date();
+    const job = AnalyzeScanJobSchema.parse({
+      jobVersion: 1,
+      scanId: scan.id,
+      userId: scan.userId,
+      attemptNumber: nextAttemptNumber,
+      imageIds: images.map((image) => image.id),
+      requestedAt: requestedAt.toISOString(),
+    });
+    const jobId = analyzeScanJobId(scan.id, nextAttemptNumber);
+
+    await transaction.insert(outboxMessages).values({
+      topic: ANALYZE_SCAN_JOB,
+      aggregateId: scan.id,
+      attemptNumber: nextAttemptNumber,
+      idempotencyKey: jobId,
+      payload: job,
+    });
+
+    const [updated] = await transaction
+      .update(scans)
+      .set({
+        status: "queued",
+        updatedAt: requestedAt,
+        completedAt: null,
+      })
+      .where(eq(scans.id, scan.id))
+      .returning();
+
+    return { record: updated!, job, jobId, created: true } as const;
+  });
+}
+
+export async function cancelScan(
+  db: Database,
+  input: { userId: string; scanId: string },
+) {
+  return db.transaction(async (transaction) => {
+    const [scan] = await transaction
+      .select()
+      .from(scans)
+      .where(and(eq(scans.id, input.scanId), eq(scans.userId, input.userId)))
+      .for("update");
+
+    if (!scan) {
+      throw new DatabaseCommandError("not_found", "Scan not found.");
+    }
+    if (scan.status === "canceled") {
+      return { record: scan, created: false } as const;
+    }
+    if (
+      scan.status !== "awaiting_upload" &&
+      scan.status !== "queued" &&
+      scan.status !== "processing"
+    ) {
+      throw new DatabaseCommandError(
+        "invalid_state",
+        `A scan in ${scan.status} state cannot be canceled.`,
+      );
+    }
+
+    const canceledAt = new Date();
+    const [updated] = await transaction
+      .update(scans)
+      .set({
+        status: "canceled",
+        updatedAt: canceledAt,
+        completedAt: canceledAt,
+      })
+      .where(eq(scans.id, scan.id))
+      .returning();
+
+    return { record: updated!, created: true } as const;
+  });
+}
+
+export async function createOrGetBatch(
+  db: Database,
+  input: { userId: string; idempotencyKey: string },
+) {
+  const [created] = await db
+    .insert(batches)
+    .values(input)
+    .onConflictDoNothing({
+      target: [batches.userId, batches.idempotencyKey],
+    })
+    .returning();
+
+  if (created) {
+    return { record: created, created: true } as const;
+  }
+
+  const existing = await db.query.batches.findFirst({
+    where: and(
+      eq(batches.userId, input.userId),
+      eq(batches.idempotencyKey, input.idempotencyKey),
+    ),
+  });
+  if (!existing) {
+    throw new DatabaseCommandError(
+      "conflict",
+      "The batch idempotency key could not be resolved.",
+    );
+  }
+
+  return { record: existing, created: false } as const;
+}
+
+export async function getBatchForUser(
+  db: Database,
+  input: { userId: string; batchId: string },
+) {
+  const batch = await db.query.batches.findFirst({
+    where: and(eq(batches.id, input.batchId), eq(batches.userId, input.userId)),
+  });
+  if (!batch) {
+    throw new DatabaseCommandError("not_found", "Batch not found.");
+  }
+
+  const batchScans = await db
+    .select({ id: scans.id })
+    .from(scans)
+    .where(eq(scans.batchId, batch.id))
+    .orderBy(asc(scans.createdAt), asc(scans.id));
+
+  return { batch, scanIds: batchScans.map((scan) => scan.id) };
+}
+
 export type OutboxDispatchResult =
   | { status: "idle" }
   | { status: "published"; messageId: string; jobId: string }
-  | { status: "deferred"; messageId: string; jobId: string };
+  | { status: "deferred"; messageId: string; jobId: string }
+  | { status: "canceled"; messageId: string; jobId: string };
 
 export async function dispatchNextOutboxMessage(
   db: Database,
@@ -355,6 +579,26 @@ export async function dispatchNextOutboxMessage(
 
     if (!message) {
       return { status: "idle" };
+    }
+
+    const [owningScan] = await transaction
+      .select({ status: scans.status })
+      .from(scans)
+      .where(eq(scans.id, message.aggregateId));
+    if (owningScan?.status === "canceled") {
+      await transaction
+        .update(outboxMessages)
+        .set({
+          publishAttempts: sql`${outboxMessages.publishAttempts} + 1`,
+          publishedAt: now,
+          lastError: "Skipped: the owning scan was canceled.",
+        })
+        .where(eq(outboxMessages.id, message.id));
+      return {
+        status: "canceled",
+        messageId: message.id,
+        jobId: message.idempotencyKey,
+      };
     }
 
     const nextAttempt = message.publishAttempts + 1;
