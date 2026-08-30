@@ -59,6 +59,13 @@ Redis. When `OPENAI_API_KEY` is non-empty, the same process starts the BullMQ
 analysis consumer. Without a key, publication still runs and analysis jobs remain
 waiting without making billable API calls.
 
+Album identification defaults to `gpt-5.6-sol` with `high` image detail and an
+artist/title-first prompt. To validate it locally, upload the same difficult
+cover three times, then upload 5-10 albums whose artist and title you know. Judge
+the primary artist/title result separately from optional pressing metadata. If
+the first pass is still unreliable, the next experiment is an `auto`-detail
+retry on uncertain scans; catalog or web verification comes only after that.
+
 Run the repository checks with:
 
 ```bash
@@ -75,6 +82,7 @@ npm run build
 - [OpenAI integration](docs/OPENAI_INTEGRATION.md)
 - [Security and privacy](docs/SECURITY.md)
 - [Testing and AI evaluations](docs/TESTING.md)
+- [Private model evaluation runner](docs/EVALUATION.md)
 - [Delivery roadmap](docs/ROADMAP.md)
 - [Architecture decisions](docs/decisions/README.md)
 

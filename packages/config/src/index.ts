@@ -40,7 +40,7 @@ export const ServerConfigSchema = z.object({
   NODE_ENV: NodeEnvironmentSchema,
   ...InfrastructureConfigShape,
   OPENAI_API_KEY: z.string().min(1),
-  OPENAI_VISION_MODEL: z.string().min(1).default("gpt-5.6-terra"),
+  OPENAI_VISION_MODEL: z.string().min(1).default("gpt-5.6-sol"),
   OPENAI_IMAGE_DETAIL: z.enum(["low", "high", "auto"]).default("high"),
   OPENAI_TIMEOUT_MS: z.coerce
     .number()
@@ -61,7 +61,7 @@ export const QueueWorkerConfigSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().min(1),
   S3_FORCE_PATH_STYLE: BooleanStringSchema.default(false),
   OPENAI_API_KEY: OptionalNonEmptyStringSchema,
-  OPENAI_VISION_MODEL: z.string().min(1).default("gpt-5.6-terra"),
+  OPENAI_VISION_MODEL: z.string().min(1).default("gpt-5.6-sol"),
   OPENAI_IMAGE_DETAIL: z.enum(["low", "high", "auto"]).default("high"),
   OPENAI_TIMEOUT_MS: z.coerce
     .number()

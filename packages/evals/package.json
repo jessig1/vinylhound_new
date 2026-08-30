@@ -1,0 +1,16 @@
+{
+  "name": "@vinylhound/evals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "eval": "tsx --env-file-if-exists=../../.env src/cli.ts",
+    "build": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@vinylhound/ai": "0.1.0",
+    "@vinylhound/contracts": "0.1.0",
+    "@vinylhound/domain": "0.1.0",
+    "zod": "4.4.3"
+  }
+}

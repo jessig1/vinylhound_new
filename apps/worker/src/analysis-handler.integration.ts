@@ -175,13 +175,13 @@ describe("scan analysis handler", () => {
     });
   });
 
-  it("routes explicit uncertainty to user review", async () => {
+  it("routes explicit artist/title uncertainty to user review", async () => {
     const submitted = await createQueuedScan();
     const analyze = handler(
       successfulIdentifier(
         identification({
           needsReviewReasons: [
-            "A front cover cannot establish the specific pressing.",
+            "The artist/title identification conflicts across the images.",
           ],
         }),
       ),

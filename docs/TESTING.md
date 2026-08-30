@@ -32,7 +32,7 @@ Include common, obscure, reissue, compilation, similarly titled, text-free, dama
 - Schema success and transient/terminal error rates.
 - p50/p95 latency, tokens, and estimated cost.
 
-Model or prompt changes should not ship on anecdotal examples. Record the baseline, candidate, dataset version, metric deltas, and accepted tradeoff.
+For local development, a manual smoke test on the same difficult image plus 5-10 known albums is sufficient to validate the initial Sol/prompt-v2 path. Before public rollout or later model, prompt, detail, preprocessing, latency, or cost optimization, record the formal baseline, candidate, dataset version, metric deltas, and accepted tradeoff.
 
 ## Current commands
 
@@ -44,7 +44,14 @@ npm run check
 npm run build
 npm run test:integration
 npm run test:e2e
+npm run eval:ai -- --manifest <private-manifest-path> --dry-run
 ```
+
+The private live-model harness is documented in `docs/EVALUATION.md`. It validates
+consent and maintainer-verified labels before any request, compares configurable
+models on identical cases, checkpoints private per-attempt results, and reports
+the metrics in this document. Live execution is opt-in and requires
+`--confirm-live`; it is never part of CI.
 
 `npm run test:integration` requires the local Compose services. It applies pending
 database migrations and exercises PostgreSQL constraints plus a real signed upload

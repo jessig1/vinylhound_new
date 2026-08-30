@@ -37,7 +37,7 @@ describe("determineReviewOutcome", () => {
     expect(
       determineReviewOutcome(
         [candidate(0.99)],
-        ["The pressing cannot be established from the front cover."],
+        ["The artist/title identification conflicts across the images."],
       ),
     ).toEqual({
       status: "needs_review",

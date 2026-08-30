@@ -5,7 +5,7 @@
 - Monorepo, web shell, worker boundary, contracts, domain review policy, AI adapter, local infrastructure, CI, and project documentation.
 - Navigable account and library dashboard prototype, using local demo state until persistence and production authentication are implemented.
 
-## Milestone 1 — single-image vertical slice (current)
+## Milestone 1 — single-image vertical slice (complete)
 
 - [x] Choose database/migration tool and implement user/scan/image/attempt tables.
 - [x] Add development identity, signed upload, server validation, and object-storage adapter.
@@ -14,7 +14,9 @@
 - [x] Build mobile capture/upload, result review/correction, and add-to-list UI.
 - [x] Add provider-boundary and confirmation integration tests.
 - [x] Add phone-sized end-to-end coverage for the capture-to-confirm path.
-- [ ] Establish a small private AI eval baseline.
+- [x] Validate Sol + `high` + prompt v2 manually and accept its artist/title
+      quality for the early build. The formal private AI evaluation is deferred
+      until public rollout or model/cost optimization.
 
 Exit criterion: one phone photo can become a user-confirmed collection or wishlist item, with retry and failure visibility.
 
@@ -37,7 +39,7 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 
-The next recommended task is the small private AI eval baseline: collect a
-handful of consented, labeled cover photos and measure the configured model
-against `docs/TESTING.md`'s metrics before any model or prompt change. Avoid
-building broad collection features before the path is measurable.
+The next recommended task is the first Milestone 2 slice: allow multiple views
+of one physical record (front, back, spine, or label) to be grouped into one
+scan. Keep the formal private AI evaluation as a gate before public rollout or
+model/cost optimization.
