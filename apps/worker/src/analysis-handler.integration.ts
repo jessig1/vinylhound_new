@@ -3,10 +3,15 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { AlbumIdentificationError, type AlbumIdentifier } from "@vinylhound/ai";
+import {
+  AlbumIdentificationError,
+  type AlbumIdentificationRequest,
+  type AlbumIdentifier,
+} from "@vinylhound/ai";
 import {
   GetScanResponseSchema,
   type AlbumIdentification,
+  type ImageViewType,
 } from "@vinylhound/contracts";
 import {
   completeImageUpload,
@@ -80,11 +85,11 @@ function identification(
 
 function successfulIdentifier(
   result = identification(),
-  onIdentify?: () => void,
+  onIdentify?: (request: AlbumIdentificationRequest) => void,
 ): AlbumIdentifier {
   return {
-    async identify() {
-      onIdentify?.();
+    async identify(request) {
+      onIdentify?.(request);
       return {
         identification: result,
         metadata: {
@@ -99,29 +104,34 @@ function successfulIdentifier(
   };
 }
 
-async function createQueuedScan() {
+async function createQueuedScan(
+  viewTypes: readonly ImageViewType[] = ["front"],
+) {
   const scan = await createOrGetScan(database.db, {
     userId,
     source: "single_upload",
     idempotencyKey: `worker-scan-${randomUUID()}`,
   });
-  const upload = await createOrGetImageUpload(database.db, {
-    userId,
-    scanId: scan.record.id,
-    idempotencyKey: `worker-upload-${randomUUID()}`,
-    filename: "front.jpg",
-    mimeType: "image/jpeg",
-    sizeBytes: 3,
-    checksumSha256: "d".repeat(64),
-    maxImages: 12,
-  });
-  await completeImageUpload(database.db, {
-    userId,
-    scanId: scan.record.id,
-    imageId: upload.record.id,
-    width: 800,
-    height: 800,
-  });
+  for (const viewType of viewTypes) {
+    const upload = await createOrGetImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `worker-upload-${randomUUID()}`,
+      filename: `${viewType}.jpg`,
+      viewType,
+      mimeType: "image/jpeg",
+      sizeBytes: 3,
+      checksumSha256: "d".repeat(64),
+      maxImages: 12,
+    });
+    await completeImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      imageId: upload.record.id,
+      width: 800,
+      height: 800,
+    });
+  }
   return submitScan(database.db, {
     userId,
     scanId: scan.record.id,
@@ -140,6 +150,37 @@ function handler(identifier: AlbumIdentifier) {
 }
 
 describe("scan analysis handler", () => {
+  it("sends labeled views of one record in a single identification request", async () => {
+    const submitted = await createQueuedScan(["front", "back", "spine"]);
+    let request: AlbumIdentificationRequest | undefined;
+    const analyze = handler(
+      successfulIdentifier(identification(), (received) => {
+        request = received;
+      }),
+    );
+
+    await analyze(submitted.job, {
+      jobId: submitted.jobId,
+      deliveryAttempt: 1,
+      maxAttempts: 5,
+    });
+
+    expect(request?.images).toMatchObject([
+      { viewType: "front" },
+      { viewType: "back" },
+      { viewType: "spine" },
+    ]);
+    const status = await getScanForUser(database.db, {
+      userId,
+      scanId: submitted.record.id,
+    });
+    expect(status.images.map(({ viewType }) => viewType)).toEqual([
+      "front",
+      "back",
+      "spine",
+    ]);
+  });
+
   it("persists a successful result and skips succeeded redelivery", async () => {
     const submitted = await createQueuedScan();
     let identifyCalls = 0;
@@ -216,7 +257,7 @@ describe("scan analysis handler", () => {
         }
         return successfulIdentifier().identify({
           scanId: submitted.record.id,
-          imageUrls: ["data:image/jpeg;base64,AQID"],
+          images: [{ url: "data:image/jpeg;base64,AQID", viewType: "front" }],
         });
       },
     };

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   ImageMimeTypeSchema,
+  ImageViewTypeSchema,
   MAX_IMAGES_PER_SCAN,
   MAX_IMAGE_SIZE_BYTES,
 } from "./upload.js";
@@ -52,6 +53,7 @@ export const ImageAssetSchema = z
     id: z.string().uuid(),
     objectKey: z.string().min(1),
     filename: z.string().min(1).max(255),
+    viewType: ImageViewTypeSchema,
     mimeType: ImageMimeTypeSchema,
     sizeBytes: z.number().int().positive(),
   })
@@ -142,6 +144,15 @@ export const ScanCandidateResultSchema = AlbumCandidateSchema.extend({
   rank: z.number().int().positive(),
 }).strict();
 
+export const ScanImageSummarySchema = z
+  .object({
+    id: z.string().uuid(),
+    filename: z.string().min(1).max(255),
+    viewType: ImageViewTypeSchema,
+    mimeType: ImageMimeTypeSchema,
+  })
+  .strict();
+
 export const ScanAttemptSummarySchema = z
   .object({
     attemptNumber: z.number().int().positive(),
@@ -181,6 +192,7 @@ export const GetScanResponseSchema = z
     createdAt: z.string().datetime(),
     submittedAt: z.string().datetime().nullable(),
     completedAt: z.string().datetime().nullable(),
+    images: z.array(ScanImageSummarySchema).max(MAX_IMAGES_PER_SCAN),
     attempt: ScanAttemptSummarySchema.nullable(),
     candidates: z.array(ScanCandidateResultSchema).max(5),
     confirmation: ScanConfirmationSummarySchema.nullable(),
@@ -191,5 +203,6 @@ export type CreateScanRequest = z.infer<typeof CreateScanRequestSchema>;
 export type CreateScanResponse = z.infer<typeof CreateScanResponseSchema>;
 export type SubmitScanResponse = z.infer<typeof SubmitScanResponseSchema>;
 export type ScanCandidateResult = z.infer<typeof ScanCandidateResultSchema>;
+export type ScanImageSummary = z.infer<typeof ScanImageSummarySchema>;
 export type ScanAttemptSummary = z.infer<typeof ScanAttemptSummarySchema>;
 export type GetScanResponse = z.infer<typeof GetScanResponseSchema>;

@@ -1,6 +1,30 @@
 import { describe, expect, it } from "vitest";
 
-import { detectImageMimeType } from "./upload.js";
+import {
+  CreateImageUploadRequestSchema,
+  detectImageMimeType,
+} from "./upload.js";
+
+describe("CreateImageUploadRequestSchema", () => {
+  const upload = {
+    filename: "cover.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 512,
+    checksumSha256: "a".repeat(64),
+  } as const;
+
+  it("preserves the single-image API by defaulting an unlabeled image to front", () => {
+    expect(CreateImageUploadRequestSchema.parse(upload)).toMatchObject({
+      viewType: "front",
+    });
+  });
+
+  it("accepts a labeled physical-record view", () => {
+    expect(
+      CreateImageUploadRequestSchema.parse({ ...upload, viewType: "spine" }),
+    ).toMatchObject({ viewType: "spine" });
+  });
+});
 
 function bytesFrom(...parts: (string | number[])[]): Uint8Array {
   const flattened = parts.flatMap((part) =>

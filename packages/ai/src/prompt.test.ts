@@ -7,13 +7,20 @@ import {
 
 describe("album identification prompt", () => {
   it("prioritizes a best-effort artist/title result", () => {
-    expect(ALBUM_IDENTIFICATION_PROMPT_VERSION).toBe("album-identification.v2");
+    expect(ALBUM_IDENTIFICATION_PROMPT_VERSION).toBe("album-identification.v3");
     expect(ALBUM_IDENTIFICATION_INSTRUCTIONS).toContain(
       "always return the strongest artist/title candidate",
     );
     expect(ALBUM_IDENTIFICATION_INSTRUCTIONS).toContain(
       "Return no candidates only when artist and title cannot be reasonably inferred",
     );
+  });
+
+  it("combines labeled views of one physical record", () => {
+    expect(ALBUM_IDENTIFICATION_INSTRUCTIONS).toContain(
+      "all supplied views as photos of the same physical record",
+    );
+    expect(ALBUM_IDENTIFICATION_INSTRUCTIONS).toContain("view labels");
   });
 
   it("does not turn missing edition facts into album review reasons", () => {

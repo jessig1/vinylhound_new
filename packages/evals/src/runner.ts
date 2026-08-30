@@ -231,7 +231,12 @@ async function evaluateAttempt(options: {
   try {
     const response = await options.identifier.identify({
       scanId: options.evaluationCase.caseId,
-      imageUrls: [options.dataUrl],
+      images: [
+        {
+          url: options.dataUrl,
+          viewType: options.evaluationCase.viewType,
+        },
+      ],
     });
     const durationMs = performance.now() - startedAt;
     const { score, reviewOutcome } = scoreIdentification(

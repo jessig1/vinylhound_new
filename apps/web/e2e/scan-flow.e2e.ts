@@ -6,6 +6,8 @@ import sharp from "sharp";
 const uploadInput = 'input[type="file"]:not([capture])';
 
 let coverJpeg: Buffer;
+let backJpeg: Buffer;
+let spineJpeg: Buffer;
 
 test.beforeAll(async () => {
   coverJpeg = await sharp({
@@ -13,6 +15,43 @@ test.beforeAll(async () => {
   })
     .jpeg()
     .toBuffer();
+  backJpeg = await sharp({
+    create: { width: 512, height: 512, channels: 3, background: "#2c3e7a" },
+  })
+    .jpeg()
+    .toBuffer();
+  spineJpeg = await sharp({
+    create: { width: 128, height: 512, channels: 3, background: "#3e7a2c" },
+  })
+    .jpeg()
+    .toBuffer();
+});
+
+test("groups front, back, and spine photos into one labeled multi-view scan", async ({
+  page,
+}) => {
+  await page.goto("/scan");
+
+  await page.setInputFiles(uploadInput, [
+    { name: "front.jpg", mimeType: "image/jpeg", buffer: coverJpeg },
+    { name: "back.jpg", mimeType: "image/jpeg", buffer: backJpeg },
+    { name: "spine.jpg", mimeType: "image/jpeg", buffer: spineJpeg },
+  ]);
+
+  await expect(page.getByText("3 views of one record")).toBeVisible();
+  const viewSelects = page.locator(".view-card select");
+  await expect(viewSelects).toHaveCount(3);
+  await expect(viewSelects.nth(0)).toHaveValue("front");
+  await expect(viewSelects.nth(1)).toHaveValue("back");
+  await expect(viewSelects.nth(2)).toHaveValue("spine");
+
+  await page.getByRole("button", { name: "Identify album" }).click();
+
+  await page.waitForURL(/\/scans\/[0-9a-f-]{36}/, { timeout: 30_000 });
+  await expect(
+    page.getByRole("heading", { name: "Check the match." }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("combined 3 labeled views")).toBeVisible();
 });
 
 test("identifies a misnamed cover photo and confirms it into the collection", async ({

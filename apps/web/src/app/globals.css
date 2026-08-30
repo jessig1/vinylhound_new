@@ -1153,6 +1153,84 @@ label:has(input[type="file"]) {
 .upload-preview .button-row {
   justify-content: flex-start;
 }
+.multi-view-upload {
+  width: min(100%, 900px);
+  text-align: left;
+}
+.multi-view-upload__heading {
+  margin-bottom: 24px;
+}
+.multi-view-upload__heading h2 {
+  margin-top: 14px;
+}
+.multi-view-upload__heading p {
+  max-width: 560px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+.view-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.view-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #faf9f5;
+}
+.view-card > img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+.view-card__body {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+}
+.view-card__body label {
+  display: grid;
+  gap: 5px;
+}
+.view-card__body label > span {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.view-card__body select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.75rem;
+}
+.view-card__body small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.67rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-card__remove {
+  justify-self: start;
+  padding: 0;
+}
+.multi-view-upload__actions {
+  justify-content: flex-start;
+  margin-top: 24px;
+}
+.multi-view-upload > .form-error {
+  margin-top: 18px;
+}
 .scan-tip {
   display: flex;
   max-width: 700px;
@@ -1821,6 +1899,12 @@ label:has(input[type="file"]) {
   .upload-preview img {
     max-width: 240px;
     margin: auto;
+  }
+  .multi-view-upload__actions {
+    align-items: stretch;
+  }
+  .view-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .settings-card {
     padding: 21px;

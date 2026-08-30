@@ -22,10 +22,11 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 
 ## Milestone 2 — multi-view and batch
 
-- Group front/back/spine/label images per scan.
-- Multi-select batch setup, independent item progress, cancellation, and retry.
-- Thumbnail/normalization pipeline and worker concurrency limits.
-- Batch and provider-cost dashboards.
+- [x] Group front/back/spine/label images per scan, sent as one labeled
+      identification request; preserves the single-image flow and audit trail.
+- [ ] Multi-select batch setup, independent item progress, cancellation, and retry.
+- [ ] Thumbnail/normalization pipeline and worker concurrency limits.
+- [ ] Batch and provider-cost dashboards.
 
 ## Milestone 3 — catalog enrichment and collection quality
 
@@ -39,7 +40,7 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 
-The next recommended task is the first Milestone 2 slice: allow multiple views
-of one physical record (front, back, spine, or label) to be grouped into one
-scan. Keep the formal private AI evaluation as a gate before public rollout or
-model/cost optimization.
+The next recommended task is the second Milestone 2 slice: multi-select batch
+setup with independent per-item progress, cancellation, and retry. Keep the
+formal private AI evaluation as a gate before public rollout or model/cost
+optimization.

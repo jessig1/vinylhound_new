@@ -28,6 +28,8 @@ export type PrepareScanAnalysisResult =
       images: Array<{
         id: string;
         objectKey: string;
+        viewType:
+          "front" | "back" | "spine" | "label" | "barcode" | "runout" | "other";
         mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
         sizeBytes: number;
       }>;
@@ -72,6 +74,7 @@ export async function prepareScanAnalysis(
       .select({
         id: imageAssets.id,
         objectKey: imageAssets.objectKey,
+        viewType: imageAssets.viewType,
         mimeType: imageAssets.mimeType,
         sizeBytes: imageAssets.sizeBytes,
         completedAt: imageAssets.completedAt,
@@ -158,6 +161,7 @@ export async function prepareScanAnalysis(
       images: requestedImages.map((image) => ({
         id: image!.id,
         objectKey: image!.objectKey,
+        viewType: image!.viewType,
         mimeType: image!.mimeType,
         sizeBytes: image!.sizeBytes,
       })),
@@ -331,6 +335,16 @@ export async function getScanForUser(
         .where(eq(scanCandidates.scanAttemptId, attempt.id))
         .orderBy(asc(scanCandidates.rank))
     : [];
+  const images = await db
+    .select({
+      id: imageAssets.id,
+      filename: imageAssets.filename,
+      viewType: imageAssets.viewType,
+      mimeType: imageAssets.mimeType,
+    })
+    .from(imageAssets)
+    .where(eq(imageAssets.scanId, scan.id))
+    .orderBy(asc(imageAssets.createdAt), asc(imageAssets.id));
   const confirmation = await getScanConfirmationForUser(db, input);
 
   return {
@@ -340,6 +354,7 @@ export async function getScanForUser(
     createdAt: scan.createdAt.toISOString(),
     submittedAt: scan.submittedAt?.toISOString() ?? null,
     completedAt: scan.completedAt?.toISOString() ?? null,
+    images,
     attempt: attempt
       ? {
           attemptNumber: attempt.attemptNumber,

@@ -82,6 +82,8 @@ export async function POST(
 function completedResponse(
   image: {
     id: string;
+    viewType:
+      "front" | "back" | "spine" | "label" | "barcode" | "runout" | "other";
     mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
     sizeBytes: number;
     width: number | null;
@@ -92,6 +94,7 @@ function completedResponse(
   const response = CompleteImageUploadResponseSchema.parse({
     imageId: image.id,
     status: "completed",
+    viewType: image.viewType,
     mimeType: image.mimeType,
     sizeBytes: image.sizeBytes,
     width: image.width,

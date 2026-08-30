@@ -39,6 +39,16 @@ export const imageMimeTypeEnum = pgEnum("image_mime_type", [
   "image/gif",
 ]);
 
+export const imageViewTypeEnum = pgEnum("image_view_type", [
+  "front",
+  "back",
+  "spine",
+  "label",
+  "barcode",
+  "runout",
+  "other",
+]);
+
 export const scanAttemptStatusEnum = pgEnum("scan_attempt_status", [
   "processing",
   "succeeded",
@@ -170,6 +180,7 @@ export const imageAssets = pgTable(
     idempotencyKey: text("idempotency_key").notNull(),
     objectKey: text("object_key").notNull(),
     filename: varchar("filename", { length: 255 }).notNull(),
+    viewType: imageViewTypeEnum("view_type").notNull(),
     mimeType: imageMimeTypeEnum("mime_type").notNull(),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
     checksumSha256: char("checksum_sha256", { length: 64 }).notNull(),
@@ -187,6 +198,10 @@ export const imageAssets = pgTable(
       table.idempotencyKey,
     ),
     index("image_assets_scan_id_idx").on(table.scanId),
+    index("image_assets_scan_id_view_type_idx").on(
+      table.scanId,
+      table.viewType,
+    ),
     check(
       "image_assets_idempotency_key_length_check",
       sql`char_length(${table.idempotencyKey}) between 1 and 255`,

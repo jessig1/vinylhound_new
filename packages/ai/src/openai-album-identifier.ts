@@ -39,17 +39,11 @@ export function createOpenAIAlbumIdentifier(
     async identify(
       request: AlbumIdentificationRequest,
     ): Promise<AlbumIdentificationResponse> {
-      if (request.imageUrls.length === 0) {
+      if (request.images.length === 0) {
         throw new Error(
           "At least one image URL is required for album identification.",
         );
       }
-
-      const imageContent = request.imageUrls.map((imageUrl) => ({
-        type: "input_image" as const,
-        image_url: imageUrl,
-        detail: options.imageDetail ?? ("high" as const),
-      }));
 
       let response;
       try {
@@ -60,15 +54,10 @@ export function createOpenAIAlbumIdentifier(
           input: [
             {
               role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: request.userHint
-                    ? `Identify the vinyl record shown. User hint: ${request.userHint}`
-                    : "Identify the vinyl record shown in these images.",
-                },
-                ...imageContent,
-              ],
+              content: buildAlbumIdentificationContent(
+                request,
+                options.imageDetail ?? "high",
+              ),
             },
           ],
           text: {
@@ -115,6 +104,31 @@ export function createOpenAIAlbumIdentifier(
       };
     },
   };
+}
+
+export function buildAlbumIdentificationContent(
+  request: AlbumIdentificationRequest,
+  imageDetail: "low" | "high" | "auto",
+) {
+  return [
+    {
+      type: "input_text" as const,
+      text: request.userHint
+        ? `Identify the vinyl record shown. User hint: ${request.userHint}`
+        : "Identify the vinyl record shown in these images.",
+    },
+    ...request.images.flatMap((image, index) => [
+      {
+        type: "input_text" as const,
+        text: `View ${index + 1}: ${image.viewType}.`,
+      },
+      {
+        type: "input_image" as const,
+        image_url: image.url,
+        detail: imageDetail,
+      },
+    ]),
+  ];
 }
 
 export function normalizeOpenAIError(error: unknown) {

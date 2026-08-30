@@ -45,7 +45,7 @@ export function createScanAnalysisHandler(options: ScanAnalysisHandlerOptions) {
     const startedAt = Date.now();
     let response;
     try {
-      const imageUrls = await Promise.all(
+      const images = await Promise.all(
         prepared.images.map(async (image) => {
           const stored = await options.storage.readObject(
             image.objectKey,
@@ -61,12 +61,15 @@ export function createScanAnalysisHandler(options: ScanAnalysisHandlerOptions) {
               "A stored image no longer matches its validated metadata.",
             );
           }
-          return `data:${image.mimeType};base64,${Buffer.from(stored.bytes).toString("base64")}`;
+          return {
+            url: `data:${image.mimeType};base64,${Buffer.from(stored.bytes).toString("base64")}`,
+            viewType: image.viewType,
+          };
         }),
       );
       response = await options.identifier.identify({
         scanId: job.scanId,
-        imageUrls,
+        images,
       });
     } catch (error) {
       const normalized = normalizeAnalysisError(error);

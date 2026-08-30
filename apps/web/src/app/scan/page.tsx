@@ -5,9 +5,13 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
+  CompleteImageUploadResponseSchema,
   CreateScanResponseSchema,
   detectImageMimeType,
   IMAGE_SNIFF_BYTE_LENGTH,
+  type ImageMimeType,
+  type ImageViewType,
+  MAX_IMAGES_PER_SCAN,
   SignedUploadSchema,
   SubmitScanResponseSchema,
 } from "@vinylhound/contracts";
@@ -17,79 +21,135 @@ import { Icon } from "../ui";
 type Phase =
   "ready" | "hashing" | "preparing" | "uploading" | "validating" | "submitting";
 
+type SelectedImage = {
+  clientId: string;
+  file: File;
+  preview: string;
+  viewType: ImageViewType;
+};
+
 type UploadWorkflow = {
   createKey: string;
-  uploadKey: string;
-  completeKey: string;
   submitKey: string;
+  images: Record<
+    string,
+    {
+      uploadKey: string;
+      completeKey: string;
+    }
+  >;
 };
+
+type PreparedImage = SelectedImage & {
+  mimeType: ImageMimeType;
+  checksumSha256: string;
+};
+
+const viewOptions: Array<{ value: ImageViewType; label: string }> = [
+  { value: "front", label: "Front cover" },
+  { value: "back", label: "Back cover" },
+  { value: "spine", label: "Spine" },
+  { value: "label", label: "Record label" },
+];
 
 export default function ScanPage() {
   const router = useRouter();
   const workflow = useRef<UploadWorkflow | null>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const imagesRef = useRef<SelectedImage[]>([]);
+  const [images, setImages] = useState<SelectedImage[]>([]);
   const [source, setSource] = useState<"camera" | "single_upload">(
     "single_upload",
   );
-  const [preview, setPreview] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("ready");
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [activeImage, setActiveImage] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>(
+    {},
+  );
   const [error, setError] = useState<string | null>(null);
   const busy = phase !== "ready";
 
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
+
   useEffect(
     () => () => {
-      if (preview) URL.revokeObjectURL(preview);
+      for (const image of imagesRef.current) URL.revokeObjectURL(image.preview);
     },
-    [preview],
+    [],
   );
 
-  function selectFile(
+  function addFiles(
     event: ChangeEvent<HTMLInputElement>,
     nextSource: "camera" | "single_upload",
   ) {
-    const selected = event.target.files?.[0];
-    if (!selected) return;
-    if (preview) URL.revokeObjectURL(preview);
-    setFile(selected);
-    setSource(nextSource);
-    setPreview(URL.createObjectURL(selected));
+    const selected = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (!selected.length) return;
+    if (images.length + selected.length > MAX_IMAGES_PER_SCAN) {
+      setError(`One record can include up to ${MAX_IMAGES_PER_SCAN} views.`);
+      return;
+    }
+
+    const added = selected.map((file, index) => ({
+      clientId: crypto.randomUUID(),
+      file,
+      preview: URL.createObjectURL(file),
+      viewType: suggestedView(images.length + index),
+    }));
+    setImages([...images, ...added]);
+    if (images.length === 0) setSource(nextSource);
     setPhase("ready");
-    setUploadProgress(0);
+    setUploadProgress({});
+    setError(null);
+    workflow.current = null;
+  }
+
+  function updateView(clientId: string, viewType: ImageViewType) {
+    setImages((current) =>
+      current.map((image) =>
+        image.clientId === clientId ? { ...image, viewType } : image,
+      ),
+    );
+    setUploadProgress({});
+    setError(null);
+    workflow.current = null;
+  }
+
+  function removeImage(clientId: string) {
+    const removed = images.find((image) => image.clientId === clientId);
+    if (removed) URL.revokeObjectURL(removed.preview);
+    setImages((current) =>
+      current.filter((image) => image.clientId !== clientId),
+    );
+    setUploadProgress({});
     setError(null);
     workflow.current = null;
   }
 
   async function identifyAlbum() {
-    if (!file || busy) return;
+    if (!images.length || busy) return;
     setError(null);
+    setUploadProgress({});
     const keys =
       workflow.current ??
       (workflow.current = {
         createKey: `scan-${crypto.randomUUID()}`,
-        uploadKey: `upload-${crypto.randomUUID()}`,
-        completeKey: `complete-${crypto.randomUUID()}`,
         submitKey: `submit-${crypto.randomUUID()}`,
+        images: Object.fromEntries(
+          images.map((image) => [
+            image.clientId,
+            {
+              uploadKey: `upload-${crypto.randomUUID()}`,
+              completeKey: `complete-${crypto.randomUUID()}`,
+            },
+          ]),
+        ),
       });
 
     try {
       setPhase("hashing");
-      // File.type comes from the filename extension, so derive the declared
-      // MIME type from the file's magic bytes instead; a misnamed file would
-      // otherwise fail server-side validation after a full upload.
-      const detected = detectImageMimeType(
-        new Uint8Array(
-          await file.slice(0, IMAGE_SNIFF_BYTE_LENGTH).arrayBuffer(),
-        ),
-      );
-      if (detected.kind !== "supported") {
-        throw new Error(
-          detected.kind === "heif_like"
-            ? "This photo is in HEIC/HEIF format, which is not supported yet. Export or convert it to JPEG and try again."
-            : "That file is not a JPEG, PNG, WebP, or GIF image.",
-        );
-      }
-      const checksumSha256 = await sha256(file);
+      const prepared = await Promise.all(images.map(prepareImage));
 
       setPhase("preparing");
       const scan = CreateScanResponseSchema.parse(
@@ -102,44 +162,49 @@ export default function ScanPage() {
           body: JSON.stringify({ source }),
         }),
       );
-      if (
-        !scan.limits.acceptedMimeTypes.some(
-          (type) => type === detected.mimeType,
-        )
-      ) {
-        throw new Error("Choose a JPEG, PNG, WebP, or GIF image.");
-      }
-      if (file.size > scan.limits.maxImageSizeBytes) {
-        throw new Error("That image is larger than the 10 MB limit.");
-      }
+      validateAgainstScanLimits(prepared, scan.limits);
 
-      const signedUpload = SignedUploadSchema.parse(
-        await requestJson(`/api/v1/scans/${scan.scanId}/uploads`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key": keys.uploadKey,
-          },
-          body: JSON.stringify({
-            filename: file.name || "cover-photo",
-            mimeType: detected.mimeType,
-            sizeBytes: file.size,
-            checksumSha256,
+      for (const [index, image] of prepared.entries()) {
+        const imageKeys = keys.images[image.clientId];
+        if (!imageKeys) throw new Error("The upload could not be resumed.");
+        setActiveImage(index + 1);
+        setPhase("preparing");
+        const signedUpload = SignedUploadSchema.parse(
+          await requestJson(`/api/v1/scans/${scan.scanId}/uploads`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": imageKeys.uploadKey,
+            },
+            body: JSON.stringify({
+              filename: image.file.name || `${image.viewType}-photo`,
+              viewType: image.viewType,
+              mimeType: image.mimeType,
+              sizeBytes: image.file.size,
+              checksumSha256: image.checksumSha256,
+            }),
           }),
-        }),
-      );
+        );
 
-      setPhase("uploading");
-      await uploadFile(signedUpload, file, setUploadProgress);
+        setPhase("uploading");
+        await uploadFile(signedUpload, image.file, (progress) => {
+          setUploadProgress((current) => ({
+            ...current,
+            [image.clientId]: progress,
+          }));
+        });
 
-      setPhase("validating");
-      await requestJson(
-        `/api/v1/scans/${scan.scanId}/uploads/${signedUpload.imageId}/complete`,
-        {
-          method: "POST",
-          headers: { "idempotency-key": keys.completeKey },
-        },
-      );
+        setPhase("validating");
+        CompleteImageUploadResponseSchema.parse(
+          await requestJson(
+            `/api/v1/scans/${scan.scanId}/uploads/${signedUpload.imageId}/complete`,
+            {
+              method: "POST",
+              headers: { "idempotency-key": imageKeys.completeKey },
+            },
+          ),
+        );
+      }
 
       setPhase("submitting");
       SubmitScanResponseSchema.parse(
@@ -151,6 +216,7 @@ export default function ScanPage() {
       router.push(`/scans/${scan.scanId}`);
     } catch (caught) {
       setPhase("ready");
+      setActiveImage(0);
       setError(
         caught instanceof Error
           ? caught.message
@@ -165,55 +231,128 @@ export default function ScanPage() {
         <div>
           <p className="section-kicker">New scan</p>
           <h1>Let&apos;s identify that record.</h1>
-          <p>Start with a clear, straight-on photo of the front cover.</p>
+          <p>
+            Add one clear front cover, or combine several views of the same
+            physical record for a stronger match.
+          </p>
         </div>
       </header>
 
       <section className="upload-card" aria-busy={busy}>
-        {preview && file ? (
-          <div className="upload-preview">
-            <img alt={`Preview of ${file.name}`} src={preview} />
-            <div>
+        {images.length ? (
+          <div className="multi-view-upload">
+            <div className="multi-view-upload__heading">
               <span className="status status--success">
-                <Icon name="check" size={14} /> {phaseLabel(phase)}
+                <Icon name="check" size={14} />
+                {phaseLabel(phase, activeImage, images.length)}
               </span>
-              <h2>{file.name || "Cover photo"}</h2>
+              <h2>
+                {images.length} {images.length === 1 ? "view" : "views"} of one
+                record
+              </h2>
               <p>
-                The result is a candidate for you to review. A cover match does
-                not prove a particular pressing.
+                Label each photo so the model can combine cover and edition
+                evidence correctly.
               </p>
-              {phase === "uploading" ? (
-                <div className="upload-progress" aria-label="Upload progress">
-                  <span style={{ width: `${uploadProgress}%` }} />
-                </div>
-              ) : null}
-              {error ? (
-                <p className="form-error" role="alert">
-                  {error}
-                </p>
-              ) : null}
-              <div className="button-row">
-                <button
-                  className="primary-button"
-                  disabled={busy}
-                  onClick={identifyAlbum}
-                  type="button"
-                >
-                  <Icon name="sparkle" size={18} />
-                  {busy ? phaseLabel(phase) : "Identify album"}
-                </button>
-                <label
-                  className={`secondary-button${busy ? " is-disabled" : ""}`}
-                >
-                  Choose another
-                  <input
-                    accept="image/jpeg,image/png,image/webp,image/gif"
-                    disabled={busy}
-                    onChange={(event) => selectFile(event, "single_upload")}
-                    type="file"
+            </div>
+
+            <div className="view-grid">
+              {images.map((image) => (
+                <article className="view-card" key={image.clientId}>
+                  <img
+                    alt={`Preview of ${image.file.name}`}
+                    src={image.preview}
                   />
-                </label>
-              </div>
+                  <div className="view-card__body">
+                    <label>
+                      <span>Photo type</span>
+                      <select
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateView(
+                            image.clientId,
+                            event.target.value as ImageViewType,
+                          )
+                        }
+                        value={image.viewType}
+                      >
+                        {viewOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <small title={image.file.name}>
+                      {image.file.name || "Record photo"}
+                    </small>
+                    {uploadProgress[image.clientId] !== undefined ? (
+                      <div
+                        className="upload-progress"
+                        aria-label={`Upload progress for ${image.file.name}`}
+                      >
+                        <span
+                          style={{
+                            width: `${uploadProgress[image.clientId]}%`,
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                    <button
+                      className="text-button view-card__remove"
+                      disabled={busy}
+                      onClick={() => removeImage(image.clientId)}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            {error ? (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            ) : null}
+
+            <div className="button-row multi-view-upload__actions">
+              <button
+                className="primary-button"
+                disabled={busy}
+                onClick={identifyAlbum}
+                type="button"
+              >
+                <Icon name="sparkle" size={18} />
+                {busy
+                  ? phaseLabel(phase, activeImage, images.length)
+                  : "Identify album"}
+              </button>
+              <label
+                className={`secondary-button${busy ? " is-disabled" : ""}`}
+              >
+                <Icon name="upload" size={18} /> Add views
+                <input
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  disabled={busy}
+                  multiple
+                  onChange={(event) => addFiles(event, "single_upload")}
+                  type="file"
+                />
+              </label>
+              <label
+                className={`secondary-button${busy ? " is-disabled" : ""}`}
+              >
+                <Icon name="camera" size={18} /> Add photo
+                <input
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  capture="environment"
+                  disabled={busy}
+                  onChange={(event) => addFiles(event, "camera")}
+                  type="file"
+                />
+              </label>
             </div>
           </div>
         ) : (
@@ -221,28 +360,40 @@ export default function ScanPage() {
             <span className="upload-card__icon">
               <Icon name="camera" size={28} />
             </span>
-            <h2>Add a cover photo</h2>
-            <p>Use your camera or select an image from this device.</p>
+            <h2>Add record photos</h2>
+            <p>
+              Start with the front cover. You can then add the back, spine, or
+              record label to the same scan.
+            </p>
+            {error ? (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            ) : null}
             <div className="button-row">
               <label className="primary-button">
                 <Icon name="camera" size={18} /> Take a photo
                 <input
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   capture="environment"
-                  onChange={(event) => selectFile(event, "camera")}
+                  onChange={(event) => addFiles(event, "camera")}
                   type="file"
                 />
               </label>
               <label className="secondary-button">
-                <Icon name="upload" size={18} /> Upload image
+                <Icon name="upload" size={18} /> Upload images
                 <input
                   accept="image/jpeg,image/png,image/webp,image/gif"
-                  onChange={(event) => selectFile(event, "single_upload")}
+                  multiple
+                  onChange={(event) => addFiles(event, "single_upload")}
                   type="file"
                 />
               </label>
             </div>
-            <small>JPEG, PNG, WebP, or GIF · Up to 10 MB</small>
+            <small>
+              JPEG, PNG, WebP, or GIF · Up to 10 MB each · {MAX_IMAGES_PER_SCAN}{" "}
+              views maximum
+            </small>
           </>
         )}
       </section>
@@ -252,8 +403,9 @@ export default function ScanPage() {
         <div>
           <strong>For the best match</strong>
           <p>
-            Avoid glare, keep all four corners visible, and include the spine or
-            label when the edition matters.
+            Avoid glare, keep details in focus, and only group photos of the
+            same physical record. A front cover identifies the album; back,
+            spine, and label views can support edition details.
           </p>
         </div>
       </aside>
@@ -261,20 +413,70 @@ export default function ScanPage() {
   );
 }
 
-function phaseLabel(phase: Phase) {
+function suggestedView(index: number): ImageViewType {
+  return (["front", "back", "spine", "label"] as const)[index] ?? "label";
+}
+
+function phaseLabel(phase: Phase, activeImage: number, imageCount: number) {
+  const suffix = activeImage ? ` ${activeImage} of ${imageCount}` : "";
   switch (phase) {
     case "hashing":
-      return "Checking image…";
+      return "Checking images…";
     case "preparing":
-      return "Preparing upload…";
+      return `Preparing view${suffix}…`;
     case "uploading":
-      return "Uploading…";
+      return `Uploading view${suffix}…`;
     case "validating":
-      return "Validating image…";
+      return `Validating view${suffix}…`;
     case "submitting":
       return "Starting scan…";
     default:
       return "Ready to scan";
+  }
+}
+
+async function prepareImage(image: SelectedImage): Promise<PreparedImage> {
+  const detected = detectImageMimeType(
+    new Uint8Array(
+      await image.file.slice(0, IMAGE_SNIFF_BYTE_LENGTH).arrayBuffer(),
+    ),
+  );
+  if (detected.kind !== "supported") {
+    throw new Error(
+      detected.kind === "heif_like"
+        ? `${image.file.name}: HEIC/HEIF is not supported yet. Export or convert it to JPEG and try again.`
+        : `${image.file.name}: that file is not a JPEG, PNG, WebP, or GIF image.`,
+    );
+  }
+  return {
+    ...image,
+    mimeType: detected.mimeType,
+    checksumSha256: await sha256(image.file),
+  };
+}
+
+function validateAgainstScanLimits(
+  images: readonly PreparedImage[],
+  limits: {
+    acceptedMimeTypes: readonly ImageMimeType[];
+    maxImages: number;
+    maxImageSizeBytes: number;
+  },
+) {
+  if (images.length > limits.maxImages) {
+    throw new Error(`One record can include up to ${limits.maxImages} views.`);
+  }
+  for (const image of images) {
+    if (!limits.acceptedMimeTypes.includes(image.mimeType)) {
+      throw new Error(
+        `${image.file.name}: choose a JPEG, PNG, WebP, or GIF image.`,
+      );
+    }
+    if (image.file.size > limits.maxImageSizeBytes) {
+      throw new Error(
+        `${image.file.name}: that image is larger than the 10 MB limit.`,
+      );
+    }
   }
 }
 

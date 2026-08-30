@@ -30,6 +30,14 @@ without changing user-scoped persistence.
 
 Batch creation returns independent scan IDs; batch progress is a projection of those scans. Photos of several views of one record belong to one scan, not several jobs.
 
+Each requested upload declares a `viewType` (`front`, `back`, `spine`, `label`,
+`barcode`, `runout`, or `other`; defaults to `front` when omitted, preserving
+the original single-image request shape). `GET /scans/{scanId}` returns each
+image's `viewType` alongside its filename and MIME type. The worker sends every
+completed image to the identifier in one request, each paired with its view
+label, so the model can combine cover and edition evidence from the same
+physical record instead of treating extra photos as separate scans.
+
 ## Library endpoints
 
 | Method | Path                                  | Purpose                           |

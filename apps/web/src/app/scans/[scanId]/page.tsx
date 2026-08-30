@@ -224,7 +224,7 @@ export default function ScanResultPage() {
             ? "Your scan is queued."
             : "Reading the cover…"
         }
-        message="You can leave this page and return from the same link. The scan continues in the background."
+        message={`Analyzing ${scan.images.length} labeled ${scan.images.length === 1 ? "view" : "views"}. You can leave this page and return from the same link.`}
       />
     );
   }
@@ -260,7 +260,8 @@ export default function ScanResultPage() {
           <h1>Check the match.</h1>
           <p>
             Confirm the album, correct anything that is off, then choose where
-            to save it.
+            to save it. This result combined {scan.images.length} labeled{" "}
+            {scan.images.length === 1 ? "view" : "views"}.
           </p>
         </div>
         <StatusBadge status={scan.status} />

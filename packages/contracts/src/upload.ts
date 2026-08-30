@@ -13,6 +13,17 @@ export const SIGNED_UPLOAD_TTL_SECONDS = 5 * 60;
 
 export const ImageMimeTypeSchema = z.enum(ACCEPTED_IMAGE_MIME_TYPES);
 
+export const IMAGE_VIEW_TYPES = [
+  "front",
+  "back",
+  "spine",
+  "label",
+  "barcode",
+  "runout",
+  "other",
+] as const;
+export const ImageViewTypeSchema = z.enum(IMAGE_VIEW_TYPES);
+
 export const IMAGE_SNIFF_BYTE_LENGTH = 16;
 
 export type DetectedImageType =
@@ -97,6 +108,7 @@ export const IdempotencyKeySchema = z.string().trim().min(1).max(255);
 export const CreateImageUploadRequestSchema = z
   .object({
     filename: z.string().trim().min(1).max(255),
+    viewType: ImageViewTypeSchema.default("front"),
     mimeType: ImageMimeTypeSchema,
     sizeBytes: z.number().int().positive().max(MAX_IMAGE_SIZE_BYTES),
     checksumSha256: Sha256Schema,
@@ -117,6 +129,7 @@ export const CompleteImageUploadResponseSchema = z
   .object({
     imageId: z.string().uuid(),
     status: z.literal("completed"),
+    viewType: ImageViewTypeSchema,
     mimeType: ImageMimeTypeSchema,
     sizeBytes: z.number().int().positive(),
     width: z.number().int().positive(),
@@ -137,6 +150,7 @@ export const ApiErrorSchema = z
   .strict();
 
 export type ImageMimeType = z.infer<typeof ImageMimeTypeSchema>;
+export type ImageViewType = z.infer<typeof ImageViewTypeSchema>;
 export type CreateImageUploadRequest = z.infer<
   typeof CreateImageUploadRequestSchema
 >;

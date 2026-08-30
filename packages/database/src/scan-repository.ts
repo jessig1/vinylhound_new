@@ -7,6 +7,7 @@ import {
   AnalyzeScanJobSchema,
   type AnalyzeScanJob,
   type ImageMimeType,
+  type ImageViewType,
   type IngestionSource,
 } from "@vinylhound/contracts";
 
@@ -78,6 +79,7 @@ export interface CreateImageUploadInput {
   scanId: string;
   idempotencyKey: string;
   filename: string;
+  viewType?: ImageViewType;
   mimeType: ImageMimeType;
   sizeBytes: number;
   checksumSha256: string;
@@ -89,6 +91,7 @@ export async function createOrGetImageUpload(
   input: CreateImageUploadInput,
 ) {
   return db.transaction(async (transaction) => {
+    const viewType = input.viewType ?? "front";
     const [scan] = await transaction
       .select({ id: scans.id, status: scans.status })
       .from(scans)
@@ -115,6 +118,7 @@ export async function createOrGetImageUpload(
     if (existing) {
       if (
         existing.filename !== input.filename ||
+        existing.viewType !== viewType ||
         existing.mimeType !== input.mimeType ||
         existing.sizeBytes !== input.sizeBytes ||
         existing.checksumSha256 !== input.checksumSha256
@@ -148,6 +152,7 @@ export async function createOrGetImageUpload(
         idempotencyKey: input.idempotencyKey,
         objectKey: `${input.userId}/${input.scanId}/${imageId}/original`,
         filename: input.filename,
+        viewType,
         mimeType: input.mimeType,
         sizeBytes: input.sizeBytes,
         checksumSha256: input.checksumSha256,

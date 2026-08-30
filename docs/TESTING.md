@@ -71,8 +71,11 @@ build served from `.next-e2e` on port 3100, fully isolated from a running dev
 server: a dedicated `vinylhound_e2e` database (created and migrated by the
 global setup), a dedicated queue name, and a synthetic worker
 (`apps/worker/src/e2e-worker.ts`) that exercises the real outbox, queue,
-storage, and persistence path without calling OpenAI. It covers upload of a
-misnamed cover file (content sniffing), identification review, refresh
-recovery, confirmation into the collection, the collection listing, and
-pre-upload rejection messaging for non-image and HEIC files. It requires the
-Docker Compose services and a one-time `npx playwright install chromium`.
+storage, and persistence path without calling OpenAI. It covers grouping
+labeled front/back/spine photos into one multi-view scan, upload of a misnamed
+cover file (content sniffing), identification review, refresh recovery,
+confirmation into the collection, the collection listing, and pre-upload
+rejection messaging for non-image and HEIC files. It requires the Docker
+Compose services and a one-time `npx playwright install chromium` (Linux/WSL
+also needs the browser's OS shared libraries: `sudo npx playwright
+install-deps` once per machine).

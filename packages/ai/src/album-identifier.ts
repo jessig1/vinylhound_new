@@ -1,11 +1,17 @@
 import type {
   AlbumIdentification,
+  ImageViewType,
   ProviderErrorCategory,
 } from "@vinylhound/contracts";
 
+export interface AlbumIdentificationImage {
+  url: string;
+  viewType: ImageViewType;
+}
+
 export interface AlbumIdentificationRequest {
   scanId: string;
-  imageUrls: readonly string[];
+  images: readonly AlbumIdentificationImage[];
   userHint?: string;
 }
 
