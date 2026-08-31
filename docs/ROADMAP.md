@@ -73,9 +73,15 @@ future slice.
       `clerk_user_id` column, provisioned just-in-time on first request.
       `AUTH_MODE=development` (the default) keeps today's single fixed user
       with no Clerk dependency, so local dev/CI/tests are unaffected.
-      Account deletion/export and a privacy/retention policy are separate,
-      not yet started.
-- Account deletion/export, privacy/retention policy.
+- [x] Account export and deletion (ADR-0014): `GET /account/export` returns
+      every row a user owns as JSON (metadata only, no image bytes).
+      `DELETE /account` performs an ordered hard delete — the user's
+      `scan_confirmations` rows first (satisfying their deliberate `restrict`
+      FKs, ADR-0011), then the `users` row and its cascades — and
+      best-effort deletes the corresponding S3 objects. Shared catalog rows
+      (`albums`/`releases`) are never touched. A privacy/retention policy is
+      documented in `docs/SECURITY.md`; a user-facing privacy notice is
+      still needed.
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 

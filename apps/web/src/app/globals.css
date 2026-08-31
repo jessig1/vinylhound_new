@@ -1358,6 +1358,41 @@ a.library-toolbar__export {
   display: flex;
   justify-content: flex-end;
 }
+.settings-card--danger {
+  gap: 14px;
+}
+.settings-card--danger .settings-actions {
+  justify-content: flex-start;
+  gap: 14px;
+}
+.settings-card__error {
+  margin: 0;
+  color: #b3413a;
+  font-size: 0.66rem;
+}
+.settings-card__confirm {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #f2c9c2;
+  border-radius: 8px;
+  background: #fdf3f1;
+}
+.settings-card__confirm p {
+  margin: 0;
+  color: var(--ink);
+}
+.settings-card__confirm input {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+  background: #fff;
+}
+.settings-card__confirm input:focus {
+  border-color: var(--orange);
+}
 .toggle-row {
   display: flex;
   align-items: center;

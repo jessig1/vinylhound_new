@@ -1,3 +1,4 @@
+export * from "./account.js";
 export * from "./batch.js";
 export * from "./catalog.js";
 export * from "./library.js";

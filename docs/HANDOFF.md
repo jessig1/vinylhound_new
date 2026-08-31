@@ -38,9 +38,47 @@ the log.
   fake demo sign-in/sign-up form that used to live there is gone); `/account`
   and the sidebar name/avatar now read Clerk's `useUser`/`useClerk` in
   production mode and show a neutral development-mode label otherwise. The
-  fake `vinylhound-demo-session` `localStorage` key is gone. Account
-  deletion/export and a privacy/retention policy remain separate, not yet
-  started (see Milestone 4 in `docs/ROADMAP.md`).
+  fake `vinylhound-demo-session` `localStorage` key is gone.
+- **Milestone 4 task 2, account export and deletion, is complete** (ADR-0014).
+  `GET /account/export` (`getAccountExportForUser`,
+  `packages/database/src/account-repository.ts`) returns every row a user
+  owns — account, batches, scans, image metadata (not image bytes),
+  attempts, confirmations, library items, library copies — as JSON with a
+  `content-disposition: attachment` header; a new `packages/contracts`
+  `account.ts` defines the strict response shape. `DELETE /account`
+  (`deleteAccount`) performs an ordered hard delete in one transaction: the
+  user's `scan_confirmations` rows are deleted directly first (their
+  `library_item_id`/`release_id` FKs are deliberately `restrict`, ADR-0011,
+  which would otherwise block the `users` cascade from also removing
+  `library_items`), then the `users` row, letting every other user-owned
+  table cascade normally; shared `albums`/`releases` rows are never touched
+  since they carry no FK to `users` at all. After the transaction commits,
+  each deleted image's `original`/`analysis`/`thumbnail` S3 objects (all
+  three variants recomputed via `deriveImageObjectKey`, since only the
+  `original` key is stored in a column — ADR-0007) are deleted best-effort;
+  a failed object delete is logged, not retried, and does not fail the
+  request. `/account` gained a "Your data" section
+  (`account-data-actions.tsx`) with an "Export my data" download button and
+  a type-to-confirm ("delete my account") destructive delete flow, working
+  in both `AUTH_MODE=development` (redirects to `/` afterward) and
+  `AUTH_MODE=production` (calls Clerk's `signOut()` afterward, since the
+  Clerk session itself is independent of the now-deleted local row).
+  `docs/SECURITY.md`'s retention section now states the actual policy
+  (retained until the user deletes their account; no automatic time-based
+  expiry) instead of describing an undefined future policy.
+- **This session also destroyed the accumulated local dev database history**
+  under `DEVELOPMENT_USER_ID` (scans, images, library items, batches built
+  up across every prior session's manual testing) by mistake: a `curl -X
+DELETE` intended only to inspect response headers while manually verifying
+  the new endpoint executed for real. A fresh, empty `users` row was
+  auto-reprovisioned under the same ID on the next request, so the app still
+  works, but every reference in this file's history to specific accumulated
+  counts (e.g. "21 scans," "48/12" collection/wishlist counts shown in
+  screenshots) no longer reflects the database's actual contents — the
+  maintainer confirmed this local data did not need recovering. This is a
+  concrete illustration of why `DELETE /account` needs a real confirmation
+  step before ever being invoked, automated or manual, against non-disposable
+  data.
 - This session also installed Node 22.23.2 side-by-side via nvm-windows on
   the Windows host (`nvm use 22.23.2`), since the machine's only prior Node
   was v20.17.0 and this repo's scripts (`db:migrate`, `test:integration`,
@@ -168,29 +206,46 @@ the log.
   (not-found, invalid body, bad UUID) against a running WSL dev server instead,
   since there was no real library item to exercise the success path against.
 - `npm run check` passes on Windows (Node 22.23.2 via nvm-windows, not WSL):
-  formatting, ESLint, typecheck, and 65/65 unit tests (61 prior + 4 new
-  `DevelopmentWebConfigSchema` auth-mode tests).
-- `npm run build` passes: the Next.js web app (28 routes, +2 for
-  `/sign-in`/`/sign-up`), worker, and eval package compile cleanly. A build
-  warning about `process.cwd`/Edge Runtime originates inside
-  `@clerk/nextjs`'s own module graph, not this repo's code, and does not
-  fail the build.
-- `npm run test:integration` passes on Windows (Node 22.23.2): database (21,
-  +2 for `getOrCreateUserIdByClerkId` provisioning/reuse/concurrent-lookup),
-  storage (1), queue (1), and worker (6) suites, 29/29 total. Migration 011
-  applied cleanly to the real dev database.
+  formatting, ESLint, typecheck, and 69/69 unit tests (61 before this
+  session, +4 `DevelopmentWebConfigSchema` auth-mode tests for task 1, +4
+  `AccountExportResponseSchema`/`DeleteAccountResponseSchema` tests for
+  task 2).
+- `npm run build` passes: the Next.js web app (30 routes: +2 for
+  `/sign-in`/`/sign-up` in task 1, +2 for `/api/v1/account` and
+  `/api/v1/account/export` in task 2), worker, and eval package compile
+  cleanly. A build warning about `process.cwd`/Edge Runtime originates
+  inside `@clerk/nextjs`'s own module graph, not this repo's code, and does
+  not fail the build.
+- `npm run test:integration` passes on Windows (Node 22.23.2): database (25:
+  21 before this session, +2 for `getOrCreateUserIdByClerkId` in task 1,
+  +2 for account export/deletion in task 2 — export, export-not-found,
+  delete-with-restrict-fks, delete-not-found), storage (1), queue (1), and
+  worker (6) suites, 33/33 total. Migration 011 applied cleanly to the real
+  dev database.
 - `npm run test:e2e` passes: 5/5 Playwright tests against a production build
   with the synthetic worker, run in `AUTH_MODE=development` (unaffected by
-  Clerk, as designed) — this run is what caught the `clerkMiddleware()`
-  construction-time throw described above.
+  Clerk, as designed) — the task 1 run caught a real
+  `clerkMiddleware()` construction-time throw described above; the task 2
+  rerun after adding the account endpoints was unaffected.
+- Manually verified in a running dev server: `GET /account/export` against
+  real accumulated dev data (correct headers, schema-valid body);
+  `/account`'s new "Your data" section renders and its delete flow's
+  type-to-confirm gating (button stays disabled until the exact phrase is
+  typed, "Cancel" resets state) was exercised end-to-end with a scripted
+  Playwright check, screenshotted for visual confirmation. Manually invoking
+  `DELETE /account` to check response headers was a mistake — it executed
+  for real against the shared dev account and destroyed its accumulated
+  scan/library history (see the note above); nothing else in this session's
+  verification was destructive.
 - Docker Compose services (postgres, redis, minio) are running and healthy.
 - Milestone 2's original work is committed through `a248eb9`; the subsequent
   audit fixes, MusicBrainz catalog integration, physical-copy model, related
-  docs/tests, and the hydration-warning adjustment are committed as `c8f99cd`
-  and pushed to `origin/main`. Direct wishlist-to-owned conversion
-  (ADR-0011), library search/sort/export (ADR-0012), and production
-  authentication (ADR-0013, this session) are all uncommitted; the
-  maintainer should review before commit.
+  docs/tests, and the hydration-warning adjustment are committed as `c8f99cd`.
+  Direct wishlist-to-owned conversion (ADR-0011) and library search/sort/
+  export (ADR-0012) are committed as `b2d87d6`. Production authentication
+  (ADR-0013) is committed as `9507cad`. All of the above are pushed to
+  `origin/main`. Account export/deletion (ADR-0014, this session) is
+  uncommitted; the maintainer should review before commit.
 - The maintainer's private dataset folder contains 52 JPEG cover photos plus a
   draft `manifest.json` and `LABELING_PROMPT.md`. These files remain outside
   the repository and still need app-assisted labels and maintainer verification.
@@ -209,21 +264,22 @@ the log.
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Milestone 4 task 1, production authentication (ADR-0013), is
-complete — see "Current state" above for the full shape. This work is
-**uncommitted**; the maintainer should review before commit. There is no
+**Task:** Milestone 4 tasks 1 and 2 (production authentication, ADR-0013;
+account export/deletion, ADR-0014) are both complete — see "Current state"
+above for the full shape. Task 1 is committed and pushed (`9507cad`); task 2
+is **uncommitted** — the maintainer should review before commit. There is no
 other in-flight Milestone 4 work queued. The next session should check with
 the maintainer for the next priority rather than assuming — candidates
-include: Milestone 4's remaining items (account deletion/export and a
-privacy/retention policy; managed infrastructure/backups/observability/
-quotas/abuse controls; accessibility and cross-device test matrix), or
-Milestone 3's one remaining deferred piece (per-copy condition/location/
-notes/acquisition-date edit and delete — `PATCH`/`DELETE
-/library/{itemId}/copies/{copyId}` or similar, not yet designed; ADR-0010,
-ADR-0011). Keep the private AI matrix deferred until public rollout or
-model/cost optimization.
+include: Milestone 4's remaining items (managed infrastructure/backups/
+observability/quotas/abuse controls; accessibility and cross-device test
+matrix; a published user-facing privacy notice describing the retention
+policy `docs/SECURITY.md` now states), or Milestone 3's one remaining
+deferred piece (per-copy condition/location/notes/acquisition-date edit and
+delete — `PATCH`/`DELETE /library/{itemId}/copies/{copyId}` or similar, not
+yet designed; ADR-0010, ADR-0011). Keep the private AI matrix deferred until
+public rollout or model/cost optimization.
 
-Two things worth knowing before extending auth further:
+Things worth knowing before extending this further:
 
 - Getting a real Clerk account/keys to exercise `AUTH_MODE=production`
   end-to-end (sign-up → JIT-provisioned `users` row → protected route →
@@ -238,8 +294,20 @@ Two things worth knowing before extending auth further:
   (migration 011), deliberately not tightened to `not null` yet (see
   ADR-0013's Migration section) — do that tightening only after confirming
   real sign-in works, not before.
+- **Never invoke `DELETE /account` (via curl, a browser, or otherwise)
+  against real or shared dev data without meaning to delete it** — this
+  session did exactly that by accident while checking response headers, and
+  destroyed the local dev account's accumulated scan/library history (see
+  "Current state" above). The repository-level integration tests
+  (`schema.integration.ts`'s "account export and deletion" block) already
+  exercise the full delete path safely against disposable throwaway users —
+  prefer that over any manual `curl`/browser call against
+  `DEVELOPMENT_USER_ID`'s real data.
 
 Recently completed, for context:
+
+- Account export and deletion (2026-08-31, ADR-0014, `docs/API.md`,
+  `docs/SECURITY.md`): see "Current state" above for the full description.
 
 - Production authentication (2026-08-31, ADR-0013, `docs/ARCHITECTURE.md`):
   see "Current state" above for the full description. Also installed Node
@@ -446,6 +514,39 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
+
+- **2026-08-31 - Claude (fourth session).** Committed and pushed task 1
+  (production authentication, `9507cad`) at the maintainer's request, then
+  completed Milestone 4 task 2, account export and deletion (ADR-0014).
+  Investigated the schema first and found a real design problem before
+  writing any code: `scan_confirmations.library_item_id`/`.release_id` are
+  deliberate `restrict` FKs (ADR-0011) that would make a plain cascading
+  delete of a `users` row fail with a foreign key violation, since Postgres
+  does not guarantee `scans` cascade before `library_items` is touched in
+  the same operation. Confirmed the resolution with the maintainer (delete
+  `scan_confirmations` directly first, in the same transaction, rather than
+  soft-delete/anonymize) and confirmed export scope (metadata-only JSON, no
+  image bytes) before implementing either. New `packages/database/src/
+account-repository.ts` (`getAccountExportForUser`, `deleteAccount`) and
+  `packages/contracts/src/account.ts`; new `GET /api/v1/account/export` and
+  `DELETE /api/v1/account` routes; a new "Your data" section on `/account`
+  with a type-to-confirm delete flow, verified end-to-end with a scripted
+  Playwright check (button stays disabled until the exact phrase is typed)
+  and a screenshot. Added 4 new database integration tests (export,
+  export-not-found, delete-with-restrict-fks-and-shared-catalog-preserved,
+  delete-not-found) and 4 new contract tests. Verified: `npm run check`
+  (69/69 unit tests), `npm run test:integration` (33/33), `npm run build`
+  (30 routes, +2), `npm run test:e2e` (5/5). **Made a real mistake while
+  manually verifying the delete route**: a `curl -X DELETE` intended only to
+  inspect response headers executed for real against the local dev
+  database's `DEVELOPMENT_USER_ID` account, destroying its accumulated
+  scan/image/library history from every prior session's manual testing (a
+  fresh empty row was auto-reprovisioned under the same ID, so the app still
+  works). Disclosed this to the maintainer immediately; confirmed the local
+  data did not need recovering. Updated `docs/API.md`, `docs/SECURITY.md`
+  (the retention policy is now stated concretely instead of describing a
+  future gap), `docs/ROADMAP.md`, and this file. Uncommitted; the maintainer
+  should review before commit.
 
 - **2026-08-31 - Claude (third session).** Started Milestone 4 (checked with
   the maintainer first, since the roadmap only listed broad areas, not

@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { isProductionAuth } from "../auth-mode";
 import { Icon } from "../ui";
+import { AccountDataActions } from "./account-data-actions";
 
 export default function AccountPage() {
   return isProductionAuth ? <ClerkAccountPage /> : <DevelopmentAccountPage />;
@@ -53,6 +54,7 @@ function ClerkAccountPage() {
       <Link className="text-button" href="/account/usage">
         <Icon name="sparkle" size={18} /> Usage and cost
       </Link>
+      <AccountDataActions />
       <button
         className="signout-button"
         onClick={() => signOut({ redirectUrl: "/" })}
@@ -80,6 +82,7 @@ function DevelopmentAccountPage() {
       <Link className="text-button" href="/account/usage">
         <Icon name="sparkle" size={18} /> Usage and cost
       </Link>
+      <AccountDataActions />
     </main>
   );
 }

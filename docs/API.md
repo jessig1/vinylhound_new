@@ -102,6 +102,30 @@ and is excluded from the cost figures but still counted in `outcomes.failed`.
 private eval harness (`packages/domain`'s `MODEL_PRICING_USD`) and is `null`
 when no attempt in the window used a priced model.
 
+## Account endpoints
+
+| Method | Path              | Purpose                                     |
+| ------ | ----------------- | ------------------------------------------- |
+| GET    | `/account/export` | Export all of the user's own data as JSON   |
+| DELETE | `/account`        | Permanently delete the account and its data |
+
+`GET /account/export` (ADR-0014) returns every row the requesting user owns:
+account, batches, scans, image metadata (not image bytes), attempts,
+confirmations, library items, and library copies, plus each stored image's
+`objectKey`. It has no side effects and needs no `Idempotency-Key`.
+
+`DELETE /account` (ADR-0014) permanently deletes the account: `users` and
+every FK-cascaded row (`scans`, `image_assets`, `scan_attempts`,
+`scan_candidates`, `batches`, `library_items`, `library_copies`), plus the
+user's `scan_confirmations` rows deleted explicitly first (they carry
+deliberate `restrict` FKs to `library_items`/`releases` — ADR-0011 — that a
+plain cascade cannot satisfy on its own). Shared catalog rows (`albums`,
+`releases`) are never touched. Each deleted image's `original`/`analysis`/
+`thumbnail` S3 objects are then deleted best-effort. Like
+`DELETE /library/{itemId}`, no `Idempotency-Key` is required — deletion is
+naturally idempotent by identity; a repeat call after the account is gone
+returns `not_found`.
+
 ## Library endpoints
 
 | Method | Path                                                  | Purpose                  |

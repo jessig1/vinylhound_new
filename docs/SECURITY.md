@@ -26,8 +26,24 @@ Album photos are user content. They may unintentionally include faces, addresses
 
 ## Retention and deletion
 
-Define separate retention periods for originals, derived previews, scan attempts, provider metadata, and library data. A deletion workflow must remove or tombstone database rows, queued work, object versions, thumbnails, and backups according to the published policy. `store: false` is set for OpenAI responses, but provider account data controls must also be reviewed.
+Account data (scans, images, attempts, confirmations, library items/copies)
+is retained until the user deletes their account; there is no automatic
+time-based expiry in this slice (ADR-0014) — VinylHound is a personal
+collection record, not an ephemeral service, so indefinite retention while
+an account exists is the expected behavior. `DELETE /account` (ADR-0014)
+performs an ordered hard delete of every user-owned database row and best-
+effort deletes the corresponding S3 objects (original, analysis, thumbnail);
+shared catalog rows (`albums`, `releases`) are never deleted, since other
+users' library items may reference them. A future backup/lifecycle policy
+should also cover backups and any orphaned S3 objects a failed best-effort
+delete leaves behind (`docs/HANDOFF.md`'s known gaps). `store: false` is set
+for OpenAI responses, but provider account data controls must also be
+reviewed.
 
 ## Before multi-user/public deployment
 
-Add a threat model, authorization integration tests, dependency/container scanning, secret scanning, abuse controls, a privacy notice, account export/deletion, and an incident-response contact/process.
+Add a threat model, authorization integration tests, dependency/container
+scanning, secret scanning, abuse controls, and an incident-response
+contact/process. Account export/deletion is implemented (ADR-0014); a
+published privacy notice describing this policy in user-facing terms is
+still needed.

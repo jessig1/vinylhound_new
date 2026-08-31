@@ -15,3 +15,4 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0011: Direct library management stays list/notes only; confirmed items cannot be hard-deleted](0011-direct-library-management.md)
 - [ADR-0012: Library search/sort/export match the displayed release, not the stored album row](0012-library-search-filter-export.md)
 - [ADR-0013: Clerk provides production authentication](0013-clerk-authentication.md)
+- [ADR-0014: Account export is metadata-only JSON; account deletion is an ordered hard delete](0014-account-export-and-deletion.md)

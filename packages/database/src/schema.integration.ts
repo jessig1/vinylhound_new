@@ -10,6 +10,10 @@ import {
 
 import { createDatabase } from "./database.js";
 import {
+  deleteAccount,
+  getAccountExportForUser,
+} from "./account-repository.js";
+import {
   getBatchCostSummary,
   getScanForUser,
   getUsageSummaryForUser,
@@ -1196,5 +1200,149 @@ describe("Clerk user identity resolution", () => {
     expect(second).toBe(first);
 
     await database.db.delete(users).where(eq(users.id, first));
+  });
+});
+
+describe("account export and deletion", () => {
+  async function createAccountWithData() {
+    const [account] = await database.db.insert(users).values({}).returning();
+    const accountId = account!.id;
+
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId: accountId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `account-export-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(imageAssets).values({
+      scanId: scan!.id,
+      idempotencyKey: `account-export-image-${randomUUID()}`,
+      objectKey: `${accountId}/${scan!.id}/${randomUUID()}/original`,
+      filename: "front.jpg",
+      viewType: "front",
+      mimeType: "image/jpeg",
+      sizeBytes: 1_024,
+      checksumSha256: "d".repeat(64),
+      completedAt: new Date(),
+      width: 800,
+      height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
+    });
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    const confirmation = await confirmScan(database.db, {
+      userId: accountId,
+      scanId: scan!.id,
+      idempotencyKey: `account-export-confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: `Account Export Test ${randomUUID()}`,
+        title: "Account Deletion",
+        releaseYear: 2001,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "collection",
+        notes: null,
+        copy: null,
+      },
+    });
+
+    return { accountId, scanId: scan!.id, confirmation };
+  }
+
+  it("exports every row the account owns", async () => {
+    const { accountId, scanId, confirmation } = await createAccountWithData();
+
+    const exported = await getAccountExportForUser(database.db, {
+      userId: accountId,
+    });
+
+    expect(exported.account.id).toBe(accountId);
+    expect(exported.scans).toHaveLength(1);
+    expect(exported.scans[0]).toMatchObject({ id: scanId });
+    expect(exported.images).toHaveLength(1);
+    expect(exported.attempts).toHaveLength(1);
+    expect(exported.confirmations).toHaveLength(1);
+    expect(exported.confirmations[0]).toMatchObject({
+      scanId,
+      libraryItemId: confirmation.record.libraryItem.id,
+    });
+    expect(exported.libraryItems).toHaveLength(1);
+    expect(exported.libraryCopies).toHaveLength(1);
+
+    await deleteAccount(database.db, { userId: accountId });
+  });
+
+  it("rejects exporting an account that does not exist", async () => {
+    await expect(
+      getAccountExportForUser(database.db, { userId: randomUUID() }),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("deletes an account with confirmation history despite the restrict FKs, without touching shared catalog rows", async () => {
+    const { accountId, scanId } = await createAccountWithData();
+    const [libraryItemBeforeDelete] = await database.db
+      .select({ releaseId: libraryItems.releaseId })
+      .from(libraryItems)
+      .where(eq(libraryItems.userId, accountId));
+    const releaseId = libraryItemBeforeDelete!.releaseId;
+
+    const deleted = await deleteAccount(database.db, { userId: accountId });
+
+    expect(deleted.id).toBe(accountId);
+    expect(deleted.objectKeys.length).toBeGreaterThan(0);
+    expect(
+      await database.db.select().from(users).where(eq(users.id, accountId)),
+    ).toHaveLength(0);
+    expect(
+      await database.db.select().from(scans).where(eq(scans.id, scanId)),
+    ).toHaveLength(0);
+    expect(
+      await database.db
+        .select()
+        .from(scanConfirmations)
+        .where(eq(scanConfirmations.scanId, scanId)),
+    ).toHaveLength(0);
+    expect(
+      await database.db
+        .select()
+        .from(libraryItems)
+        .where(eq(libraryItems.userId, accountId)),
+    ).toHaveLength(0);
+    // The shared release/album rows must survive the account's deletion.
+    expect(
+      await database.db
+        .select()
+        .from(releases)
+        .where(eq(releases.id, releaseId)),
+    ).toHaveLength(1);
+  });
+
+  it("rejects deleting an account that does not exist", async () => {
+    await expect(
+      deleteAccount(database.db, { userId: randomUUID() }),
+    ).rejects.toMatchObject({ code: "not_found" });
   });
 });
