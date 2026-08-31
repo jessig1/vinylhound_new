@@ -1,8 +1,15 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 
-import type { GetLibraryResponse, LibraryList } from "@vinylhound/contracts";
+import type {
+  GetLibraryResponse,
+  LibraryItemResult,
+  LibraryList,
+  LibrarySort,
+  UpdateLibraryItem,
+} from "@vinylhound/contracts";
 
 import type { Database } from "./database.js";
+import { DatabaseCommandError } from "./scan-repository.js";
 import {
   albums,
   libraryCopies,
@@ -13,9 +20,183 @@ import {
 
 export async function listLibraryItemsForUser(
   db: Database,
-  input: { userId: string; list: LibraryList },
+  input: {
+    userId: string;
+    list: LibraryList;
+    query?: string;
+    sort?: LibrarySort;
+  },
 ): Promise<GetLibraryResponse> {
-  const rows = await db
+  const rows = await selectLibraryItemRows(db, {
+    userId: input.userId,
+    list: input.list,
+  });
+  const items = sortLibraryItems(
+    filterLibraryItemsByQuery(
+      await attachCopiesAndSerialize(db, input.userId, rows),
+      input.query,
+    ),
+    input.sort ?? "recent",
+  );
+  return { list: input.list, items };
+}
+
+export function filterLibraryItemsByQuery(
+  items: LibraryItemResult[],
+  query: string | undefined,
+): LibraryItemResult[] {
+  if (!query) return items;
+  const needle = query.trim().toLowerCase();
+  if (!needle) return items;
+  return items.filter(
+    (item) =>
+      item.release.artist.toLowerCase().includes(needle) ||
+      item.release.title.toLowerCase().includes(needle),
+  );
+}
+
+function sortLibraryItems(
+  items: LibraryItemResult[],
+  sort: LibrarySort,
+): LibraryItemResult[] {
+  if (sort === "recent") return items;
+  const sorted = [...items];
+  sorted.sort((a, b) => {
+    const key = sort === "artist" ? "artist" : "title";
+    return a.release[key].localeCompare(b.release[key], undefined, {
+      sensitivity: "base",
+    });
+  });
+  return sorted;
+}
+
+export async function updateLibraryItem(
+  db: Database,
+  input: { userId: string; itemId: string; update: UpdateLibraryItem },
+): Promise<LibraryItemResult> {
+  return db.transaction(async (transaction) => {
+    const [item] = await transaction
+      .select()
+      .from(libraryItems)
+      .where(
+        and(
+          eq(libraryItems.id, input.itemId),
+          eq(libraryItems.userId, input.userId),
+        ),
+      )
+      .for("update");
+    if (!item) {
+      throw new DatabaseCommandError("not_found", "Library item not found.");
+    }
+
+    const nextList = input.update.list ?? item.list;
+    if (nextList === "wishlist" && item.list === "collection") {
+      const [existingCopy] = await transaction
+        .select({ id: libraryCopies.id })
+        .from(libraryCopies)
+        .where(eq(libraryCopies.libraryItemId, item.id))
+        .limit(1);
+      if (existingCopy) {
+        throw new DatabaseCommandError(
+          "invalid_state",
+          "Remove this item's physical copies before moving it to the wishlist.",
+        );
+      }
+    }
+
+    const now = new Date();
+    await transaction
+      .update(libraryItems)
+      .set({
+        list: nextList,
+        notes:
+          input.update.notes !== undefined ? input.update.notes : item.notes,
+        updatedAt: now,
+      })
+      .where(eq(libraryItems.id, item.id));
+
+    if (nextList === "collection" && item.list === "wishlist") {
+      const [existingCopy] = await transaction
+        .select({ id: libraryCopies.id })
+        .from(libraryCopies)
+        .where(eq(libraryCopies.libraryItemId, item.id))
+        .limit(1);
+      if (!existingCopy) {
+        await transaction.insert(libraryCopies).values({
+          userId: input.userId,
+          libraryItemId: item.id,
+          releaseId: item.releaseId,
+          updatedAt: now,
+        });
+      }
+    }
+
+    const rows = await selectLibraryItemRows(transaction, {
+      userId: input.userId,
+      itemId: item.id,
+    });
+    const [result] = await attachCopiesAndSerialize(
+      transaction,
+      input.userId,
+      rows,
+    );
+    if (!result) {
+      throw new DatabaseCommandError(
+        "invalid_state",
+        "The updated library item could not be read back.",
+      );
+    }
+    return result;
+  });
+}
+
+export async function deleteLibraryItem(
+  db: Database,
+  input: { userId: string; itemId: string },
+): Promise<{ id: string }> {
+  return db.transaction(async (transaction) => {
+    const [item] = await transaction
+      .select({ id: libraryItems.id })
+      .from(libraryItems)
+      .where(
+        and(
+          eq(libraryItems.id, input.itemId),
+          eq(libraryItems.userId, input.userId),
+        ),
+      )
+      .for("update");
+    if (!item) {
+      throw new DatabaseCommandError("not_found", "Library item not found.");
+    }
+
+    const [confirmation] = await transaction
+      .select({ scanId: scanConfirmations.scanId })
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.libraryItemId, item.id))
+      .limit(1);
+    if (confirmation) {
+      throw new DatabaseCommandError(
+        "invalid_state",
+        "This item has scan confirmation history and cannot be deleted directly.",
+      );
+    }
+
+    const [deleted] = await transaction
+      .delete(libraryItems)
+      .where(eq(libraryItems.id, item.id))
+      .returning({ id: libraryItems.id });
+    if (!deleted) {
+      throw new DatabaseCommandError("not_found", "Library item not found.");
+    }
+    return deleted;
+  });
+}
+
+async function selectLibraryItemRows(
+  db: Pick<Database, "select">,
+  input: { userId: string; list?: LibraryList; itemId?: string },
+) {
+  return db
     .select({
       id: libraryItems.id,
       list: libraryItems.list,
@@ -47,12 +228,19 @@ export async function listLibraryItemsForUser(
     .where(
       and(
         eq(libraryItems.userId, input.userId),
-        eq(libraryItems.list, input.list),
+        input.list ? eq(libraryItems.list, input.list) : undefined,
+        input.itemId ? eq(libraryItems.id, input.itemId) : undefined,
       ),
     )
     .orderBy(desc(libraryItems.updatedAt))
     .limit(100);
+}
 
+async function attachCopiesAndSerialize(
+  db: Pick<Database, "select">,
+  userId: string,
+  rows: Awaited<ReturnType<typeof selectLibraryItemRows>>,
+): Promise<LibraryItemResult[]> {
   const itemIds = rows.map((row) => row.id);
   const copies = itemIds.length
     ? await db
@@ -60,7 +248,7 @@ export async function listLibraryItemsForUser(
         .from(libraryCopies)
         .where(
           and(
-            eq(libraryCopies.userId, input.userId),
+            eq(libraryCopies.userId, userId),
             inArray(libraryCopies.libraryItemId, itemIds),
           ),
         )
@@ -73,46 +261,43 @@ export async function listLibraryItemsForUser(
     copiesByItem.set(copy.libraryItemId, itemCopies);
   }
 
-  return {
-    list: input.list,
-    items: rows.map((row) => {
-      const reviewed = row.reviewedRelease;
-      const catalogReference = reviewed?.catalogReference ?? null;
-      const itemCopies = copiesByItem.get(row.id) ?? [];
-      return {
-        id: row.id,
-        list: row.list,
-        notes: row.notes,
-        release: {
-          id: row.releaseId,
-          artist: reviewed ? reviewed.artist : row.artist,
-          title: reviewed ? reviewed.title : row.title,
-          releaseYear: reviewed ? reviewed.releaseYear : row.releaseYear,
-          label: reviewed ? reviewed.label : row.label,
-          catalogNumber: reviewed ? reviewed.catalogNumber : row.catalogNumber,
-          barcode: reviewed ? reviewed.barcode : row.barcode,
-          releaseDate: reviewed?.releaseDate ?? row.releaseDate,
-          country: reviewed?.country ?? row.country,
-          format: reviewed?.format ?? row.format,
-          packaging: reviewed?.packaging ?? row.packaging,
-          releaseStatus: reviewed?.releaseStatus ?? row.releaseStatus,
-          catalogReference,
-        },
-        copyCount: itemCopies.length,
-        copies: itemCopies.map((copy) => ({
-          id: copy.id,
-          mediaCondition: copy.mediaCondition,
-          sleeveCondition: copy.sleeveCondition,
-          location: copy.location,
-          notes: copy.notes,
-          acquiredAt: copy.acquiredAt,
-          createdAt: copy.createdAt.toISOString(),
-          updatedAt: copy.updatedAt.toISOString(),
-        })),
-        confirmedFromScanId: row.confirmedFromScanId,
-        createdAt: row.createdAt.toISOString(),
-        updatedAt: row.updatedAt.toISOString(),
-      };
-    }),
-  };
+  return rows.map((row) => {
+    const reviewed = row.reviewedRelease;
+    const catalogReference = reviewed?.catalogReference ?? null;
+    const itemCopies = copiesByItem.get(row.id) ?? [];
+    return {
+      id: row.id,
+      list: row.list,
+      notes: row.notes,
+      release: {
+        id: row.releaseId,
+        artist: reviewed ? reviewed.artist : row.artist,
+        title: reviewed ? reviewed.title : row.title,
+        releaseYear: reviewed ? reviewed.releaseYear : row.releaseYear,
+        label: reviewed ? reviewed.label : row.label,
+        catalogNumber: reviewed ? reviewed.catalogNumber : row.catalogNumber,
+        barcode: reviewed ? reviewed.barcode : row.barcode,
+        releaseDate: reviewed?.releaseDate ?? row.releaseDate,
+        country: reviewed?.country ?? row.country,
+        format: reviewed?.format ?? row.format,
+        packaging: reviewed?.packaging ?? row.packaging,
+        releaseStatus: reviewed?.releaseStatus ?? row.releaseStatus,
+        catalogReference,
+      },
+      copyCount: itemCopies.length,
+      copies: itemCopies.map((copy) => ({
+        id: copy.id,
+        mediaCondition: copy.mediaCondition,
+        sleeveCondition: copy.sleeveCondition,
+        location: copy.location,
+        notes: copy.notes,
+        acquiredAt: copy.acquiredAt,
+        createdAt: copy.createdAt.toISOString(),
+        updatedAt: copy.updatedAt.toISOString(),
+      })),
+      confirmedFromScanId: row.confirmedFromScanId,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  });
 }

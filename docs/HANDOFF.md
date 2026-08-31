@@ -73,27 +73,74 @@ the log.
   namespaced `catalog_references`, and `library_copies`; repeated owned
   confirmations reuse one library item but create separate physical copies
   (ADR-0010).
+- Milestone 3's direct wishlist-to-owned conversion slice is complete
+  (ADR-0011): `PATCH`/`DELETE /library/{itemId}` let a user move a wishlist
+  item to owned (creating one blank copy, matching confirmation's rule) or
+  edit notes, without a rescan. Moving an owned item back to wishlist is
+  rejected while it still has copies. `DELETE` rejects with `invalid_state`
+  whenever the item has `scan_confirmations` history — true of nearly every
+  real item — since `scan_confirmations.library_item_id` is a `restrict` FK
+  protecting the audit trail; the collection/wishlist pages hide "Remove" for
+  any item with `confirmedFromScanId` set.
+- **Milestone 3 is now complete** except per-copy edit/delete, which stays
+  explicitly deferred (see Resume point). Library search, sort, and CSV export
+  shipped this session (ADR-0012): `GET /library` accepts `q` (trimmed, max
+  200 chars) and `sort` (`recent`/`artist`/`title`, default `recent`),
+  validated together with `list` by a new `LibraryQuerySchema`. Matching and
+  sorting operate on the same effective artist/title the response already
+  returns (which prefers a scan confirmation's corrected values over the
+  shared album row) rather than raw SQL columns, applied after the existing
+  100-item fetch. A new `GET /library/export` route returns the same
+  filtered/sorted list as `text/csv` with a `content-disposition: attachment`
+  header. The collection/wishlist pages' previously non-functional search box
+  and sort button are now a real, debounced (300ms) client toolbar
+  (`library-toolbar.tsx`) that updates the URL (`router.replace`), which the
+  server component re-reads; an "Export" link points at the new route with
+  the current `list`/`q`/`sort`.
 - `npm run check` passes in WSL on Node 22.23.2: formatting, ESLint,
-  typecheck, and 53/53 unit tests.
-- `npm run build` passes: the Next.js web app (24 routes, including the new
-  `/api/v1/catalog/releases` route), worker, and eval package compile cleanly.
-- `npm run test:integration` passes in WSL/Docker: database (12), storage (1),
-  queue (1), and worker (6) suites, 20/20 total. Confirmation coverage includes
-  catalog provenance, wishlist conversion, and two physical copies sharing one
-  user/release library item.
+  typecheck, and 61/61 unit tests.
+- `npm run build` passes: the Next.js web app (26 routes, including the new
+  `/api/v1/library/export` route), worker, and eval package compile cleanly.
+- `npm run test:integration` passes in WSL/Docker: database (19), storage (1),
+  queue (1), and worker (6) suites, 27/27 total. Confirmation coverage includes
+  catalog provenance, wishlist conversion, two physical copies sharing one
+  user/release library item, the direct-update/delete paths (including the
+  copies-present/confirmation-history rejection cases), and the new
+  search/sort test (artist-substring match, title-substring match, artist
+  sort order, and a no-match case).
 - `npm run test:e2e` passes in WSL: 5/5 Playwright tests against a
-  production build with the synthetic worker.
+  production build with the synthetic worker (unchanged by this session).
+- Manually verified search, sort, and CSV export in a running WSL dev server
+  against real seeded data (two directly-inserted albums, since the database
+  was otherwise empty of collection/wishlist items): `?q=miles` correctly
+  narrowed to the matching item, `?sort=artist` reordered results, the CSV
+  response had the correct `content-type`/`content-disposition` headers and
+  correctly quoted an embedded `"` in `12" Vinyl`, and both `?q=`/`?sort=`
+  round-tripped into the server-rendered search input's `value` and the
+  sort `<select>`'s selected `<option>`. Manually-seeded rows were deleted
+  afterward; pre-existing real data (a "Chevelle" item and leftover rows from
+  earlier WSL integration test runs against the same database) was left
+  untouched.
 - Manually verified `/account/usage` and `/account` in a running dev server
   (WSL, real Postgres data): both render real accumulated data
   (21 scans, $0.45 estimated spend, 83,112 tokens) with no console errors;
   confirmed the mobile bottom nav does not actually clip the last stat row
   (a `fullPage` screenshot made it look clipped, but scrolling to the
   bottom shows `content-page`'s existing 100px bottom padding clears it).
+  This session found the same Docker Postgres instance empty (0 scans, 0
+  library items) rather than holding that accumulated data — worth noting for
+  whoever resumes next, since it means the 21-scan dataset referenced above no
+  longer reflects the database's actual contents. This session manually
+  verified the new `PATCH`/`DELETE /library/{itemId}` routes' error paths
+  (not-found, invalid body, bad UUID) against a running WSL dev server instead,
+  since there was no real library item to exercise the success path against.
 - Docker Compose services (postgres, redis, minio) are running and healthy.
 - Milestone 2's original work is committed through `a248eb9`; the subsequent
   audit fixes, MusicBrainz catalog integration, physical-copy model, related
   docs/tests, and the hydration-warning adjustment are committed as `c8f99cd`
-  and pushed to `origin/main`.
+  and pushed to `origin/main`. Direct wishlist-to-owned conversion (ADR-0011)
+  and library search/sort/export (ADR-0012, this session) are both
+  uncommitted; the maintainer should review before commit.
 - The maintainer's private dataset folder contains 52 JPEG cover photos plus a
   draft `manifest.json` and `LABELING_PROMPT.md`. These files remain outside
   the repository and still need app-assisted labels and maintainer verification.
@@ -112,14 +159,79 @@ the log.
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Continue Milestone 3 task 3: improve collection/wishlist
-search/filter/export and complete the explicit wishlist-to-owned management
-flow. The confirmation path already converts wishlist items atomically and now
-creates physical copies; general library PATCH/DELETE/copy-management endpoints
-remain planned. Keep the private AI matrix deferred until public rollout or
-model/cost optimization.
+**Task:** Milestone 3 is complete except one explicitly deferred piece:
+per-copy condition/location/notes/acquisition-date edit and delete
+(`PATCH`/`DELETE /library/{itemId}/copies/{copyId}` or similar — not yet
+designed; ADR-0010, ADR-0011). Direct wishlist-to-owned/owned-to-wishlist
+conversion (ADR-0011) and search/sort/export (ADR-0012) are both done; do not
+re-implement either. There is no other in-flight Milestone 3 or 4 work
+queued — check with the maintainer for the next priority (per-copy
+management, starting Milestone 4, or something else) rather than assuming.
+Keep the private AI matrix deferred until public rollout or model/cost
+optimization.
 
 Recently completed, for context:
+
+- Library search, sort, and CSV export (2026-08-31, ADR-0012, `docs/API.md`):
+  new `LibrarySortSchema` (`recent`/`artist`/`title`) and `LibraryQuerySchema`
+  (`packages/contracts/src/library.ts`) validate `list`/`q`/`sort` together.
+  `listLibraryItemsForUser` (`packages/database/src/library-repository.ts`)
+  gained optional `query`/`sort` params; a new `filterLibraryItemsByQuery`
+  and an inline `sortLibraryItems` both operate on the already-serialized
+  `LibraryItemResult[]` (the same effective artist/title the UI renders,
+  which can come from a scan confirmation's JSONB override rather than the
+  shared `albums` row) rather than pushing filtering into SQL — see ADR-0012
+  for why. `GET /api/v1/library/route.ts` now parses `q`/`sort` through
+  `LibraryQuerySchema`. New `GET /api/v1/library/export/route.ts` reuses the
+  same query/repository call and serializes to `text/csv` with a
+  `content-disposition: attachment` header and a small local `csvEscape`
+  helper (no existing CSV utility in the codebase to reuse, and a single
+  caller didn't justify a new `packages/domain` module). `library-page.tsx`
+  now reads `searchParams` (Next.js 16's async page prop) and passes
+  `query`/`sort` through; the previously non-functional search box and sort
+  button were replaced by a new `"use client"` `library-toolbar.tsx`
+  (debounced 300ms text input, a real `<select>` for sort, an "Export" link)
+  that updates the URL via `router.replace` rather than fetching client-side,
+  so the server component stays the single source of truth for the list.
+  `collection/page.tsx` and `wishlist/page.tsx` now forward `searchParams`.
+  Added contract tests for `LibraryQuerySchema` and one new database
+  integration test covering artist-substring search, title-substring search,
+  artist sort order, and a no-match case. Verified in WSL/Node 22.23.2:
+  `npm run check` (61/61 unit tests), `npm run test:integration` (27/27),
+  `npm run build` (26 web routes), `npm run test:e2e` (5/5 unchanged).
+  Manually verified search/sort/export against real seeded data in a running
+  WSL dev server (see "Current state" for detail); cleaned up the seeded rows
+  afterward.
+
+- Direct library item management (2026-08-31, ADR-0011, `docs/API.md`):
+  `UpdateLibraryItemSchema` (`packages/contracts/src/library.ts`, drafted
+  uncommitted by an earlier session and finished here) covers `{ list?,
+notes? }`; a `copy` field was considered and dropped since a library item
+  can have multiple copies and per-copy editing needs its own sub-resource
+  (deferred, see Task above). `packages/database/src/library-repository.ts`
+  gained `updateLibraryItem` and `deleteLibraryItem`, both row-locking the
+  target item first: wishlist→collection creates one blank copy if none
+  exist; collection→wishlist is rejected (`invalid_state`) while any copies
+  exist; delete is rejected (`invalid_state`) whenever `scan_confirmations`
+  references the item, since that table's `library_item_id` FK is `restrict`
+  by design (protects the audit trail) and a naive delete would otherwise
+  surface a raw Postgres FK violation on nearly every real item. New
+  `PATCH`/`DELETE /api/v1/library/[itemId]/route.ts` follow the existing
+  `parseUuid`/`parseJson`/`errorResponse` conventions. New client component
+  `apps/web/src/app/library-item-actions.tsx` ("use client", fetch + `router.
+refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
+  `library-page.tsx`'s server-rendered cards; "Move to wishlist" disables
+  when `copyCount > 0` and "Remove" is hidden entirely when
+  `confirmedFromScanId` is set, so the UI never offers an action the server
+  would reject. Added contract tests (simplified schema) and five new
+  database integration tests covering conversion, notes-only update, the
+  copies-present rejection, cross-user rejection, and both delete outcomes
+  (rejected with history, succeeds without). Verified in WSL/Node 22.23.2:
+  `npm run check` (57/57 unit tests), `npm run test:integration` (26/26),
+  `npm run build` (25 web routes), `npm run test:e2e` (5/5 unchanged).
+  Corrected pre-existing `docs/API.md` drift: the library endpoint table
+  listed `POST /library` as implemented, but no such route exists —
+  `AddLibraryItemSchema` is contract-only.
 
 - Milestone 2 audit and Milestone 3 provider evaluation (2026-08-31): fixed
   server-side batch-size enforcement, correct batch ingestion provenance,
@@ -257,6 +369,56 @@ Recently completed, for context:
 
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
+
+- **2026-08-31 - Claude (second session).** Completed the remaining half of
+  Milestone 3 task 3: library search, sort, and CSV export (ADR-0012),
+  finishing Milestone 3 except the explicitly-deferred per-copy edit/delete.
+  Confirmed scope with the maintainer up front (search/filter/export only,
+  not per-copy management) and confirmed the search-matching design
+  (filter in application code against the same displayed artist/title the
+  page renders, not raw SQL columns, since a scan confirmation's corrected
+  values can differ from the shared `albums` row) and the search UX (debounced
+  auto-submit via a small client toolbar, not a manual-submit form) before
+  implementing either. `GET /library` gained `q`/`sort` query params behind a
+  new `LibraryQuerySchema`; a new `GET /library/export` route returns the same
+  filtered/sorted list as CSV. Wired up the collection/wishlist pages'
+  previously non-functional search box and sort button. Verified in WSL/Node
+  22.23.2: `npm run check` (61/61 unit tests), `npm run test:integration`
+  (27/27), `npm run build` (26 web routes), `npm run test:e2e` (5/5,
+  unchanged). Manually verified search/sort/export end-to-end against real
+  seeded data in a running WSL dev server (a stale dev server process from an
+  earlier session had to be killed and restarted first — its build predated
+  this session's new contract exports and was throwing on every `/library`
+  request); cleaned up the manually-seeded rows afterward, leaving
+  pre-existing real/leftover-test data untouched. Uncommitted; the maintainer
+  should review before commit (together with the still-uncommitted ADR-0011
+  work from the prior session).
+
+- **2026-08-31 - Claude.** Completed direct wishlist-to-owned/owned-to-wishlist
+  conversion (ADR-0011), scoping down Milestone 3 task 3 after confirming with
+  the maintainer to split it: this session did direct `PATCH`/`DELETE
+/library/{itemId}` and left search/filter/export and per-copy edit/delete for
+  next time. Found and finished an uncommitted, undocumented draft of
+  `UpdateLibraryItemSchema` already sitting in the working tree (no prior
+  session had logged it); simplified it from `{ list?, notes?, copy? }` to
+  `{ list?, notes? }` after confirming with the maintainer that per-copy
+  editing needs its own sub-resource design given the one-item-to-many-copies
+  model. The first integration test run caught a real bug before commit: the
+  initial `deleteLibraryItem` let a raw Postgres FK violation
+  (`scan_confirmations_library_item_id_fkey`, `restrict` by design) escape
+  instead of failing cleanly, which would have affected nearly every real
+  library item since almost all of them have confirmation history. Fixed by
+  checking for `scan_confirmations` rows first and rejecting with a clear
+  `invalid_state` error; confirmed the resulting scope (confirmed items can't
+  be hard-deleted yet) with the maintainer before proceeding. Also corrected
+  pre-existing `docs/API.md` drift (a documented `POST /library` route that
+  was never implemented). Verified in WSL/Node 22.23.2: `npm run check`
+  (57/57 unit tests), `npm run test:integration` (26/26), `npm run build`
+  (25 web routes), `npm run test:e2e` (5/5, unchanged). Manually exercised the
+  new routes' error paths against a running WSL dev server; the Docker
+  Postgres instance had no real library data to exercise the success path
+  against (see "Current state"). Uncommitted; the maintainer should review
+  before commit.
 
 - **2026-08-31 - Codex.** At the maintainer's request, committed and pushed the
   validated accumulated audit and Milestone 3 tasks 1-2 work as `c8f99cd`

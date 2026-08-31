@@ -1,6 +1,6 @@
 import {
   GetLibraryResponseSchema,
-  LibraryListSchema,
+  LibraryQuerySchema,
 } from "@vinylhound/contracts";
 import { listLibraryItemsForUser } from "@vinylhound/database";
 
@@ -18,20 +18,25 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const requestId = createRequestId();
   try {
-    const parsedList = LibraryListSchema.safeParse(
-      new URL(request.url).searchParams.get("list"),
-    );
-    if (!parsedList.success) {
+    const searchParams = new URL(request.url).searchParams;
+    const parsedQuery = LibraryQuerySchema.safeParse({
+      list: searchParams.get("list"),
+      q: searchParams.get("q") ?? undefined,
+      sort: searchParams.get("sort") ?? undefined,
+    });
+    if (!parsedQuery.success) {
       throw new HttpError(
         400,
-        "invalid_list",
-        "The list query parameter must be collection or wishlist.",
+        "invalid_query",
+        "The list query parameter must be collection or wishlist, and sort (if provided) must be recent, artist, or title.",
       );
     }
     const context = getServerContext();
     const result = await listLibraryItemsForUser(context.database.db, {
       userId: context.config.DEVELOPMENT_USER_ID,
-      list: parsedList.data,
+      list: parsedQuery.data.list,
+      query: parsedQuery.data.q,
+      sort: parsedQuery.data.sort,
     });
     const response = jsonResponse(
       GetLibraryResponseSchema.parse(result),

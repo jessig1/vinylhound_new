@@ -52,7 +52,19 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
       `docs/CATALOG_EVALUATION.md`).
 - [x] Add the catalog port/MusicBrainz adapter, richer release metadata, and
       duplicate-copy modeling.
-- [ ] Improve search/filter/export and wishlist-to-owned conversion.
+- [x] Direct wishlist-to-owned (and back) conversion without a rescan:
+      `PATCH`/`DELETE /library/{itemId}` (ADR-0011), with collection/wishlist
+      page actions. Per-copy edit/delete remains explicitly deferred.
+- [x] Library search, sort, and CSV export (ADR-0012): `GET /library` accepts
+      `q`/`sort` (recent/artist/title), matching and sorting the same
+      effective artist/title the page renders; `GET /library/export` returns
+      the same filtered/sorted list as a CSV download. Both apply after the
+      existing 100-item fetch, so search narrows within that page rather than
+      searching beyond it — no pagination was added.
+
+Milestone 3 is complete except per-copy condition/location/notes/acquisition-date
+edit and delete (ADR-0010, ADR-0011), which remains explicitly deferred to a
+future slice.
 
 ## Milestone 4 — public-ready operations
 
@@ -60,7 +72,8 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 
-Milestone 2 and the first two tasks of Milestone 3 are complete. The next
-recommended task is improved library search/filter/export and wishlist-to-owned
-conversion. Keep the formal private AI evaluation as a gate before public
-rollout or model/cost optimization.
+Milestone 2 and Milestone 3 are complete except per-copy edit/delete, which
+remains explicitly deferred to a future slice (not currently the next
+recommended task — see `docs/HANDOFF.md`'s resume point for what to pick up
+next). Keep the formal private AI evaluation as a gate before public rollout
+or model/cost optimization.

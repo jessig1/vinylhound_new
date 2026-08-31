@@ -1,25 +1,37 @@
 import Link from "next/link";
 
-import type { LibraryList } from "@vinylhound/contracts";
+import type { LibraryList, LibrarySort } from "@vinylhound/contracts";
+import { LibrarySortSchema } from "@vinylhound/contracts";
 import { listLibraryItemsForUser } from "@vinylhound/database";
 
 import { getServerContext } from "@/server/context";
 
+import { LibraryItemActions } from "./library-item-actions";
+import { LibraryToolbar } from "./library-toolbar";
 import { Art, Icon } from "./ui";
 
 export async function LibraryPage({
   description,
   list,
   title,
+  searchParams,
 }: {
   description: string;
   list: LibraryList;
   title: string;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  const params = await searchParams;
+  const query = firstValue(params.q);
+  const parsedSort = LibrarySortSchema.safeParse(firstValue(params.sort));
+  const sort: LibrarySort = parsedSort.success ? parsedSort.data : "recent";
+
   const context = getServerContext();
   const library = await listLibraryItemsForUser(context.database.db, {
     userId: context.config.DEVELOPMENT_USER_ID,
     list,
+    query,
+    sort,
   });
   const wishlist = list === "wishlist";
 
@@ -35,18 +47,12 @@ export async function LibraryPage({
         </div>
       </header>
 
-      <div className="library-toolbar">
-        <label className="search-box">
-          <Icon name="search" size={18} />
-          <input
-            aria-label={`Search ${title.toLowerCase()}`}
-            placeholder="Search by artist or album"
-          />
-        </label>
-        <button className="filter-button" type="button">
-          Recently added <span>⌄</span>
-        </button>
-      </div>
+      <LibraryToolbar
+        list={list}
+        query={query ?? ""}
+        sort={sort}
+        title={title}
+      />
 
       {library.items.length ? (
         <section className="album-grid album-grid--library" aria-label={title}>
@@ -76,6 +82,12 @@ export async function LibraryPage({
                     {item.copyCount} {item.copyCount === 1 ? "copy" : "copies"}
                   </small>
                 ) : null}
+                <LibraryItemActions
+                  copyCount={item.copyCount}
+                  hasConfirmationHistory={item.confirmedFromScanId !== null}
+                  itemId={item.id}
+                  list={item.list}
+                />
               </article>
             );
           })}
@@ -86,18 +98,30 @@ export async function LibraryPage({
             <Icon name={wishlist ? "heart" : "collection"} size={27} />
           </span>
           <h2>
-            {wishlist
-              ? "Nothing on your wishlist yet."
-              : "Your shelf is empty."}
+            {query
+              ? "No matching records."
+              : wishlist
+                ? "Nothing on your wishlist yet."
+                : "Your shelf is empty."}
           </h2>
-          <p>Scan a cover, review the match, and save the record here.</p>
-          <Link className="primary-button" href="/scan">
-            <Icon name="camera" size={18} /> Scan a record
-          </Link>
+          <p>
+            {query
+              ? "Try a different search, or clear it to see everything."
+              : "Scan a cover, review the match, and save the record here."}
+          </p>
+          {query ? null : (
+            <Link className="primary-button" href="/scan">
+              <Icon name="camera" size={18} /> Scan a record
+            </Link>
+          )}
         </section>
       )}
     </main>
   );
+}
+
+function firstValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 const tones = [

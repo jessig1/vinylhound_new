@@ -5,6 +5,25 @@ import { CatalogReferenceSchema } from "./catalog.js";
 export const LibraryListSchema = z.enum(["collection", "wishlist"]);
 export type LibraryList = z.infer<typeof LibraryListSchema>;
 
+export const LibrarySortSchema = z.enum(["recent", "artist", "title"]);
+export type LibrarySort = z.infer<typeof LibrarySortSchema>;
+
+export const LIBRARY_SEARCH_QUERY_MAX_LENGTH = 200;
+
+export const LibraryQuerySchema = z
+  .object({
+    list: LibraryListSchema,
+    q: z
+      .string()
+      .trim()
+      .max(LIBRARY_SEARCH_QUERY_MAX_LENGTH)
+      .optional()
+      .transform((value) => (value ? value : undefined)),
+    sort: LibrarySortSchema.optional().default("recent"),
+  })
+  .strict();
+export type LibraryQuery = z.infer<typeof LibraryQuerySchema>;
+
 export const RecordConditionSchema = z.enum([
   "mint",
   "near_mint",
@@ -140,7 +159,37 @@ export const AddLibraryItemSchema = z
   })
   .strict();
 
+export const UpdateLibraryItemSchema = z
+  .object({
+    list: LibraryListSchema.optional(),
+    notes: z.string().trim().max(2_000).nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.list === undefined && value.notes === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "At least one library item field must be provided.",
+      });
+    }
+  });
+
+export const UpdateLibraryItemResponseSchema = LibraryItemResultSchema;
+
+export const DeleteLibraryItemResponseSchema = z
+  .object({
+    id: z.string().uuid(),
+  })
+  .strict();
+
 export type AddLibraryItem = z.infer<typeof AddLibraryItemSchema>;
+export type UpdateLibraryItem = z.infer<typeof UpdateLibraryItemSchema>;
+export type UpdateLibraryItemResponse = z.infer<
+  typeof UpdateLibraryItemResponseSchema
+>;
+export type DeleteLibraryItemResponse = z.infer<
+  typeof DeleteLibraryItemResponseSchema
+>;
 export type CopyDetailsInput = z.infer<typeof CopyDetailsInputSchema>;
 export type LibraryCopy = z.infer<typeof LibraryCopySchema>;
 export type ConfirmScanRequest = z.infer<typeof ConfirmScanRequestSchema>;

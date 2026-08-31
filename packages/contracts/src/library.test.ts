@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { ConfirmScanRequestSchema } from "./library.js";
+import {
+  ConfirmScanRequestSchema,
+  LibraryQuerySchema,
+  UpdateLibraryItemSchema,
+} from "./library.js";
 
 describe("ConfirmScanRequestSchema", () => {
   it("accepts a corrected candidate and target list", () => {
@@ -80,6 +84,67 @@ describe("ConfirmScanRequestSchema", () => {
         list: "wishlist",
         notes: null,
       }),
+    ).toThrow();
+  });
+
+  it("accepts an explicit wishlist-to-owned conversion", () => {
+    expect(
+      UpdateLibraryItemSchema.parse({
+        list: "collection",
+      }),
+    ).toMatchObject({ list: "collection" });
+  });
+
+  it("accepts a notes-only update", () => {
+    expect(
+      UpdateLibraryItemSchema.parse({
+        notes: "Signed copy",
+      }),
+    ).toMatchObject({ notes: "Signed copy" });
+  });
+
+  it("requires a direct library update to change something", () => {
+    expect(() => UpdateLibraryItemSchema.parse({})).toThrow();
+  });
+
+  it("rejects unknown fields", () => {
+    expect(() =>
+      UpdateLibraryItemSchema.parse({
+        list: "collection",
+        copy: { location: "Shelf B" },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("LibraryQuerySchema", () => {
+  it("defaults sort to recent and omits an empty query", () => {
+    expect(LibraryQuerySchema.parse({ list: "collection" })).toEqual({
+      list: "collection",
+      q: undefined,
+      sort: "recent",
+    });
+  });
+
+  it("trims a provided query and accepts a sort value", () => {
+    expect(
+      LibraryQuerySchema.parse({
+        list: "wishlist",
+        q: "  miles davis  ",
+        sort: "artist",
+      }),
+    ).toMatchObject({ q: "miles davis", sort: "artist" });
+  });
+
+  it("rejects an invalid sort value", () => {
+    expect(() =>
+      LibraryQuerySchema.parse({ list: "collection", sort: "cost" }),
+    ).toThrow();
+  });
+
+  it("rejects a query longer than the allowed length", () => {
+    expect(() =>
+      LibraryQuerySchema.parse({ list: "collection", q: "a".repeat(201) }),
     ).toThrow();
   });
 });

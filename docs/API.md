@@ -3,8 +3,8 @@
 This is the intended HTTP surface for the first vertical slice. Runtime schemas belong in `packages/contracts`; generated OpenAPI should eventually be derived from the same source.
 
 The create-scan, request-upload, complete-upload, submit, scan-status,
-confirmation, retry, cancel, batch, scan-list, catalog-search, and library-read
-endpoints are implemented.
+confirmation, retry, cancel, batch, scan-list, catalog-search, and library
+read/update/delete endpoints are implemented.
 They currently use the configured development identity; production
 authentication will replace identity issuance without changing user-scoped
 persistence.
@@ -102,17 +102,51 @@ when no attempt in the window used a priced model.
 
 ## Library endpoints
 
-| Method | Path                                  | Purpose                           |
-| ------ | ------------------------------------- | --------------------------------- |
-| GET    | `/library?list={collection,wishlist}` | Read the selected list            |
-| POST   | `/library`                            | Add a confirmed release to a list |
-| PATCH  | `/library/{itemId}`                   | Change list or notes              |
-| DELETE | `/library/{itemId}`                   | Remove a list item                |
+| Method | Path                                                  | Purpose                  |
+| ------ | ----------------------------------------------------- | ------------------------ |
+| GET    | `/library?list={collection,wishlist}&q=&sort=`        | Read the selected list   |
+| GET    | `/library/export?list={collection,wishlist}&q=&sort=` | Download the list as CSV |
+| PATCH  | `/library/{itemId}`                                   | Change list or notes     |
+| DELETE | `/library/{itemId}`                                   | Remove a list item       |
 
-The list query and server-rendered collection/wishlist pages are implemented for
-the first vertical slice. General library write endpoints remain planned;
-confirmation creates or converts an item through the atomic scan-confirmation
-command.
+The list query (with search/sort), export, `PATCH`/`DELETE`, and
+server-rendered collection/wishlist pages are implemented. Adding a release
+still only happens through the atomic scan-confirmation command
+(`POST /scans/{scanId}/confirm`); there is no standalone `POST /library` —
+`AddLibraryItemSchema` is a contract for a future direct-add flow, not a
+route.
+
+`q` (optional, trimmed, max 200 characters) matches against the displayed
+artist or title, case-insensitively; `sort` (optional, default `recent`) is
+`recent` (most recently added/updated first, the existing behavior),
+`artist`, or `title`. Both parameters are validated together with `list` by
+`LibraryQuerySchema`. Matching and sorting operate on the same effective
+artist/title the response already returns — which prefers a scan
+confirmation's corrected values over the shared album row — rather than the
+raw `albums`/`releases` columns, so a corrected identification is searchable
+immediately (ADR-0012). Both apply after the existing 100-item fetch, so a
+search narrows within that page rather than searching beyond it.
+
+`GET /library/export` accepts the same `list`/`q`/`sort` parameters and
+returns `text/csv` with a `content-disposition: attachment` header
+(`{list}.csv`) instead of JSON. Columns: `artist`, `title`, `releaseYear`,
+`label`, `format`, `country`, `list`, `notes`, `copyCount`. It does not
+include per-copy detail or catalog references.
+
+`PATCH /library/{itemId}` accepts `{ list?, notes? }` (at least one field
+required) and does not touch copies. Moving a wishlist item to `collection`
+creates one blank copy if the item has none yet, matching confirmation's "first
+owned copy" rule. Moving a `collection` item to `wishlist` is rejected with
+`invalid_state` while it still has any copies, so a copy is never silently
+orphaned. Per-copy condition/location/notes/acquisition-date editing is not
+part of this endpoint (ADR-0010, ADR-0011).
+
+`DELETE /library/{itemId}` rejects with `invalid_state` whenever the item has
+any `scan_confirmations` history, which is true of nearly every item created
+through the normal app flow — deleting would otherwise violate the
+confirmation table's `restrict` foreign key and break the image-to-result
+audit trail (ADR-0011). The collection/wishlist pages hide the "Remove" action
+for any item with `confirmedFromScanId` set.
 
 Collection responses include `copyCount` and `copies`; each copy has optional
 media/sleeve condition, storage location, notes, and acquisition date. Wishlist

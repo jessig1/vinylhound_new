@@ -17,7 +17,11 @@ import {
   prepareScanAnalysis,
 } from "./analysis-repository.js";
 import { confirmScan } from "./confirmation-repository.js";
-import { listLibraryItemsForUser } from "./library-repository.js";
+import {
+  deleteLibraryItem,
+  listLibraryItemsForUser,
+  updateLibraryItem,
+} from "./library-repository.js";
 import {
   cancelScan,
   completeImageUpload,
@@ -36,6 +40,7 @@ import {
   libraryCopies,
   libraryItems,
   outboxMessages,
+  releases,
   scanAttempts,
   scanCandidates,
   scanConfirmations,
@@ -579,6 +584,209 @@ describe("initial scan persistence schema", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "conflict" });
+  });
+});
+
+describe("direct library item management", () => {
+  async function confirmWishlistItem(
+    list: "collection" | "wishlist",
+    release?: { artist?: string; title?: string },
+  ) {
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `confirm-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    const result = await confirmScan(database.db, {
+      userId,
+      scanId: scan!.id,
+      idempotencyKey: `confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: release?.artist ?? `Library Management Test ${randomUUID()}`,
+        title: release?.title ?? "Direct Update",
+        releaseYear: 2001,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list,
+        notes: null,
+        copy: null,
+      },
+    });
+    return result.record.libraryItem.id;
+  }
+
+  it("converts a wishlist item to collection, creating one blank copy", async () => {
+    const itemId = await confirmWishlistItem("wishlist");
+
+    const updated = await updateLibraryItem(database.db, {
+      userId,
+      itemId,
+      update: { list: "collection" },
+    });
+
+    expect(updated).toMatchObject({
+      id: itemId,
+      list: "collection",
+      copyCount: 1,
+    });
+  });
+
+  it("updates notes without changing list", async () => {
+    const itemId = await confirmWishlistItem("wishlist");
+
+    const updated = await updateLibraryItem(database.db, {
+      userId,
+      itemId,
+      update: { notes: "Keep an eye out for a clean pressing" },
+    });
+
+    expect(updated).toMatchObject({
+      id: itemId,
+      list: "wishlist",
+      notes: "Keep an eye out for a clean pressing",
+    });
+  });
+
+  it("rejects moving a collection item with copies back to wishlist", async () => {
+    const itemId = await confirmWishlistItem("collection");
+
+    await expect(
+      updateLibraryItem(database.db, {
+        userId,
+        itemId,
+        update: { list: "wishlist" },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_state" });
+  });
+
+  it("rejects updating a library item owned by another user", async () => {
+    const itemId = await confirmWishlistItem("wishlist");
+
+    await expect(
+      updateLibraryItem(database.db, {
+        userId: randomUUID(),
+        itemId,
+        update: { notes: "not mine" },
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("rejects deleting a library item with scan confirmation history", async () => {
+    const itemId = await confirmWishlistItem("collection");
+
+    await expect(
+      deleteLibraryItem(database.db, { userId, itemId }),
+    ).rejects.toMatchObject({ code: "invalid_state" });
+    expect(
+      await database.db
+        .select()
+        .from(libraryItems)
+        .where(eq(libraryItems.id, itemId)),
+    ).toHaveLength(1);
+  });
+
+  it("deletes a library item with no confirmation history and cascades its copies", async () => {
+    const [album] = await database.db
+      .insert(albums)
+      .values({
+        artist: `Directly Added Artist ${randomUUID()}`,
+        title: "Directly Added Title",
+        normalizedArtist: `directly added artist ${randomUUID()}`,
+        normalizedTitle: "directly added title",
+      })
+      .returning();
+    const [directRelease] = await database.db
+      .insert(releases)
+      .values({
+        albumId: album!.id,
+        identityKey: randomUUID().replace(/-/g, "").padEnd(64, "0"),
+      })
+      .returning();
+    const [item] = await database.db
+      .insert(libraryItems)
+      .values({
+        userId,
+        releaseId: directRelease!.id,
+        list: "wishlist",
+      })
+      .returning();
+
+    const deleted = await deleteLibraryItem(database.db, {
+      userId,
+      itemId: item!.id,
+    });
+    expect(deleted).toEqual({ id: item!.id });
+
+    await expect(
+      deleteLibraryItem(database.db, { userId, itemId: item!.id }),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("searches by displayed artist/title and sorts the results", async () => {
+    const suffix = randomUUID();
+    const milesId = await confirmWishlistItem("wishlist", {
+      artist: `Miles Davis Search Test ${suffix}`,
+      title: "Kind of Blue",
+    });
+    const johnId = await confirmWishlistItem("wishlist", {
+      artist: `John Coltrane Search Test ${suffix}`,
+      title: `A Love Supreme ${suffix}`,
+    });
+
+    const matched = await listLibraryItemsForUser(database.db, {
+      userId,
+      list: "wishlist",
+      query: `miles davis search test ${suffix}`,
+    });
+    expect(matched.items.map((item) => item.id)).toEqual([milesId]);
+
+    const byTitle = await listLibraryItemsForUser(database.db, {
+      userId,
+      list: "wishlist",
+      query: `love supreme ${suffix}`,
+    });
+    expect(byTitle.items.map((item) => item.id)).toEqual([johnId]);
+
+    const sortedByArtist = await listLibraryItemsForUser(database.db, {
+      userId,
+      list: "wishlist",
+      query: `search test ${suffix}`,
+      sort: "artist",
+    });
+    expect(sortedByArtist.items.map((item) => item.id)).toEqual([
+      johnId,
+      milesId,
+    ]);
+
+    const noMatches = await listLibraryItemsForUser(database.db, {
+      userId,
+      list: "wishlist",
+      query: `no such artist ${suffix}`,
+    });
+    expect(noMatches.items).toEqual([]);
   });
 });
 
