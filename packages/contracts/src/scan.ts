@@ -240,6 +240,17 @@ export const ListScansResponseSchema = z
   })
   .strict();
 
+export const UsageCostSummarySchema = z
+  .object({
+    attemptCount: z.number().int().nonnegative(),
+    totalInputTokens: z.number().int().nonnegative(),
+    totalOutputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    estimatedCostUsd: z.number().nonnegative().nullable(),
+    averageDurationMs: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+
 export type CreateScanRequest = z.infer<typeof CreateScanRequestSchema>;
 export type CreateScanResponse = z.infer<typeof CreateScanResponseSchema>;
 export type SubmitScanResponse = z.infer<typeof SubmitScanResponseSchema>;
@@ -251,3 +262,4 @@ export type ScanAttemptSummary = z.infer<typeof ScanAttemptSummarySchema>;
 export type GetScanResponse = z.infer<typeof GetScanResponseSchema>;
 export type ScanListItem = z.infer<typeof ScanListItemSchema>;
 export type ListScansResponse = z.infer<typeof ListScansResponseSchema>;
+export type UsageCostSummary = z.infer<typeof UsageCostSummarySchema>;

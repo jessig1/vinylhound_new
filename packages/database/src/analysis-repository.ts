@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 
 import type {
   AlbumIdentification,
@@ -7,6 +7,7 @@ import type {
   ProviderErrorCategory,
   ReviewOutcomeReason,
 } from "@vinylhound/contracts";
+import { estimateTokenUsageCostUsd } from "@vinylhound/domain";
 
 import type { Database } from "./database.js";
 import { getScanConfirmationForUser } from "./confirmation-repository.js";
@@ -497,5 +498,159 @@ export async function listScansForUser(
   return {
     summaries,
     nextCursor: rows.length === input.limit && last ? last.createdAt : null,
+  };
+}
+
+export interface UsageCostSummary {
+  attemptCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number | null;
+  averageDurationMs: number | null;
+}
+
+function summarizeAttemptUsage(
+  attempts: readonly {
+    model: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+    durationMs: number | null;
+  }[],
+): UsageCostSummary {
+  const priced = attempts.flatMap((attempt) => {
+    const cost = estimateTokenUsageCostUsd(attempt.model, {
+      inputTokens: attempt.inputTokens!,
+      outputTokens: attempt.outputTokens!,
+    });
+    return cost === null ? [] : [cost];
+  });
+  const durations = attempts.flatMap((attempt) =>
+    attempt.durationMs === null ? [] : [attempt.durationMs],
+  );
+
+  return {
+    attemptCount: attempts.length,
+    totalInputTokens: sumOrZero(attempts.map((a) => a.inputTokens)),
+    totalOutputTokens: sumOrZero(attempts.map((a) => a.outputTokens)),
+    totalTokens: sumOrZero(attempts.map((a) => a.totalTokens)),
+    estimatedCostUsd: priced.length > 0 ? sumOrZero(priced) : null,
+    averageDurationMs:
+      durations.length > 0
+        ? Math.round(sumOrZero(durations) / durations.length)
+        : null,
+  };
+}
+
+function sumOrZero(values: readonly (number | null)[]): number {
+  return values.reduce<number>((total, value) => total + (value ?? 0), 0);
+}
+
+export async function getBatchCostSummary(
+  db: Database,
+  input: { batchId: string; scanIds: readonly string[] },
+): Promise<UsageCostSummary> {
+  if (input.scanIds.length === 0) {
+    return summarizeAttemptUsage([]);
+  }
+  const attempts = await db
+    .select({
+      model: scanAttempts.model,
+      inputTokens: scanAttempts.inputTokens,
+      outputTokens: scanAttempts.outputTokens,
+      totalTokens: scanAttempts.totalTokens,
+      durationMs: scanAttempts.durationMs,
+    })
+    .from(scanAttempts)
+    .innerJoin(scans, eq(scans.id, scanAttempts.scanId))
+    .where(
+      and(
+        eq(scans.batchId, input.batchId),
+        isNotNull(scanAttempts.inputTokens),
+      ),
+    );
+  return summarizeAttemptUsage(attempts);
+}
+
+export interface UsageSummaryOutcomeCounts {
+  identified: number;
+  needsReview: number;
+  unresolved: number;
+  failed: number;
+  canceled: number;
+  inProgress: number;
+}
+
+export interface UsageSummary {
+  scanCount: number;
+  outcomes: UsageSummaryOutcomeCounts;
+  cost: UsageCostSummary;
+}
+
+export async function getUsageSummaryForUser(
+  db: Database,
+  input: { userId: string; since: Date },
+): Promise<UsageSummary> {
+  const scanRows = await db
+    .select({ status: scans.status })
+    .from(scans)
+    .where(
+      and(eq(scans.userId, input.userId), gte(scans.createdAt, input.since)),
+    );
+
+  const outcomes: UsageSummaryOutcomeCounts = {
+    identified: 0,
+    needsReview: 0,
+    unresolved: 0,
+    failed: 0,
+    canceled: 0,
+    inProgress: 0,
+  };
+  for (const scan of scanRows) {
+    switch (scan.status) {
+      case "identified":
+        outcomes.identified += 1;
+        break;
+      case "needs_review":
+        outcomes.needsReview += 1;
+        break;
+      case "unresolved":
+        outcomes.unresolved += 1;
+        break;
+      case "failed":
+        outcomes.failed += 1;
+        break;
+      case "canceled":
+        outcomes.canceled += 1;
+        break;
+      default:
+        outcomes.inProgress += 1;
+        break;
+    }
+  }
+
+  const attempts = await db
+    .select({
+      model: scanAttempts.model,
+      inputTokens: scanAttempts.inputTokens,
+      outputTokens: scanAttempts.outputTokens,
+      totalTokens: scanAttempts.totalTokens,
+      durationMs: scanAttempts.durationMs,
+    })
+    .from(scanAttempts)
+    .innerJoin(scans, eq(scans.id, scanAttempts.scanId))
+    .where(
+      and(
+        eq(scans.userId, input.userId),
+        gte(scans.createdAt, input.since),
+        isNotNull(scanAttempts.inputTokens),
+      ),
+    );
+
+  return {
+    scanCount: scanRows.length,
+    outcomes,
+    cost: summarizeAttemptUsage(attempts),
   };
 }

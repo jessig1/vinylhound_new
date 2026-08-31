@@ -36,6 +36,14 @@ describe("GetBatchResponseSchema", () => {
             },
           },
         ],
+        cost: {
+          attemptCount: 1,
+          totalInputTokens: 100,
+          totalOutputTokens: 25,
+          totalTokens: 125,
+          estimatedCostUsd: 0.0009,
+          averageDurationMs: 4200,
+        },
       }).scans,
     ).toHaveLength(2);
   });

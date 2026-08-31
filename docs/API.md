@@ -76,7 +76,26 @@ no further attempt is queued afterward. See ADR-0006.
 returned `batchId` is then passed to `POST /scans` for each photo. A batch has
 no status of its own — `GET /batches/{batchId}` always recomputes each
 member scan's current state from `scans`/`scan_attempts`, so it can never
-drift out of sync with `GET /scans/{scanId}` for the same scan.
+drift out of sync with `GET /scans/{scanId}` for the same scan. It also
+returns a `cost` summary (token totals and estimated USD) aggregated across
+every attempt made by the batch's member scans.
+
+## Usage endpoint
+
+| Method | Path     | Purpose                                              |
+| ------ | -------- | ---------------------------------------------------- |
+| GET    | `/usage` | Account-wide scan/cost summary over a rolling window |
+
+`GET /usage` reports scan counts by outcome and a token/cost summary
+(`attemptCount`, `totalInputTokens`, `totalOutputTokens`, `totalTokens`,
+`estimatedCostUsd`, `averageDurationMs`) over the trailing 30 days
+(`USAGE_SUMMARY_WINDOW_DAYS`). It aggregates every `scan_attempts` row with
+recorded token usage for scans owned by the user and created within the
+window; a failed attempt that never reached the provider has no token usage
+and is excluded from the cost figures but still counted in `outcomes.failed`.
+`estimatedCostUsd` uses the same per-model USD/million-token table as the
+private eval harness (`packages/domain`'s `MODEL_PRICING_USD`) and is `null`
+when no attempt in the window used a priced model.
 
 ## Library endpoints
 

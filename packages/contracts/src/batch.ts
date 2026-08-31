@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { ScanCandidateResultSchema, ScanStatusSchema } from "./scan.js";
+import {
+  ScanCandidateResultSchema,
+  ScanStatusSchema,
+  UsageCostSummarySchema,
+} from "./scan.js";
 
 export const MAX_SCANS_PER_BATCH = 20;
 
@@ -28,6 +32,7 @@ export const GetBatchResponseSchema = z
     batchId: z.string().uuid(),
     createdAt: z.string().datetime(),
     scans: z.array(BatchScanSummarySchema).max(MAX_SCANS_PER_BATCH),
+    cost: UsageCostSummarySchema,
   })
   .strict();
 

@@ -7,7 +7,9 @@ import type { AnalyzeScanJob } from "@vinylhound/contracts";
 
 import { createDatabase } from "./database.js";
 import {
+  getBatchCostSummary,
   getScanForUser,
+  getUsageSummaryForUser,
   listScanSummariesForUser,
 } from "./analysis-repository.js";
 import { confirmScan } from "./confirmation-repository.js";
@@ -549,6 +551,123 @@ describe("batch grouping and scan lifecycle", () => {
         batchId: randomUUID(),
       }),
     ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("aggregates token usage and estimated cost across a batch and account usage window", async () => {
+    const usageUserId = randomUUID();
+    await database.db.insert(users).values({ id: usageUserId });
+
+    const batch = await createOrGetBatch(database.db, {
+      userId: usageUserId,
+      idempotencyKey: `usage-batch-${randomUUID()}`,
+    });
+    const succeededScan = await createOrGetScan(database.db, {
+      userId: usageUserId,
+      source: "single_upload",
+      idempotencyKey: `usage-scan-succeeded-${randomUUID()}`,
+      batchId: batch.record.id,
+    });
+    const failedScan = await createOrGetScan(database.db, {
+      userId: usageUserId,
+      source: "single_upload",
+      idempotencyKey: `usage-scan-failed-${randomUUID()}`,
+      batchId: batch.record.id,
+    });
+    const otherScan = await createOrGetScan(database.db, {
+      userId: usageUserId,
+      source: "single_upload",
+      idempotencyKey: `usage-scan-other-${randomUUID()}`,
+    });
+
+    await database.db
+      .update(scans)
+      .set({ status: "identified", completedAt: new Date() })
+      .where(eq(scans.id, succeededScan.record.id));
+    await database.db.insert(scanAttempts).values({
+      scanId: succeededScan.record.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "gpt-5.6-sol",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      inputTokens: 1_000,
+      outputTokens: 200,
+      totalTokens: 1_200,
+      durationMs: 8_000,
+      completedAt: new Date(),
+    });
+
+    await database.db
+      .update(scans)
+      .set({ status: "failed", completedAt: new Date() })
+      .where(eq(scans.id, failedScan.record.id));
+    await database.db.insert(scanAttempts).values({
+      scanId: failedScan.record.id,
+      attemptNumber: 1,
+      status: "failed",
+      model: "gpt-5.6-sol",
+      promptVersion: "integration-test.v1",
+      errorCategory: "unknown",
+      errorMessage: "synthetic failure",
+      durationMs: 500,
+      completedAt: new Date(),
+    });
+
+    await database.db
+      .update(scans)
+      .set({ status: "identified", completedAt: new Date() })
+      .where(eq(scans.id, otherScan.record.id));
+    await database.db.insert(scanAttempts).values({
+      scanId: otherScan.record.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "gpt-5.6-sol",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      inputTokens: 500,
+      outputTokens: 100,
+      totalTokens: 600,
+      durationMs: 6_000,
+      completedAt: new Date(),
+    });
+
+    const batchCost = await getBatchCostSummary(database.db, {
+      batchId: batch.record.id,
+      scanIds: [succeededScan.record.id, failedScan.record.id],
+    });
+    expect(batchCost).toMatchObject({
+      attemptCount: 1,
+      totalInputTokens: 1_000,
+      totalOutputTokens: 200,
+      totalTokens: 1_200,
+      averageDurationMs: 8_000,
+    });
+    expect(batchCost.estimatedCostUsd).toBeCloseTo(
+      (1_000 * 4 + 200 * 20) / 1_000_000,
+      10,
+    );
+
+    const usage = await getUsageSummaryForUser(database.db, {
+      userId: usageUserId,
+      since: new Date(Date.now() - 24 * 60 * 60 * 1_000),
+    });
+    expect(usage.scanCount).toBe(3);
+    expect(usage.outcomes).toMatchObject({
+      identified: 2,
+      failed: 1,
+    });
+    expect(usage.cost).toMatchObject({
+      attemptCount: 2,
+      totalInputTokens: 1_500,
+      totalOutputTokens: 300,
+      totalTokens: 1_800,
+    });
+    expect(usage.cost.estimatedCostUsd).toBeCloseTo(
+      (1_500 * 4 + 300 * 20) / 1_000_000,
+      10,
+    );
+
+    await database.db.delete(users).where(eq(users.id, usageUserId));
   });
 
   it("retries a failed scan as a new attempt and rejects retrying an active scan", async () => {

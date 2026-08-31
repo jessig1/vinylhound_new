@@ -20,7 +20,7 @@
 
 Exit criterion: one phone photo can become a user-confirmed collection or wishlist item, with retry and failure visibility.
 
-## Milestone 2 — multi-view and batch
+## Milestone 2 — multi-view and batch (complete)
 
 - [x] Group front/back/spine/label images per scan, sent as one labeled
       identification request; preserves the single-image flow and audit trail.
@@ -36,7 +36,13 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
       original. Worker concurrency limits (`ANALYSIS_CONCURRENCY`, wired into
       BullMQ's `Worker` `concurrency` option) already existed since
       Milestone 1; the roadmap note describing them as missing was stale.
-- [ ] Batch and provider-cost dashboards.
+- [x] Batch and provider-cost dashboards: `GET /batches/{batchId}` now
+      returns a `cost` summary (tokens and estimated USD) aggregated across
+      the batch's member scans, shown on the batch progress page. A new
+      `GET /usage` endpoint and `/account/usage` page report account-wide
+      scan outcomes and estimated provider spend/token usage over a rolling
+      30-day window. Pricing lives in `packages/domain` (moved from the
+      private eval package so both share one table).
 
 ## Milestone 3 — catalog enrichment and collection quality
 
@@ -50,6 +56,7 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 
-The next recommended task is Milestone 2's remaining slice: batch and
-provider-cost dashboards. Keep the formal private AI evaluation as a gate
-before public rollout or model/cost optimization.
+Milestone 2 is complete. The next recommended task is Milestone 3: evaluate a
+catalog source for canonical IDs, search, deduplication, and pressing detail.
+Keep the formal private AI evaluation as a gate before public rollout or
+model/cost optimization.

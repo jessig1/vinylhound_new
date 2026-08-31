@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import { Icon } from "../ui";
 
@@ -112,6 +113,9 @@ export default function AccountPage() {
           </label>
         </section>
       </div>
+      <Link className="text-button" href="/account/usage">
+        <Icon name="sparkle" size={18} /> Usage and cost
+      </Link>
       <button className="signout-button" onClick={signOut} type="button">
         <Icon name="arrowLeft" size={18} /> Sign out
       </button>

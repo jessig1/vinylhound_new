@@ -5,6 +5,7 @@ import type {
 } from "@vinylhound/contracts";
 import {
   determineReviewOutcome,
+  estimateTokenUsageCostUsd,
   normalizeOptionalReleaseIdentityPart,
   normalizeReleaseIdentityPart,
   type ReviewOutcome,
@@ -71,31 +72,8 @@ export interface FailedAttempt {
 export type EvaluationAttempt = SuccessfulAttempt | FailedAttempt;
 export type EvaluationImageDetail = "low" | "high" | "auto";
 
-export interface ModelPricing {
-  inputUsdPerMillionTokens: number;
-  outputUsdPerMillionTokens: number;
-}
-
-export const MODEL_PRICING_USD: Readonly<Record<string, ModelPricing>> = {
-  "gpt-5.6-sol": {
-    inputUsdPerMillionTokens: 4,
-    outputUsdPerMillionTokens: 20,
-  },
-  "gpt-5.6": {
-    inputUsdPerMillionTokens: 4,
-    outputUsdPerMillionTokens: 20,
-  },
-  "gpt-5.6-terra": {
-    inputUsdPerMillionTokens: 2,
-    outputUsdPerMillionTokens: 12,
-  },
-  "gpt-5.6-luna": {
-    inputUsdPerMillionTokens: 0.2,
-    outputUsdPerMillionTokens: 1.2,
-  },
-};
-
-export const MODEL_PRICING_AS_OF = "2026-08-29";
+export type { ModelPricing } from "@vinylhound/domain";
+export { MODEL_PRICING_AS_OF, MODEL_PRICING_USD } from "@vinylhound/domain";
 
 export function scoreIdentification(
   evaluationCase: RunnableEvaluationCase,
@@ -132,14 +110,7 @@ export function estimateAttemptCost(
   model: string,
   usage: SuccessfulAttempt["usage"],
 ): number | null {
-  if (!usage) return null;
-  const pricing = pricingForModel(model);
-  if (!pricing) return null;
-  return (
-    (usage.inputTokens * pricing.inputUsdPerMillionTokens +
-      usage.outputTokens * pricing.outputUsdPerMillionTokens) /
-    1_000_000
-  );
+  return estimateTokenUsageCostUsd(model, usage);
 }
 
 export function aggregateConfigurationAttempts(
@@ -336,14 +307,6 @@ function errorMetrics(failed: readonly FailedAttempt[], total: number) {
     terminal: failed.length - transient,
     byCategory,
   };
-}
-
-function pricingForModel(model: string): ModelPricing | undefined {
-  const exact = MODEL_PRICING_USD[model];
-  if (exact) return exact;
-  return Object.entries(MODEL_PRICING_USD).find(([prefix]) =>
-    model.startsWith(`${prefix}-`),
-  )?.[1];
 }
 
 function percentile(

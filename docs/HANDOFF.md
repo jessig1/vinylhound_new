@@ -19,66 +19,71 @@ the log.
   Sol + `high` + prompt-v2 artist/title quality for the early build; the formal
   private AI eval baseline is deferred until public rollout or model/cost
   optimization (`docs/ROADMAP.md`).
-- Milestone 2's first slice (multi-view) is complete: front/back/spine/label/
-  barcode/runout photos of one physical record can be grouped into a single
-  scan and sent to the identifier as one request, each image paired with its
-  view label (`album-identification.v3`).
-- Milestone 2's second slice (batch) is complete (ADR-0006): several
-  _distinct_ records can be captured together as one batch, where each photo
-  becomes its own independently tracked scan. `POST /batches` creates a
-  grouping shell; `POST /scans` accepts an optional `batchId`; `GET
-/batches/{batchId}` projects each member scan's status/top candidate with
-  no persisted batch-level state. `POST /scans/{scanId}/retry` (new attempt
-  from `failed`/`unresolved`, reusing uploaded images) and `POST
-/scans/{scanId}/cancel` (new terminal `canceled` status; skips
-  not-yet-dispatched outbox jobs, lets an in-flight attempt finish) are both
-  implemented and used from both the single-scan result page and the new
-  `/scans/batch/{batchId}` progress page. `/scan` gained a "One record" /
-  "Multiple records" mode toggle. `/scans` (history) now server-renders real
-  persisted scans via a new `GET /scans` list endpoint instead of demo data.
-  Committed as `a1ac19d` (multi-view) and `dd349a1` (batch).
-- Milestone 2's third slice (thumbnail/normalization pipeline) is complete
-  (ADR-0007): `POST .../uploads/{imageId}/complete` derives a bounded
-  analysis copy (JPEG, long edge capped at 2048px) and a UI thumbnail (JPEG,
-  long edge capped at 400px) from the validated original via a new
-  `normalizeImage` in `packages/storage`, stores both as sibling S3 objects,
-  and persists their size/dimensions on `image_assets` (migration 009).
-  `prepareScanAnalysis` now hands the worker the analysis copy's object
-  key/size instead of the original's, so per-image OpenAI payload size no
-  longer scales with the phone camera's native resolution. Worker
-  concurrency limiting turned out to already exist (`ANALYSIS_CONCURRENCY`
-  since Milestone 1, wired into BullMQ's `Worker` `concurrency`); the
-  roadmap/handoff note calling it a gap was stale and has been corrected.
-  Object key derivation is now a shared `deriveImageObjectKey` helper in
-  `packages/database`; `ObjectStorage` gained a `putObject` method for
-  direct server-side writes (previously only signed-PUT and read existed).
-- `npm run check` passes in WSL on Node 22.23.2: formatting, ESLint, typecheck,
-  and 48/48 unit tests (2 new, covering `normalizeImage`'s size bounds).
-- `npm run build` passes: the Next.js web app (21 routes), worker, and eval
-  package compile cleanly.
-- `npm run test:integration` passes in WSL/Docker: database (9), storage (1),
-  queue (1), and worker (6) suites, 17/17 total. Migration
-  `009_image_normalization.sql` (adds `analysis_size_bytes`/
-  `analysis_width`/`analysis_height`/`thumbnail_size_bytes` to
-  `image_assets`, plus a before/after check constraint matching the existing
-  `width`/`height` pattern) applied cleanly to the running Postgres
-  container.
-- `npm run test:e2e` passes in WSL: 5/5 Playwright tests against a production
-  build with the synthetic worker, unchanged in scenario count but now
-  exercising the real normalization pipeline (real MinIO reads/writes for
-  analysis/thumbnail objects) on every upload.
+- **Milestone 2 (multi-view and batch) is complete**, all four slices:
+  1. Multi-view (`a1ac19d`): front/back/spine/label/barcode/runout photos of
+     one physical record group into a single scan and one identification
+     request, each image paired with its view label
+     (`album-identification.v3`).
+  2. Batch (`dd349a1`, ADR-0006): several _distinct_ records captured
+     together as one batch, where each photo becomes its own independently
+     tracked scan. `POST /batches` creates a grouping shell; `POST /scans`
+     accepts an optional `batchId`; `GET /batches/{batchId}` projects each
+     member scan's status/top candidate with no persisted batch-level
+     state. Retry/cancel, the `/scan` mode toggle, and the
+     `/scans/batch/{batchId}` progress page are all part of this slice.
+  3. Thumbnail/normalization pipeline (`43de522`, ADR-0007): upload
+     completion derives a bounded analysis copy (JPEG, 2048px cap) and a UI
+     thumbnail (JPEG, 400px cap) from the validated original, stores both
+     as sibling S3 objects (migration 009), and scan analysis reads the
+     analysis copy instead of the full-resolution original. Worker
+     concurrency limiting (`ANALYSIS_CONCURRENCY`) turned out to already
+     exist since Milestone 1; the roadmap note calling it a gap was stale
+     and has been corrected.
+  4. Batch and provider-cost dashboards (this session, ADR-0008):
+     `GET /batches/{batchId}` gained a `cost` field (token totals,
+     estimated USD, average duration) aggregated across the batch's member
+     scans' attempts, shown on the batch progress page. A new
+     `GET /usage` endpoint and `/account/usage` page report the same shape
+     account-wide over a rolling 30-day window, plus scan counts by
+     outcome. The per-model USD/million-token pricing table moved from the
+     private `packages/evals` into `packages/domain`
+     (`estimateTokenUsageCostUsd`) so both share one definition; `evals`
+     re-exports it unchanged so nothing there broke.
+- `npm run check` passes in WSL on Node 22.23.2: formatting, ESLint,
+  typecheck, and 48/48 unit tests.
+- `npm run build` passes: the Next.js web app (23 routes, +2 this session:
+  `/account/usage`, `/api/v1/usage`), worker, and eval package compile
+  cleanly.
+- `npm run test:integration` passes in WSL/Docker: database (10, +1 this
+  session covering batch/account cost aggregation), storage (1), queue (1),
+  and worker (6) suites, 18/18 total. One worker-suite run hit a transient
+  Postgres deadlock (`40P01`) on an unrelated pre-existing retry test under
+  concurrent load; it passed cleanly on immediate re-run and in isolation,
+  so it was not investigated further as a regression.
+- `npm run test:e2e` passes in WSL: 5/5 Playwright tests against a
+  production build with the synthetic worker.
+- Manually verified `/account/usage` and `/account` in a running dev server
+  (WSL, real Postgres data): both render real accumulated data
+  (21 scans, $0.45 estimated spend, 83,112 tokens) with no console errors;
+  confirmed the mobile bottom nav does not actually clip the last stat row
+  (a `fullPage` screenshot made it look clipped, but scrolling to the
+  bottom shows `content-page`'s existing 100px bottom padding clears it).
 - Docker Compose services (postgres, redis, minio) are running and healthy.
-- This session's changes are uncommitted on `main`; `main` remains two commits
-  ahead of `origin/main` from before this session (nothing pushed).
+- This session's normalization-pipeline commit (`43de522`) and the two
+  commits before it (`a1ac19d`, `dd349a1`) are all pushed to
+  `origin/main`. The batch/provider-cost dashboard work described above is
+  uncommitted as of this write-up; the maintainer should review before
+  commit.
 - The maintainer's private dataset folder contains 52 JPEG cover photos plus a
   draft `manifest.json` and `LABELING_PROMPT.md`. These files remain outside
   the repository and still need app-assisted labels and maintainer verification.
 - `packages/evals` provides a private, checkpointed Sol/Terra/Luna comparison
   runner with verified-label/consent gates, per-attempt audit output, aggregate
   quality/routing/latency/token/cost metrics, and non-billable unit coverage.
-  Unaffected by the batch or normalization changes (it only ever submits
-  single-image, ungrouped cases, and calls the provider directly rather than
-  through the worker's image-read path).
+  Its pricing table now lives in `packages/domain` (ADR-0008) but its
+  exported values are unchanged, and it still only ever submits single-image,
+  ungrouped cases directly to the provider rather than through the worker's
+  image-read path.
 - Production album identification defaults to `gpt-5.6-sol` + `high` image
   detail. The ignored local `.env` is synchronized to the Sol default.
 
@@ -87,14 +92,39 @@ the log.
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Milestone 2's remaining slice: batch and provider-cost dashboards
-(surface per-batch progress/cost summaries and aggregate provider spend,
-likely reading `scan_attempts.input_tokens`/`output_tokens`/`total_tokens`,
-already persisted per attempt but not yet aggregated or displayed anywhere).
-The private AI matrix remains deferred until public rollout or model/cost
+**Task:** Milestone 3: evaluate a catalog source for canonical IDs, search,
+deduplication, and pressing detail; add richer collection metadata and
+duplicate-copy modeling; improve search/filter/export and
+wishlist-to-owned conversion (`docs/ROADMAP.md`). This is a research-first
+milestone — start by evaluating catalog source candidates (e.g. Discogs,
+MusicBrainz) for licensing terms, rate limits, and data quality before
+committing to a schema/integration design; likely worth an ADR once a
+source is chosen, since it's a new external provider dependency. The
+private AI matrix remains deferred until public rollout or model/cost
 optimization.
 
 Recently completed, for context:
+
+- Batch and provider-cost dashboards (this session, ADR-0008,
+  `docs/API.md`): shared `UsageCostSummarySchema` in
+  `packages/contracts/scan.ts` (attemptCount, input/output/total tokens,
+  estimatedCostUsd, averageDurationMs); `GetBatchResponseSchema` gained a
+  required `cost` field; new `usage.ts` contract
+  (`GetUsageSummaryResponseSchema`, `USAGE_SUMMARY_WINDOW_DAYS = 30`).
+  `packages/database/analysis-repository.ts` gained `getBatchCostSummary`
+  and `getUsageSummaryForUser`, both selecting `scan_attempts` rows
+  filtered to `input_tokens is not null` (a failed attempt that never
+  reached the provider has no usage, so it's excluded from cost but still
+  counted by outcome) and reducing them in application code via
+  `estimateTokenUsageCostUsd` — SQL aggregation was rejected because the
+  per-model rate table isn't stored data. New `GET /api/v1/usage/route.ts`
+  and `/account/usage/page.tsx` (server component, real data, two
+  `settings-card` stat blocks: scan outcomes and provider cost); the batch
+  progress page shows a one-line cost/token summary when the batch has any
+  priced attempts. `/account` gained a link to the new page. Updated one
+  existing contract test (`batch.test.ts`) for the new required field.
+- Thumbnail/normalization pipeline (ADR-0007, `docs/API.md`): migration 009
+  adds nullable `analysis_size_bytes`/`analysis_width`/`analysis_height`/
 
 - Thumbnail/normalization pipeline (ADR-0007, `docs/API.md`): migration 009
   adds nullable `analysis_size_bytes`/`analysis_width`/`analysis_height`/
@@ -189,12 +219,44 @@ Recently completed, for context:
 - Library `PATCH`/`DELETE` endpoints are documented as planned, not
   implemented (`docs/API.md`).
 - Local-only infrastructure; backups and observability are Milestone 4.
+- `GET /usage` and `/account/usage` report a fixed rolling 30-day window
+  with no pagination, custom range, or historical trend (ADR-0008,
+  deliberate scope cut). `estimatedCostUsd` is `null` whenever no attempt
+  in the window used a model present in `packages/domain`'s
+  `MODEL_PRICING_USD`, which needs a manual update whenever provider
+  pricing changes or a new model is adopted.
 
 ## Session log
 
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
 
+- **2026-08-30 - Claude (fourth session).** Committed and pushed the prior
+  session's thumbnail/normalization work (`43de522`, on top of already-pushed
+  `a1ac19d`/`dd349a1`) at the maintainer's request, then implemented
+  Milestone 2's last remaining slice, batch and provider-cost dashboards
+  (ADR-0008), completing Milestone 2. Moved the per-model USD/million-token
+  pricing table and cost formula from the private `packages/evals` into
+  `packages/domain` (`provider-pricing.ts`) so both the eval harness and
+  production share one definition; `evals` now re-exports the domain values
+  instead of duplicating them, verified unbroken via its own unit tests and
+  package build. Added `getBatchCostSummary` and `getUsageSummaryForUser` to
+  `packages/database`, a shared `UsageCostSummarySchema` and new `usage.ts`
+  contract, a `cost` field on `GetBatchResponse`, a new `GET /api/v1/usage`
+  route, and a new `/account/usage` page. Updated the batch progress page to
+  show a cost/token summary line and added a link from `/account`. Fixed one
+  existing contract test that needed the new required `cost` field. Verified
+  in WSL/Node 22.23.2: 48/48 unit tests, lint, typecheck, build (23 routes,
+  +2), 18/18 integration tests (10 database, +1 new covering cost
+  aggregation), and 5/5 e2e tests; one worker-suite run hit a transient,
+  pre-existing Postgres deadlock unrelated to this session's changes and
+  passed cleanly on re-run. Manually launched the app in a WSL dev server
+  and screenshotted both new/changed pages against real accumulated
+  database data to confirm they render correctly (see "Current state").
+  Updated `docs/API.md`, `docs/TESTING.md`, `docs/ROADMAP.md` (Milestone 2
+  now marked complete; next task points at Milestone 3), and this file.
+  Batch/dashboard work is uncommitted; the maintainer should review before
+  commit.
 - **2026-08-30 - Claude (third session).** Implemented Milestone 2's third
   slice, the thumbnail/normalization pipeline (ADR-0007): migration 009
   (`image_assets` analysis/thumbnail size and dimension columns, a

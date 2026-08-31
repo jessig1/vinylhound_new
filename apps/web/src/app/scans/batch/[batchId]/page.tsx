@@ -189,6 +189,15 @@ export default function BatchProgressPage() {
         </p>
       ) : null}
 
+      {batch.cost.attemptCount > 0 ? (
+        <p className="section-kicker">
+          {formatCost(batch.cost.estimatedCostUsd)} estimated ·{" "}
+          {batch.cost.totalTokens.toLocaleString()} tokens across{" "}
+          {batch.cost.attemptCount}{" "}
+          {batch.cost.attemptCount === 1 ? "attempt" : "attempts"}
+        </p>
+      ) : null}
+
       <section className="view-grid">
         {batch.scans.map((scan) => (
           <BatchItemCard
@@ -289,6 +298,12 @@ function statusLabel(status: BatchScanSummary["status"]) {
     case "canceled":
       return "Canceled";
   }
+}
+
+function formatCost(estimatedCostUsd: number | null) {
+  if (estimatedCostUsd === null) return "Cost unavailable";
+  if (estimatedCostUsd < 0.01) return "<$0.01";
+  return `$${estimatedCostUsd.toFixed(2)}`;
 }
 
 function statusTone(status: BatchScanSummary["status"]) {

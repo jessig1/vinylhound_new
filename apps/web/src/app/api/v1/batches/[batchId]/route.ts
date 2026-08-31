@@ -1,5 +1,6 @@
 import { GetBatchResponseSchema } from "@vinylhound/contracts";
 import {
+  getBatchCostSummary,
   getBatchForUser,
   listScanSummariesForUser,
 } from "@vinylhound/database";
@@ -30,10 +31,10 @@ export async function GET(
       userId,
       batchId,
     });
-    const scanSummaries = await listScanSummariesForUser(context.database.db, {
-      userId,
-      scanIds,
-    });
+    const [scanSummaries, cost] = await Promise.all([
+      listScanSummariesForUser(context.database.db, { userId, scanIds }),
+      getBatchCostSummary(context.database.db, { batchId, scanIds }),
+    ]);
 
     const response = jsonResponse(
       GetBatchResponseSchema.parse({
@@ -48,6 +49,7 @@ export async function GET(
             topCandidate,
           }),
         ),
+        cost,
       }),
       200,
       requestId,
