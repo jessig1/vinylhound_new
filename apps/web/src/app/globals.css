@@ -473,6 +473,10 @@ label:has(input[type="file"]) {
   justify-content: space-between;
   padding: 0 17px;
 }
+.auth-landing-actions {
+  display: grid;
+  gap: 14px;
+}
 .demo-note {
   display: flex;
   align-items: center;

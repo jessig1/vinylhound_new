@@ -3,6 +3,7 @@ import Link from "next/link";
 import { USAGE_SUMMARY_WINDOW_DAYS } from "@vinylhound/contracts";
 import { getUsageSummaryForUser } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
 import { Icon } from "../../ui";
@@ -11,11 +12,12 @@ export const dynamic = "force-dynamic";
 
 export default async function UsagePage() {
   const context = getServerContext();
+  const userId = await requireUserId(context);
   const since = new Date(
     Date.now() - USAGE_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
   );
   const summary = await getUsageSummaryForUser(context.database.db, {
-    userId: context.config.DEVELOPMENT_USER_ID,
+    userId,
     since,
   });
 

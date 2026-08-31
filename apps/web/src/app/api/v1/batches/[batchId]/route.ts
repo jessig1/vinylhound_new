@@ -5,6 +5,7 @@ import {
   listScanSummariesForUser,
 } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -25,7 +26,7 @@ export async function GET(
     const { batchId: rawBatchId } = await route.params;
     const batchId = parseUuid(rawBatchId, "batchId");
     const context = getServerContext();
-    const userId = context.config.DEVELOPMENT_USER_ID;
+    const userId = await requireUserId(context);
 
     const { batch, scanIds } = await getBatchForUser(context.database.db, {
       userId,

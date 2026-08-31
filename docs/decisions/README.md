@@ -12,3 +12,6 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0008: Aggregate provider cost/token usage from stored attempts, in application code](0008-usage-and-cost-aggregation.md)
 - [ADR-0009: MusicBrainz is the primary canonical catalog](0009-musicbrainz-primary-catalog.md)
 - [ADR-0010: Library relationships and physical copies are separate](0010-library-items-and-physical-copies.md)
+- [ADR-0011: Direct library management stays list/notes only; confirmed items cannot be hard-deleted](0011-direct-library-management.md)
+- [ADR-0012: Library search/sort/export match the displayed release, not the stored album row](0012-library-search-filter-export.md)
+- [ADR-0013: Clerk provides production authentication](0013-clerk-authentication.md)

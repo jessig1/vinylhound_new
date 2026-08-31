@@ -7,12 +7,9 @@ import {
   MAX_IMAGE_SIZE_BYTES,
   MAX_SCANS_PER_PAGE,
 } from "@vinylhound/contracts";
-import {
-  createOrGetScan,
-  ensureDevelopmentUser,
-  listScansForUser,
-} from "@vinylhound/database";
+import { createOrGetScan, listScansForUser } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -40,10 +37,11 @@ export async function GET(request: Request) {
       );
     }
 
+    const userId = await requireUserId(context);
     const { summaries, nextCursor } = await listScansForUser(
       context.database.db,
       {
-        userId: context.config.DEVELOPMENT_USER_ID,
+        userId,
         limit: MAX_SCANS_PER_PAGE,
         before,
       },
@@ -70,9 +68,8 @@ export async function POST(request: Request) {
     const idempotencyKey = requireIdempotencyKey(request);
     const input = await parseJson(request, CreateScanRequestSchema);
     const context = getServerContext();
-    const userId = context.config.DEVELOPMENT_USER_ID;
+    const userId = await requireUserId(context);
 
-    await ensureDevelopmentUser(context.database.db, userId);
     const result = await createOrGetScan(context.database.db, {
       userId,
       source: input.source,

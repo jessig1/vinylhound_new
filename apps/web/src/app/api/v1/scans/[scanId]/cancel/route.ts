@@ -1,6 +1,7 @@
 import { CancelScanResponseSchema } from "@vinylhound/contracts";
 import { cancelScan } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -22,9 +23,10 @@ export async function POST(
     const scanId = parseUuid(rawScanId, "scanId");
     requireIdempotencyKey(request);
     const context = getServerContext();
+    const userId = await requireUserId(context);
 
     const result = await cancelScan(context.database.db, {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       scanId,
     });
     const response = CancelScanResponseSchema.parse({

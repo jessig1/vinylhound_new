@@ -44,6 +44,38 @@ export async function ensureDevelopmentUser(db: Database, userId: string) {
   await db.insert(users).values({ id: userId }).onConflictDoNothing();
 }
 
+export async function getOrCreateUserIdByClerkId(
+  db: Database,
+  clerkUserId: string,
+): Promise<string> {
+  const existing = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.clerkUserId, clerkUserId))
+    .limit(1);
+  if (existing[0]) {
+    return existing[0].id;
+  }
+
+  await db
+    .insert(users)
+    .values({ clerkUserId })
+    .onConflictDoNothing({ target: users.clerkUserId });
+
+  const row = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.clerkUserId, clerkUserId))
+    .limit(1);
+  if (!row[0]) {
+    throw new DatabaseCommandError(
+      "conflict",
+      "Failed to resolve or provision a user for the authenticated identity.",
+    );
+  }
+  return row[0].id;
+}
+
 export type ImageObjectVariant = "original" | "analysis" | "thumbnail";
 
 export function deriveImageObjectKey(

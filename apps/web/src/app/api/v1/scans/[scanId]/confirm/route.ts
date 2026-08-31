@@ -4,6 +4,7 @@ import {
 } from "@vinylhound/contracts";
 import { confirmScan } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -27,8 +28,9 @@ export async function POST(
     const idempotencyKey = requireIdempotencyKey(request);
     const confirmation = await parseJson(request, ConfirmScanRequestSchema);
     const context = getServerContext();
+    const userId = await requireUserId(context);
     const result = await confirmScan(context.database.db, {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       scanId,
       idempotencyKey,
       confirmation,

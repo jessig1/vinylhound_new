@@ -1,36 +1,8 @@
-"use client";
-
 import Link from "next/link";
-import type { FormEvent } from "react";
-import { useState } from "react";
 
 import { BrandMark, Icon } from "./ui";
 
-type AuthMode = "signin" | "signup";
-
-export default function AuthPage() {
-  const [mode, setMode] = useState<AuthMode>("signin");
-  const [showPassword, setShowPassword] = useState(false);
-  const [email, setEmail] = useState("collector@example.com");
-  const [password, setPassword] = useState("vinylhound");
-  const [name, setName] = useState("");
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const profileName = name.trim() || email.split("@")[0] || "Collector";
-    window.localStorage.setItem(
-      "vinylhound-demo-session",
-      JSON.stringify({ name: profileName, email }),
-    );
-    window.location.assign("/dashboard");
-  }
-
-  function changeMode(nextMode: AuthMode) {
-    setMode(nextMode);
-    setName("");
-  }
-
+export default function LandingPage() {
   return (
     <main className="auth-page">
       <section className="auth-story" aria-label="About VinylHound">
@@ -81,125 +53,20 @@ export default function AuthPage() {
           </div>
 
           <div className="auth-heading">
-            <p className="section-kicker">
-              {mode === "signin" ? "Welcome back" : "Join the dig"}
-            </p>
-            <h2>
-              {mode === "signin"
-                ? "Pick up where you left off."
-                : "Start your record story."}
-            </h2>
-            <p>
-              {mode === "signin"
-                ? "Sign in to see your recent scans and saved records."
-                : "Create an account to scan, collect, and keep track of every find."}
-            </p>
+            <p className="section-kicker">Get started</p>
+            <h2>Pick up where you left off.</h2>
+            <p>Sign in to see your recent scans and saved records.</p>
           </div>
 
-          <div className="auth-tabs" role="tablist" aria-label="Account access">
-            <button
-              aria-selected={mode === "signin"}
-              className={mode === "signin" ? "is-active" : ""}
-              onClick={() => changeMode("signin")}
-              role="tab"
-              type="button"
-            >
+          <div className="auth-landing-actions">
+            <Link className="primary-button auth-submit" href="/sign-in">
               Sign in
-            </button>
-            <button
-              aria-selected={mode === "signup"}
-              className={mode === "signup" ? "is-active" : ""}
-              onClick={() => changeMode("signup")}
-              role="tab"
-              type="button"
-            >
-              Create account
-            </button>
-          </div>
-
-          <form className="auth-form" onSubmit={submit}>
-            {mode === "signup" ? (
-              <label>
-                <span>Name</span>
-                <span className="input-shell">
-                  <Icon name="user" size={19} />
-                  <input
-                    autoComplete="name"
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder="How should we call you?"
-                    required
-                    value={name}
-                  />
-                </span>
-              </label>
-            ) : null}
-
-            <label>
-              <span>Email address</span>
-              <span className="input-shell">
-                <Icon name="mail" size={19} />
-                <input
-                  autoComplete="email"
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="you@example.com"
-                  required
-                  type="email"
-                  value={email}
-                />
-              </span>
-            </label>
-
-            <label>
-              <span className="label-row">
-                Password
-                {mode === "signin" ? (
-                  <button type="button">Forgot?</button>
-                ) : null}
-              </span>
-              <span className="input-shell">
-                <Icon name="lock" size={19} />
-                <input
-                  autoComplete={
-                    mode === "signin" ? "current-password" : "new-password"
-                  }
-                  minLength={8}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="At least 8 characters"
-                  required
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                />
-                <button
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  className="input-action"
-                  onClick={() => setShowPassword((visible) => !visible)}
-                  type="button"
-                >
-                  <Icon name={showPassword ? "eyeOff" : "eye"} size={19} />
-                </button>
-              </span>
-            </label>
-
-            {mode === "signup" ? (
-              <label className="checkbox-row">
-                <input required type="checkbox" />
-                <span>
-                  I agree to the <a href="#terms">Terms</a> and{" "}
-                  <a href="#privacy">Privacy Policy</a>.
-                </span>
-              </label>
-            ) : null}
-
-            <button className="primary-button auth-submit" type="submit">
-              {mode === "signin" ? "Sign in" : "Create my account"}
               <Icon name="arrowRight" size={19} />
-            </button>
-          </form>
-
-          <p className="demo-note">
-            <Icon name="info" size={16} />
-            Demo mode: use the prefilled details or create any sample account.
-          </p>
+            </Link>
+            <Link className="light-button auth-submit" href="/sign-up">
+              Create an account
+            </Link>
+          </div>
         </div>
       </section>
     </main>

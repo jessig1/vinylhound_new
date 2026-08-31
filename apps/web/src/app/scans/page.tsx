@@ -3,6 +3,7 @@ import Link from "next/link";
 import { MAX_SCANS_PER_PAGE } from "@vinylhound/contracts";
 import { listScansForUser } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
 import { Art, Icon } from "../ui";
@@ -11,8 +12,9 @@ export const dynamic = "force-dynamic";
 
 export default async function ScansPage() {
   const context = getServerContext();
+  const userId = await requireUserId(context);
   const { summaries } = await listScansForUser(context.database.db, {
-    userId: context.config.DEVELOPMENT_USER_ID,
+    userId,
     limit: MAX_SCANS_PER_PAGE,
   });
 

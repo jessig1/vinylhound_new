@@ -4,6 +4,7 @@ import type { LibraryList, LibrarySort } from "@vinylhound/contracts";
 import { LibrarySortSchema } from "@vinylhound/contracts";
 import { listLibraryItemsForUser } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
 import { LibraryItemActions } from "./library-item-actions";
@@ -27,8 +28,9 @@ export async function LibraryPage({
   const sort: LibrarySort = parsedSort.success ? parsedSort.data : "recent";
 
   const context = getServerContext();
+  const userId = await requireUserId(context);
   const library = await listLibraryItemsForUser(context.database.db, {
-    userId: context.config.DEVELOPMENT_USER_ID,
+    userId,
     list,
     query,
     sort,

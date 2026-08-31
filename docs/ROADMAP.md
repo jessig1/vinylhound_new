@@ -68,7 +68,14 @@ future slice.
 
 ## Milestone 4 — public-ready operations
 
-- Production authentication, account deletion/export, privacy/retention policy.
+- [x] Production authentication (ADR-0013): Clerk resolves session identity
+      in `AUTH_MODE=production`, mapped to a local `users.id` via a new
+      `clerk_user_id` column, provisioned just-in-time on first request.
+      `AUTH_MODE=development` (the default) keeps today's single fixed user
+      with no Clerk dependency, so local dev/CI/tests are unaffected.
+      Account deletion/export and a privacy/retention policy are separate,
+      not yet started.
+- Account deletion/export, privacy/retention policy.
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 

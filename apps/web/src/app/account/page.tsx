@@ -1,42 +1,21 @@
 "use client";
 
-import type { FormEvent } from "react";
-import { useEffect, useState } from "react";
+import { useClerk, useUser } from "@clerk/nextjs";
 import Link from "next/link";
 
+import { isProductionAuth } from "../auth-mode";
 import { Icon } from "../ui";
 
 export default function AccountPage() {
-  const [name, setName] = useState("Alex Morgan");
-  const [email, setEmail] = useState("collector@example.com");
-  const [saved, setSaved] = useState(false);
+  return isProductionAuth ? <ClerkAccountPage /> : <DevelopmentAccountPage />;
+}
 
-  useEffect(() => {
-    const stored = window.localStorage.getItem("vinylhound-demo-session");
-    if (!stored) return;
-    try {
-      const session = JSON.parse(stored) as { name: string; email: string };
-      setName(session.name);
-      setEmail(session.email);
-    } catch {
-      // Keep the friendly demo defaults when local state is invalid.
-    }
-  }, []);
+function ClerkAccountPage() {
+  const { user } = useUser();
+  const { signOut } = useClerk();
 
-  function save(event: FormEvent) {
-    event.preventDefault();
-    window.localStorage.setItem(
-      "vinylhound-demo-session",
-      JSON.stringify({ name, email }),
-    );
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1800);
-  }
-
-  function signOut() {
-    window.localStorage.removeItem("vinylhound-demo-session");
-    window.location.assign("/");
-  }
+  const name = user?.fullName ?? user?.username ?? "Your account";
+  const email = user?.primaryEmailAddress?.emailAddress ?? "";
 
   return (
     <main className="content-page account-page">
@@ -48,7 +27,7 @@ export default function AccountPage() {
         </div>
       </header>
       <div className="account-grid">
-        <form className="settings-card" onSubmit={save}>
+        <section className="settings-card">
           <div className="settings-card__heading">
             <span>
               <Icon name="user" />
@@ -60,65 +39,47 @@ export default function AccountPage() {
           </div>
           <label>
             <span>Display name</span>
-            <input
-              onChange={(event) => setName(event.target.value)}
-              required
-              value={name}
-            />
+            <input readOnly value={name} />
           </label>
           <label>
             <span>Email address</span>
-            <input
-              onChange={(event) => setEmail(event.target.value)}
-              required
-              type="email"
-              value={email}
-            />
+            <input readOnly type="email" value={email} />
           </label>
-          <div className="settings-actions">
-            <button className="primary-button" type="submit">
-              {saved ? (
-                <>
-                  <Icon name="check" size={18} /> Saved
-                </>
-              ) : (
-                "Save changes"
-              )}
-            </button>
-          </div>
-        </form>
-        <section className="settings-card">
-          <div className="settings-card__heading">
-            <span>
-              <Icon name="settings" />
-            </span>
-            <div>
-              <h2>Preferences</h2>
-              <p>Customize your collecting experience.</p>
-            </div>
-          </div>
-          <label className="toggle-row">
-            <span>
-              <strong>Scan reminders</strong>
-              <small>Prompt me to review unfinished scans.</small>
-            </span>
-            <input defaultChecked type="checkbox" />
-          </label>
-          <label className="toggle-row">
-            <span>
-              <strong>Private collection</strong>
-              <small>Keep lists visible only to you.</small>
-            </span>
-            <input defaultChecked type="checkbox" />
-          </label>
+          <p>
+            Manage your name, email, and password from your account provider.
+          </p>
         </section>
       </div>
       <Link className="text-button" href="/account/usage">
         <Icon name="sparkle" size={18} /> Usage and cost
       </Link>
-      <button className="signout-button" onClick={signOut} type="button">
+      <button
+        className="signout-button"
+        onClick={() => signOut({ redirectUrl: "/" })}
+        type="button"
+      >
         <Icon name="arrowLeft" size={18} /> Sign out
       </button>
+    </main>
+  );
+}
+
+function DevelopmentAccountPage() {
+  return (
+    <main className="content-page account-page">
+      <header className="page-heading">
+        <div>
+          <p className="section-kicker">Settings</p>
+          <h1>Account details</h1>
+          <p>
+            Local development uses a single fixed account (DEVELOPMENT_USER_ID);
+            sign-in is only available when AUTH_MODE is production.
+          </p>
+        </div>
+      </header>
+      <Link className="text-button" href="/account/usage">
+        <Icon name="sparkle" size={18} /> Usage and cost
+      </Link>
     </main>
   );
 }

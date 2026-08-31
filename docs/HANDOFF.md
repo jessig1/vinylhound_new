@@ -15,6 +15,39 @@ the log.
 
 ## Current state — verified 2026-08-31
 
+- **Milestone 4 task 1, production authentication, is complete** (ADR-0013).
+  Clerk (`@clerk/nextjs@^7.8.3`) resolves session identity when
+  `AUTH_MODE=production`: `apps/web/src/proxy.ts` (Next.js 16's Proxy
+  convention, replacing the deprecated `middleware.ts`) protects every route
+  except `/`, `/sign-in`, and `/sign-up`, and a new `requireUserId`
+  (`apps/web/src/server/auth.ts`) replaces every route/page's old
+  `context.config.DEVELOPMENT_USER_ID` read. Clerk's user ID maps to the
+  existing `users.id` UUID via a new unique `clerk_user_id` column
+  (migration 011), provisioned just-in-time on first request
+  (`getOrCreateUserIdByClerkId`) rather than via a webhook. `AUTH_MODE`
+  (now `"development" | "production"`, was a single-value literal) and a
+  client-visible `NEXT_PUBLIC_AUTH_MODE` mirror stay the real switch:
+  `AUTH_MODE=development` (the default, matching `.env.example`) needs no
+  Clerk keys and behaves exactly as before, so local dev/CI/tests are
+  unaffected — `clerkMiddleware()` itself throws on a missing publishable
+  key, so the proxy and `<ClerkProvider>` both skip constructing Clerk
+  entirely in development mode rather than gating inside it (a real hang in
+  the e2e run caught the first, wrong version of this that gated Clerk from
+  the inside). `/sign-in` and `/sign-up` use Clerk's default hosted
+  `<SignIn>`/`<SignUp>` components; `/` is now a static landing page (the
+  fake demo sign-in/sign-up form that used to live there is gone); `/account`
+  and the sidebar name/avatar now read Clerk's `useUser`/`useClerk` in
+  production mode and show a neutral development-mode label otherwise. The
+  fake `vinylhound-demo-session` `localStorage` key is gone. Account
+  deletion/export and a privacy/retention policy remain separate, not yet
+  started (see Milestone 4 in `docs/ROADMAP.md`).
+- This session also installed Node 22.23.2 side-by-side via nvm-windows on
+  the Windows host (`nvm use 22.23.2`), since the machine's only prior Node
+  was v20.17.0 and this repo's scripts (`db:migrate`, `test:integration`,
+  the e2e `globalSetup`) require Node ≥21.7 for `--env-file-if-exists`. This
+  finally makes `npm run check`/`test:integration`/`test:e2e` runnable
+  directly on Windows for this machine, not just in WSL as prior sessions
+  required.
 - Milestone 1 (single-image vertical slice) is complete. The maintainer accepted
   Sol + `high` + prompt-v2 artist/title quality for the early build; the formal
   private AI eval baseline is deferred until public rollout or model/cost
@@ -134,13 +167,30 @@ the log.
   verified the new `PATCH`/`DELETE /library/{itemId}` routes' error paths
   (not-found, invalid body, bad UUID) against a running WSL dev server instead,
   since there was no real library item to exercise the success path against.
+- `npm run check` passes on Windows (Node 22.23.2 via nvm-windows, not WSL):
+  formatting, ESLint, typecheck, and 65/65 unit tests (61 prior + 4 new
+  `DevelopmentWebConfigSchema` auth-mode tests).
+- `npm run build` passes: the Next.js web app (28 routes, +2 for
+  `/sign-in`/`/sign-up`), worker, and eval package compile cleanly. A build
+  warning about `process.cwd`/Edge Runtime originates inside
+  `@clerk/nextjs`'s own module graph, not this repo's code, and does not
+  fail the build.
+- `npm run test:integration` passes on Windows (Node 22.23.2): database (21,
+  +2 for `getOrCreateUserIdByClerkId` provisioning/reuse/concurrent-lookup),
+  storage (1), queue (1), and worker (6) suites, 29/29 total. Migration 011
+  applied cleanly to the real dev database.
+- `npm run test:e2e` passes: 5/5 Playwright tests against a production build
+  with the synthetic worker, run in `AUTH_MODE=development` (unaffected by
+  Clerk, as designed) — this run is what caught the `clerkMiddleware()`
+  construction-time throw described above.
 - Docker Compose services (postgres, redis, minio) are running and healthy.
 - Milestone 2's original work is committed through `a248eb9`; the subsequent
   audit fixes, MusicBrainz catalog integration, physical-copy model, related
   docs/tests, and the hydration-warning adjustment are committed as `c8f99cd`
-  and pushed to `origin/main`. Direct wishlist-to-owned conversion (ADR-0011)
-  and library search/sort/export (ADR-0012, this session) are both
-  uncommitted; the maintainer should review before commit.
+  and pushed to `origin/main`. Direct wishlist-to-owned conversion
+  (ADR-0011), library search/sort/export (ADR-0012), and production
+  authentication (ADR-0013, this session) are all uncommitted; the
+  maintainer should review before commit.
 - The maintainer's private dataset folder contains 52 JPEG cover photos plus a
   draft `manifest.json` and `LABELING_PROMPT.md`. These files remain outside
   the repository and still need app-assisted labels and maintainer verification.
@@ -159,18 +209,43 @@ the log.
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Milestone 3 is complete except one explicitly deferred piece:
-per-copy condition/location/notes/acquisition-date edit and delete
-(`PATCH`/`DELETE /library/{itemId}/copies/{copyId}` or similar — not yet
-designed; ADR-0010, ADR-0011). Direct wishlist-to-owned/owned-to-wishlist
-conversion (ADR-0011) and search/sort/export (ADR-0012) are both done; do not
-re-implement either. There is no other in-flight Milestone 3 or 4 work
-queued — check with the maintainer for the next priority (per-copy
-management, starting Milestone 4, or something else) rather than assuming.
-Keep the private AI matrix deferred until public rollout or model/cost
-optimization.
+**Task:** Milestone 4 task 1, production authentication (ADR-0013), is
+complete — see "Current state" above for the full shape. This work is
+**uncommitted**; the maintainer should review before commit. There is no
+other in-flight Milestone 4 work queued. The next session should check with
+the maintainer for the next priority rather than assuming — candidates
+include: Milestone 4's remaining items (account deletion/export and a
+privacy/retention policy; managed infrastructure/backups/observability/
+quotas/abuse controls; accessibility and cross-device test matrix), or
+Milestone 3's one remaining deferred piece (per-copy condition/location/
+notes/acquisition-date edit and delete — `PATCH`/`DELETE
+/library/{itemId}/copies/{copyId}` or similar, not yet designed; ADR-0010,
+ADR-0011). Keep the private AI matrix deferred until public rollout or
+model/cost optimization.
+
+Two things worth knowing before extending auth further:
+
+- Getting a real Clerk account/keys to exercise `AUTH_MODE=production`
+  end-to-end (sign-up → JIT-provisioned `users` row → protected route →
+  sign-out) was not done this session — everything was verified through
+  `AUTH_MODE=development`'s unaffected path (unit/integration/e2e, all
+  passing) plus static/build verification of the production-mode code
+  paths (typecheck, lint, a successful `next build` including the
+  `/sign-in`/`/sign-up` routes). Manually verifying the production path
+  against a real Clerk test instance is a good first step for whoever
+  continues this.
+- `clerk_user_id` is nullable with a placeholder backfill for existing rows
+  (migration 011), deliberately not tightened to `not null` yet (see
+  ADR-0013's Migration section) — do that tightening only after confirming
+  real sign-in works, not before.
 
 Recently completed, for context:
+
+- Production authentication (2026-08-31, ADR-0013, `docs/ARCHITECTURE.md`):
+  see "Current state" above for the full description. Also installed Node
+  22.23.2 via nvm-windows on this machine so `npm run check`/
+  `test:integration`/`test:e2e` are runnable directly on Windows now, not
+  only in WSL.
 
 - Library search, sort, and CSV export (2026-08-31, ADR-0012, `docs/API.md`):
   new `LibrarySortSchema` (`recent`/`artist`/`title`) and `LibraryQuerySchema`
@@ -353,10 +428,12 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   owning row is deleted via the database's cascading foreign key (ADR-0007
   widened this from one orphaned object to three; it did not introduce the
   gap).
-- Authentication is the single development user. All rows are user-scoped, so
-  swapping in real identity issuance later does not change the data model.
-- Library `PATCH`/`DELETE` endpoints are documented as planned, not
-  implemented (`docs/API.md`).
+- Production authentication (ADR-0013) is implemented but not yet exercised
+  against a real Clerk account/keys — see the Resume point above.
+  `clerk_user_id` is nullable with a placeholder backfill, not yet tightened
+  to `not null`. No Clerk webhook exists; a Clerk-side account deletion does
+  not currently propagate to the local `users` row. Account deletion/export
+  and a privacy/retention policy are separate, not yet started.
 - Local-only infrastructure; backups and observability are Milestone 4.
 - `GET /usage` and `/account/usage` report a fixed rolling 30-day window
   with no pagination, custom range, or historical trend (ADR-0008,
@@ -369,6 +446,37 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
+
+- **2026-08-31 - Claude (third session).** Started Milestone 4 (checked with
+  the maintainer first, since the roadmap only listed broad areas, not
+  discrete tasks) and completed task 1, production authentication
+  (ADR-0013). Confirmed the approach with the maintainer at each expensive-
+  to-reverse decision point before implementing: hosted identity provider
+  over self-hosted Auth.js, Clerk specifically, Clerk's default hosted
+  `<SignIn>`/`<SignUp>` UI over reproducing the app's bespoke fake auth
+  form, and keeping the existing landing page (stripped of its fake-session
+  logic) rather than redirecting `/` straight to `/sign-in`. Added
+  `users.clerk_user_id` (migration 011, nullable with a placeholder
+  backfill), `getOrCreateUserIdByClerkId`, a `requireUserId` helper
+  replacing every route/page's `DEVELOPMENT_USER_ID` read, and
+  `apps/web/src/proxy.ts` (Next.js 16's Proxy convention) for route
+  protection. `AUTH_MODE` widened from a literal to a real
+  `development`/`production` switch; a `NEXT_PUBLIC_AUTH_MODE` mirror lets
+  client components branch without a `<ClerkProvider>` in development mode.
+  The Playwright e2e run caught a real bug before commit: the first version
+  of the proxy gated Clerk logic from _inside_ `clerkMiddleware()`'s
+  callback, but `clerkMiddleware()` itself throws at construction time
+  without a publishable key, hanging every request in development mode;
+  fixed by only constructing `clerkMiddleware()` at all when
+  `AUTH_MODE=production`, exporting a plain pass-through otherwise. Also
+  installed Node 22.23.2 via nvm-windows on this machine (previously only
+  v20.17.0, which fails this repo's `--env-file-if-exists` usage) so
+  `npm run check`/`test:integration`/`test:e2e` now run directly on Windows.
+  Verified: `npm run check` (65/65 unit tests, 4 new), `npm run
+test:integration` (29/29, 2 new), `npm run build` (28 routes, +2), and
+  `npm run test:e2e` (5/5, run in development mode — production mode's
+  Clerk path was verified statically, not against a real account; see
+  Resume point). Uncommitted; the maintainer should review before commit.
 
 - **2026-08-31 - Claude (second session).** Completed the remaining half of
   Milestone 3 task 3: library search, sort, and CSV export (ADR-0012),

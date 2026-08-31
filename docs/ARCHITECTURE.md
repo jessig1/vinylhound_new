@@ -66,6 +66,22 @@ For personal use, web and worker can run on one host with one PostgreSQL/Redis d
 - Retry timeouts, rate limits, and provider 5xx responses with exponential backoff and jitter. Do not retry invalid inputs or schema failures indefinitely.
 - Jobs must be idempotent and safe to redeliver. Terminal failures remain visible and manually retryable.
 
-## Authentication assumption
+## Authentication
 
-The first vertical slice may use a single development user, but all persisted user-owned rows and object keys should include a user identifier. Introducing multi-user authentication then changes identity issuance, not the data model.
+All persisted user-owned rows and object keys include a user identifier
+(`users.id`, an internal UUID unrelated to any external identity provider),
+established in the first vertical slice. `AUTH_MODE` selects how that ID is
+resolved per request (ADR-0013):
+
+- `development` (default): every request uses a single fixed
+  `DEVELOPMENT_USER_ID`. No external identity provider is involved; local
+  dev, CI, and integration tests run this way with no auth-provider keys.
+- `production`: Clerk issues and verifies the session; `apps/web/src/proxy.ts`
+  (Next.js's Proxy/Middleware convention) protects routes, and
+  `requireUserId` (`apps/web/src/server/auth.ts`) resolves the verified
+  Clerk identity to a local `users.id`, provisioning a row just-in-time on
+  first request via `users.clerk_user_id`.
+
+Introducing `production` mode changed identity issuance and session
+verification only, not the data model — every foreign key still points at
+`users.id` exactly as before.

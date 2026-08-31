@@ -5,6 +5,7 @@ import {
 } from "@vinylhound/contracts";
 import { deleteLibraryItem, updateLibraryItem } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -26,8 +27,9 @@ export async function PATCH(
     const itemId = parseUuid(rawItemId, "itemId");
     const update = await parseJson(request, UpdateLibraryItemSchema);
     const context = getServerContext();
+    const userId = await requireUserId(context);
     const result = await updateLibraryItem(context.database.db, {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       itemId,
       update,
     });
@@ -53,8 +55,9 @@ export async function DELETE(
     const { itemId: rawItemId } = await route.params;
     const itemId = parseUuid(rawItemId, "itemId");
     const context = getServerContext();
+    const userId = await requireUserId(context);
     const result = await deleteLibraryItem(context.database.db, {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       itemId,
     });
 

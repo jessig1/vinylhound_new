@@ -1,6 +1,7 @@
 import { CreateBatchResponseSchema } from "@vinylhound/contracts";
-import { createOrGetBatch, ensureDevelopmentUser } from "@vinylhound/database";
+import { createOrGetBatch } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -16,9 +17,8 @@ export async function POST(request: Request) {
   try {
     const idempotencyKey = requireIdempotencyKey(request);
     const context = getServerContext();
-    const userId = context.config.DEVELOPMENT_USER_ID;
+    const userId = await requireUserId(context);
 
-    await ensureDevelopmentUser(context.database.db, userId);
     const result = await createOrGetBatch(context.database.db, {
       userId,
       idempotencyKey,

@@ -5,6 +5,7 @@ import {
 } from "@vinylhound/contracts";
 import { createOrGetImageUpload } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -28,9 +29,10 @@ export async function POST(
     const idempotencyKey = requireIdempotencyKey(request);
     const input = await parseJson(request, CreateImageUploadRequestSchema);
     const context = getServerContext();
+    const userId = await requireUserId(context);
 
     const result = await createOrGetImageUpload(context.database.db, {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       scanId,
       idempotencyKey,
       ...input,

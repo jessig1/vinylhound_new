@@ -30,6 +30,7 @@ import {
   createOrGetScan,
   dispatchNextOutboxMessage,
   getBatchForUser,
+  getOrCreateUserIdByClerkId,
   retryScan,
   submitScan,
 } from "./scan-repository.js";
@@ -1166,5 +1167,34 @@ describe("batch grouping and scan lifecycle", () => {
     await expect(
       cancelScan(database.db, { userId, scanId: scan.record.id }),
     ).resolves.toMatchObject({ created: false });
+  });
+});
+
+describe("Clerk user identity resolution", () => {
+  it("provisions a new user on first lookup and reuses it thereafter", async () => {
+    const clerkUserId = `user_${randomUUID()}`;
+
+    const provisionedId = await getOrCreateUserIdByClerkId(
+      database.db,
+      clerkUserId,
+    );
+    const reusedId = await getOrCreateUserIdByClerkId(database.db, clerkUserId);
+
+    expect(reusedId).toBe(provisionedId);
+
+    await database.db.delete(users).where(eq(users.id, provisionedId));
+  });
+
+  it("resolves concurrent lookups for the same Clerk identity to one user", async () => {
+    const clerkUserId = `user_${randomUUID()}`;
+
+    const [first, second] = await Promise.all([
+      getOrCreateUserIdByClerkId(database.db, clerkUserId),
+      getOrCreateUserIdByClerkId(database.db, clerkUserId),
+    ]);
+
+    expect(second).toBe(first);
+
+    await database.db.delete(users).where(eq(users.id, first));
   });
 });

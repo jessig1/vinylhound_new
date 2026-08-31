@@ -4,6 +4,7 @@ import {
 } from "@vinylhound/contracts";
 import { listLibraryItemsForUser } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -32,8 +33,9 @@ export async function GET(request: Request) {
       );
     }
     const context = getServerContext();
+    const userId = await requireUserId(context);
     const result = await listLibraryItemsForUser(context.database.db, {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       list: parsedQuery.data.list,
       query: parsedQuery.data.q,
       sort: parsedQuery.data.sort,

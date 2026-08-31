@@ -14,6 +14,7 @@ import {
   validateImage,
 } from "@vinylhound/storage";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -36,8 +37,9 @@ export async function POST(
     const scanId = parseUuid(params.scanId, "scanId");
     const imageId = parseUuid(params.imageId, "imageId");
     const context = getServerContext();
+    const userId = await requireUserId(context);
     const lookup = {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       scanId,
       imageId,
     };

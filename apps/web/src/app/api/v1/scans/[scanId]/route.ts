@@ -1,6 +1,7 @@
 import { GetScanResponseSchema } from "@vinylhound/contracts";
 import { getScanForUser } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -21,8 +22,9 @@ export async function GET(
     const { scanId: rawScanId } = await route.params;
     const scanId = parseUuid(rawScanId, "scanId");
     const context = getServerContext();
+    const userId = await requireUserId(context);
     const result = await getScanForUser(context.database.db, {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       scanId,
     });
 

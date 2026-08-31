@@ -5,9 +5,11 @@ This is the intended HTTP surface for the first vertical slice. Runtime schemas 
 The create-scan, request-upload, complete-upload, submit, scan-status,
 confirmation, retry, cancel, batch, scan-list, catalog-search, and library
 read/update/delete endpoints are implemented.
-They currently use the configured development identity; production
-authentication will replace identity issuance without changing user-scoped
-persistence.
+Identity resolution depends on `AUTH_MODE` (ADR-0013): `development` (the
+default) uses a single fixed development identity with no external
+provider; `production` verifies a Clerk session and resolves it to the same
+internal `users.id` used everywhere else, so user-scoped persistence is
+unaffected by which mode is active.
 
 ## Conventions
 

@@ -1,10 +1,11 @@
 "use client";
 
+import { useUser } from "@clerk/nextjs";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
 
+import { isProductionAuth } from "./auth-mode";
 import { BrandMark, Icon, type IconName } from "./ui";
 
 const navigation: { href: string; label: string; icon: IconName }[] = [
@@ -13,27 +14,19 @@ const navigation: { href: string; label: string; icon: IconName }[] = [
   { href: "/wishlist", label: "Wishlist", icon: "heart" },
 ];
 
-type Session = { name: string; email: string };
+function useDisplayName() {
+  const clerkUser = isProductionAuth ? useClerkDisplayName() : null;
+  return clerkUser ?? "Development user";
+}
+
+function useClerkDisplayName() {
+  const { user } = useUser();
+  return user?.fullName ?? user?.username ?? null;
+}
 
 export function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const [session, setSession] = useState<Session>({
-    name: "Alex Morgan",
-    email: "collector@example.com",
-  });
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("vinylhound-demo-session");
-    if (!saved) return;
-
-    try {
-      setSession(JSON.parse(saved) as Session);
-    } catch {
-      window.localStorage.removeItem("vinylhound-demo-session");
-    }
-  }, []);
-
-  const displayName = toDisplayName(session.name);
+  const displayName = toDisplayName(useDisplayName());
   const initials = displayName
     .split(" ")
     .map((part) => part[0])

@@ -26,15 +26,48 @@ const InfrastructureConfigShape = {
   S3_FORCE_PATH_STYLE: BooleanStringSchema.default(false),
 };
 
-export const DevelopmentWebConfigSchema = z.object({
-  NODE_ENV: NodeEnvironmentSchema,
-  ...InfrastructureConfigShape,
-  AUTH_MODE: z.literal("development").default("development"),
-  DEVELOPMENT_USER_ID: z
-    .string()
-    .uuid()
-    .default("00000000-0000-4000-8000-000000000001"),
-});
+const AuthModeSchema = z
+  .enum(["development", "production"])
+  .default("development");
+
+export const DevelopmentWebConfigSchema = z
+  .object({
+    NODE_ENV: NodeEnvironmentSchema,
+    ...InfrastructureConfigShape,
+    AUTH_MODE: AuthModeSchema,
+    NEXT_PUBLIC_AUTH_MODE: AuthModeSchema,
+    DEVELOPMENT_USER_ID: z
+      .string()
+      .uuid()
+      .default("00000000-0000-4000-8000-000000000001"),
+    CLERK_SECRET_KEY: OptionalNonEmptyStringSchema,
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: OptionalNonEmptyStringSchema,
+  })
+  .superRefine((value, ctx) => {
+    if (value.AUTH_MODE !== value.NEXT_PUBLIC_AUTH_MODE) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["NEXT_PUBLIC_AUTH_MODE"],
+        message: "NEXT_PUBLIC_AUTH_MODE must match AUTH_MODE.",
+      });
+    }
+    if (value.AUTH_MODE !== "production") return;
+    if (!value.CLERK_SECRET_KEY) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["CLERK_SECRET_KEY"],
+        message: "CLERK_SECRET_KEY is required when AUTH_MODE is production.",
+      });
+    }
+    if (!value.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"],
+        message:
+          "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is required when AUTH_MODE is production.",
+      });
+    }
+  });
 
 export const ServerConfigSchema = z.object({
   NODE_ENV: NodeEnvironmentSchema,

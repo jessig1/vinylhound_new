@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { SearchCatalogReleasesResponseSchema } from "@vinylhound/contracts";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -36,9 +37,9 @@ export async function GET(request: Request) {
       );
     }
 
-    const results = await getServerContext().catalog.searchReleases(
-      parsed.data,
-    );
+    const context = getServerContext();
+    await requireUserId(context);
+    const results = await context.catalog.searchReleases(parsed.data);
     const response = jsonResponse(
       SearchCatalogReleasesResponseSchema.parse({ results }),
       200,

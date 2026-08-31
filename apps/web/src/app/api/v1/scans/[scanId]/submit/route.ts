@@ -1,6 +1,7 @@
 import { SubmitScanResponseSchema } from "@vinylhound/contracts";
 import { submitScan } from "@vinylhound/database";
 
+import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
   createRequestId,
@@ -22,9 +23,10 @@ export async function POST(
     const scanId = parseUuid(rawScanId, "scanId");
     const idempotencyKey = requireIdempotencyKey(request);
     const context = getServerContext();
+    const userId = await requireUserId(context);
 
     const result = await submitScan(context.database.db, {
-      userId: context.config.DEVELOPMENT_USER_ID,
+      userId,
       scanId,
       idempotencyKey,
     });
