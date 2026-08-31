@@ -1,5 +1,10 @@
 # Architecture
 
+For a reviewer-oriented current-to-target set of C4-style, sequence, state,
+ERD, deployment, and evolution diagrams, see the
+[architecture package](architecture/README.md). This file remains the concise
+authoritative summary of the implemented application architecture.
+
 ## Decision summary
 
 VinylHound starts as a modular monolith with two processes: a Next.js web application and a Node.js background worker. PostgreSQL is the source of truth, Redis backs retryable jobs, and S3-compatible storage holds images. Shared TypeScript packages keep provider and domain boundaries explicit.
