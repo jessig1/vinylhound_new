@@ -3,7 +3,8 @@
 This is the intended HTTP surface for the first vertical slice. Runtime schemas belong in `packages/contracts`; generated OpenAPI should eventually be derived from the same source.
 
 The create-scan, request-upload, complete-upload, submit, scan-status,
-confirmation, retry, cancel, batch, and scan-list endpoints are implemented.
+confirmation, retry, cancel, batch, scan-list, catalog-search, and library-read
+endpoints are implemented.
 They currently use the configured development identity; production
 authentication will replace identity issuance without changing user-scoped
 persistence.
@@ -39,7 +40,9 @@ is only a grouping.
 `POST /scans` accepts an optional `batchId`; every scan created with the same
 `batchId` shares that grouping. `GET /scans` and `GET /scans/{scanId}` both
 return the owning `batchId` (`null` for an ungrouped scan) so the client can
-link back to batch progress.
+link back to batch progress. Batch members use the `batch_upload` ingestion
+source, and the server enforces the shared 20-scan batch limit under a batch-row
+lock rather than relying on the browser limit.
 
 Each requested upload declares a `viewType` (`front`, `back`, `spine`, `label`,
 `barcode`, `runout`, or `other`; defaults to `front` when omitted, preserving
@@ -111,6 +114,23 @@ the first vertical slice. General library write endpoints remain planned;
 confirmation creates or converts an item through the atomic scan-confirmation
 command.
 
+Collection responses include `copyCount` and `copies`; each copy has optional
+media/sleeve condition, storage location, notes, and acquisition date. Wishlist
+items always contain zero copies.
+
+## Catalog endpoint
+
+| Method | Path                                              | Purpose                            |
+| ------ | ------------------------------------------------- | ---------------------------------- |
+| GET    | `/catalog/releases?artist={artist}&title={title}` | Search reviewable vinyl candidates |
+
+The server-side MusicBrainz adapter adds `format:vinyl`, sends a meaningful
+User-Agent, serializes requests at one per second, retries transient 429/503
+responses, and caches normalized results for 24 hours. Results include
+release-group/release MBIDs, source/fetch provenance, date, country, labels,
+barcode, formats, packaging, status, and provider score. The review screen only
+persists a reference after the user selects a result.
+
 ## Queue contract
 
 The first job is `scan.analyze.v1`, defined by `AnalyzeScanJobSchema`. Payloads contain IDs, not image bytes or URLs. The worker retrieves authoritative rows and sends request-scoped Base64 image data at execution time; image bytes and data URLs are never persisted or logged.
@@ -153,10 +173,14 @@ The selected candidate, when present, must belong to the latest successful
 attempt.
 
 Confirmation is atomic: it records the human decision, creates or reuses the
-normalized album/release, and creates or updates the library item in one
-transaction. Adding an owned release converts an existing wishlist item;
-requesting a wishlist entry never downgrades an owned item. `GET /scans/{scanId}`
-returns the stored confirmation so a refresh or lost response can recover safely.
+normalized album/release, stores optional namespaced catalog references, and
+creates or updates the library item in one transaction. A collection request
+also creates one physical copy (even when all copy fields are blank); a wishlist
+request creates none. Repeated scans of the same catalog release reuse the
+library item but create distinct copies. Adding an owned release converts an
+existing wishlist item; requesting a wishlist entry never downgrades an owned
+item. `GET /scans/{scanId}` returns the stored confirmation so a refresh or lost
+response can recover safely.
 
 ## Upload constraints (initial defaults)
 
@@ -180,6 +204,10 @@ the original, so per-request payload size and OpenAI token cost no longer
 scale with the phone camera's native resolution (ADR-0007). The
 `CompleteImageUploadResponse` contract is unchanged; `width`/`height`
 continue to describe the original as uploaded.
+
+Images completed before migration 009 have no derived-object metadata. Retry
+and redelivery fall back to their validated original object so historical scans
+remain analyzable; all newly completed images use the bounded analysis copy.
 
 The web client derives the declared MIME type from the file's magic bytes rather
 than the browser's extension-based `File.type`, so a misnamed file uploads under

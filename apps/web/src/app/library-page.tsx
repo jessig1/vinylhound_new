@@ -55,6 +55,8 @@ export async function LibraryPage({
             const facts = [
               release.releaseYear?.toString(),
               release.label,
+              release.format,
+              release.country,
             ].filter(Boolean);
             return (
               <article className="album-card album-card--large" key={item.id}>
@@ -69,6 +71,11 @@ export async function LibraryPage({
                 <h2>{release.title}</h2>
                 <p>{release.artist}</p>
                 <small>{facts.join(" · ") || "Release details not set"}</small>
+                {!wishlist ? (
+                  <small>
+                    {item.copyCount} {item.copyCount === 1 ? "copy" : "copies"}
+                  </small>
+                ) : null}
               </article>
             );
           })}

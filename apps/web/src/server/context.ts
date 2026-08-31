@@ -3,6 +3,7 @@ import path from "node:path";
 import { loadEnvConfig } from "@next/env";
 
 import { loadDevelopmentWebConfig } from "@vinylhound/config";
+import { createMusicBrainzCatalog } from "@vinylhound/catalog";
 import { createDatabase } from "@vinylhound/database";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 
@@ -21,6 +22,9 @@ function createServerContext() {
       accessKeyId: config.S3_ACCESS_KEY_ID,
       secretAccessKey: config.S3_SECRET_ACCESS_KEY,
       forcePathStyle: config.S3_FORCE_PATH_STYLE,
+    }),
+    catalog: createMusicBrainzCatalog({
+      userAgent: `VinylHound/0.1.0 (${config.APP_URL})`,
     }),
   };
 }

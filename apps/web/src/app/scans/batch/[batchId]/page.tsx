@@ -24,6 +24,7 @@ export default function BatchProgressPage() {
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
   const [pendingItems, setPendingItems] = useState<Record<string, boolean>>({});
+  const [pollVersion, setPollVersion] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +66,7 @@ export default function BatchProgressPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [batchId]);
+  }, [batchId, pollVersion]);
 
   async function cancelItem(scanId: string) {
     if (pendingItems[scanId]) return;
@@ -118,6 +119,7 @@ export default function BatchProgressPage() {
       }
       RetryScanResponseSchema.parse(body);
       setBatch((current) => updateScanStatus(current, scanId, "queued"));
+      setPollVersion((current) => current + 1);
     } catch (caught) {
       setItemErrors((current) => ({
         ...current,

@@ -26,6 +26,7 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+.claude/
 
 # Test artifacts
 playwright-report/

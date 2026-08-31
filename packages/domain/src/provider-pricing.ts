@@ -27,9 +27,9 @@ export const MODEL_PRICING_AS_OF = "2026-08-29";
 function pricingForModel(model: string): ModelPricing | undefined {
   const exact = MODEL_PRICING_USD[model];
   if (exact) return exact;
-  return Object.entries(MODEL_PRICING_USD).find(([prefix]) =>
-    model.startsWith(`${prefix}-`),
-  )?.[1];
+  return Object.entries(MODEL_PRICING_USD)
+    .sort(([left], [right]) => right.length - left.length)
+    .find(([prefix]) => model.startsWith(`${prefix}-`))?.[1];
 }
 
 export function estimateTokenUsageCostUsd(

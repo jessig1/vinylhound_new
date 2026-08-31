@@ -4,6 +4,7 @@ import type {
   AlbumIdentification,
   AnalyzeScanJob,
   GetScanResponse,
+  ImageMimeType,
   ProviderErrorCategory,
   ReviewOutcomeReason,
 } from "@vinylhound/contracts";
@@ -35,7 +36,7 @@ export type PrepareScanAnalysisResult =
         objectKey: string;
         viewType:
           "front" | "back" | "spine" | "label" | "barcode" | "runout" | "other";
-        mimeType: "image/jpeg";
+        mimeType: ImageMimeType;
         sizeBytes: number;
       }>;
     };
@@ -170,13 +171,17 @@ export async function prepareScanAnalysis(
       attemptId,
       images: requestedImages.map((image) => ({
         id: image!.id,
-        objectKey: deriveImageObjectKey(
-          { userId: scan.userId, scanId: scan.id, imageId: image!.id },
-          "analysis",
-        ),
+        objectKey:
+          image!.analysisSizeBytes === null
+            ? image!.objectKey
+            : deriveImageObjectKey(
+                { userId: scan.userId, scanId: scan.id, imageId: image!.id },
+                "analysis",
+              ),
         viewType: image!.viewType,
-        mimeType: "image/jpeg" as const,
-        sizeBytes: image!.analysisSizeBytes!,
+        mimeType:
+          image!.analysisSizeBytes === null ? image!.mimeType : "image/jpeg",
+        sizeBytes: image!.analysisSizeBytes ?? image!.sizeBytes,
       })),
     };
   });

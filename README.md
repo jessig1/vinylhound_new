@@ -28,6 +28,7 @@ apps/
   worker/       Retryable image-analysis and batch processing
 packages/
   ai/           AI provider port and OpenAI adapter
+  catalog/      Catalog provider port and MusicBrainz adapter
   config/       Server environment validation
   contracts/    Runtime-validated API, job, and AI schemas
   database/     Persistence boundary and future migrations
@@ -83,6 +84,7 @@ npm run build
 - [Security and privacy](docs/SECURITY.md)
 - [Testing and AI evaluations](docs/TESTING.md)
 - [Private model evaluation runner](docs/EVALUATION.md)
+- [Catalog source evaluation](docs/CATALOG_EVALUATION.md)
 - [Delivery roadmap](docs/ROADMAP.md)
 - [Architecture decisions](docs/decisions/README.md)
 

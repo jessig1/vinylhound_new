@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { AnalyzeScanJob } from "@vinylhound/contracts";
+import {
+  MAX_SCANS_PER_BATCH,
+  type AnalyzeScanJob,
+} from "@vinylhound/contracts";
 
 import { createDatabase } from "./database.js";
 import {
@@ -11,6 +14,7 @@ import {
   getScanForUser,
   getUsageSummaryForUser,
   listScanSummariesForUser,
+  prepareScanAnalysis,
 } from "./analysis-repository.js";
 import { confirmScan } from "./confirmation-repository.js";
 import { listLibraryItemsForUser } from "./library-repository.js";
@@ -27,7 +31,9 @@ import {
 } from "./scan-repository.js";
 import {
   albums,
+  catalogReferences,
   imageAssets,
+  libraryCopies,
   libraryItems,
   outboxMessages,
   scanAttempts,
@@ -388,8 +394,22 @@ describe("initial scan persistence schema", () => {
         label: "Columbia",
         catalogNumber: "CS 8163",
         barcode: null,
+        releaseDate: "1959-08-17",
+        country: "US",
+        format: '12" Vinyl',
+        packaging: "Cardboard/Paper Sleeve",
+        releaseStatus: "Official",
+        catalogReference: {
+          provider: "musicbrainz" as const,
+          releaseGroupId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          releaseId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          sourceUrl:
+            "https://musicbrainz.org/release/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          fetchedAt: "2026-08-31T12:00:00.000Z",
+        },
         list: "wishlist" as const,
         notes: null,
+        copy: null,
       },
     };
     const created = await confirmScan(database.db, confirmation);
@@ -434,14 +454,64 @@ describe("initial scan persistence schema", () => {
         selectedCandidateId: null,
         artist: "MILES DAVIS",
         list: "collection",
+        copy: {
+          mediaCondition: "very_good_plus",
+          sleeveCondition: "very_good",
+          location: "Shelf A",
+          notes: "First owned copy",
+          acquiredAt: "2026-08-01",
+        },
+      },
+    });
+    const [thirdScan] = await database.db
+      .insert(scans)
+      .values({
+        userId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `confirm-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: thirdScan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    const secondCopy = await confirmScan(database.db, {
+      ...confirmation,
+      scanId: thirdScan!.id,
+      idempotencyKey: `confirm-${randomUUID()}`,
+      confirmation: {
+        ...confirmation.confirmation,
+        selectedCandidateId: null,
+        artist: "MILES DAVIS",
+        list: "collection",
+        copy: {
+          mediaCondition: null,
+          sleeveCondition: null,
+          location: "Shelf B",
+          notes: null,
+          acquiredAt: null,
+        },
       },
     });
 
     expect(converted.record.release.id).toBe(created.record.release.id);
+    expect(secondCopy.record.release.id).toBe(created.record.release.id);
+    expect(secondCopy.record.libraryItem.id).toBe(
+      created.record.libraryItem.id,
+    );
     expect(converted.record.release.artist).toBe("MILES DAVIS");
     expect(converted.record.libraryItem).toMatchObject({
       id: created.record.libraryItem.id,
       list: "collection",
+      copy: { location: "Shelf A" },
     });
     await expect(
       getScanForUser(database.db, { userId, scanId: secondScan!.id }),
@@ -459,6 +529,8 @@ describe("initial scan persistence schema", () => {
         {
           id: created.record.libraryItem.id,
           release: { artist: "MILES DAVIS", title: "Kind of Blue" },
+          copyCount: 2,
+          copies: [{ location: "Shelf A" }, { location: "Shelf B" }],
         },
       ],
     });
@@ -476,6 +548,18 @@ describe("initial scan persistence schema", () => {
     expect(
       await database.db
         .select()
+        .from(catalogReferences)
+        .where(eq(catalogReferences.provider, "musicbrainz")),
+    ).toHaveLength(2);
+    expect(
+      await database.db
+        .select()
+        .from(libraryCopies)
+        .where(eq(libraryCopies.libraryItemId, created.record.libraryItem.id)),
+    ).toHaveLength(2);
+    expect(
+      await database.db
+        .select()
         .from(libraryItems)
         .where(eq(libraryItems.userId, userId)),
     ).toHaveLength(1);
@@ -484,7 +568,7 @@ describe("initial scan persistence schema", () => {
         .select()
         .from(scanConfirmations)
         .where(eq(scanConfirmations.userId, userId)),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
 
     await expect(
       confirmScan(database.db, {
@@ -551,6 +635,88 @@ describe("batch grouping and scan lifecycle", () => {
         batchId: randomUUID(),
       }),
     ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("enforces the server-side batch limit while allowing idempotent replay", async () => {
+    const batch = await createOrGetBatch(database.db, {
+      userId,
+      idempotencyKey: `limited-batch-${randomUUID()}`,
+    });
+    const scanKeys = Array.from(
+      { length: MAX_SCANS_PER_BATCH },
+      (_, index) => `limited-batch-scan-${index}-${randomUUID()}`,
+    );
+
+    for (const idempotencyKey of scanKeys) {
+      await createOrGetScan(database.db, {
+        userId,
+        source: "batch_upload",
+        idempotencyKey,
+        batchId: batch.record.id,
+      });
+    }
+
+    await expect(
+      createOrGetScan(database.db, {
+        userId,
+        source: "batch_upload",
+        idempotencyKey: scanKeys[0]!,
+        batchId: batch.record.id,
+      }),
+    ).resolves.toMatchObject({ created: false });
+    await expect(
+      createOrGetScan(database.db, {
+        userId,
+        source: "batch_upload",
+        idempotencyKey: `over-limit-${randomUUID()}`,
+        batchId: batch.record.id,
+      }),
+    ).rejects.toMatchObject({ code: "batch_scan_limit" });
+  });
+
+  it("falls back to the original object for images completed before normalization", async () => {
+    const scan = await createOrGetScan(database.db, {
+      userId,
+      source: "single_upload",
+      idempotencyKey: `legacy-scan-${randomUUID()}`,
+    });
+    const upload = await createOrGetImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `legacy-upload-${randomUUID()}`,
+      filename: "legacy-front.png",
+      mimeType: "image/png",
+      sizeBytes: 512,
+      checksumSha256: "9".repeat(64),
+      maxImages: 12,
+    });
+    await database.db
+      .update(imageAssets)
+      .set({ completedAt: new Date(), width: 800, height: 600 })
+      .where(eq(imageAssets.id, upload.record.id));
+    const submitted = await submitScan(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `legacy-submit-${randomUUID()}`,
+    });
+
+    const prepared = await prepareScanAnalysis(database.db, {
+      job: submitted.job,
+      deliveryAttempt: 1,
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+    });
+
+    expect(prepared).toMatchObject({
+      status: "ready",
+      images: [
+        {
+          objectKey: upload.record.objectKey,
+          mimeType: "image/png",
+          sizeBytes: 512,
+        },
+      ],
+    });
   });
 
   it("aggregates token usage and estimated cost across a batch and account usage window", async () => {

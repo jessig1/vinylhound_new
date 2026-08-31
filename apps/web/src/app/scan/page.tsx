@@ -270,7 +270,7 @@ export default function ScanPage() {
       let completed = 0;
       const results = await Promise.allSettled(
         prepared.map(async (image) => {
-          await uploadOneImageScan(image, source, batch.batchId);
+          await uploadOneImageScan(image, batch.batchId);
           completed += 1;
           setActiveImage(completed);
         }),
@@ -444,6 +444,7 @@ export default function ScanPage() {
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   capture="environment"
                   disabled={busy}
+                  multiple={mode === "batch"}
                   onChange={(event) => addFiles(event, "camera")}
                   type="file"
                 />
@@ -474,6 +475,7 @@ export default function ScanPage() {
                 <input
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   capture="environment"
+                  multiple={mode === "batch"}
                   onChange={(event) => addFiles(event, "camera")}
                   type="file"
                 />
@@ -536,11 +538,7 @@ function phaseLabel(phase: Phase, activeImage: number, imageCount: number) {
   }
 }
 
-async function uploadOneImageScan(
-  image: PreparedImage,
-  source: "camera" | "single_upload",
-  batchId: string,
-) {
+async function uploadOneImageScan(image: PreparedImage, batchId: string) {
   const scan = CreateScanResponseSchema.parse(
     await requestJson("/api/v1/scans", {
       method: "POST",
@@ -548,7 +546,7 @@ async function uploadOneImageScan(
         "content-type": "application/json",
         "idempotency-key": `scan-${crypto.randomUUID()}`,
       },
-      body: JSON.stringify({ source, batchId }),
+      body: JSON.stringify({ source: "batch_upload", batchId }),
     }),
   );
   validateAgainstScanLimits([image], scan.limits);

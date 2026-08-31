@@ -46,9 +46,13 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 
 ## Milestone 3 — catalog enrichment and collection quality
 
-- Evaluate a catalog source for canonical IDs, search, deduplication, and pressing detail.
-- Add richer collection metadata and duplicate-copy modeling.
-- Improve search/filter/export and wishlist-to-owned conversion.
+- [x] Evaluate catalog sources for canonical IDs, search, deduplication, and
+      pressing detail. MusicBrainz is the primary catalog; Discogs is deferred
+      as an optional pressing cross-check (ADR-0009 and
+      `docs/CATALOG_EVALUATION.md`).
+- [x] Add the catalog port/MusicBrainz adapter, richer release metadata, and
+      duplicate-copy modeling.
+- [ ] Improve search/filter/export and wishlist-to-owned conversion.
 
 ## Milestone 4 — public-ready operations
 
@@ -56,7 +60,7 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 
-Milestone 2 is complete. The next recommended task is Milestone 3: evaluate a
-catalog source for canonical IDs, search, deduplication, and pressing detail.
-Keep the formal private AI evaluation as a gate before public rollout or
-model/cost optimization.
+Milestone 2 and the first two tasks of Milestone 3 are complete. The next
+recommended task is improved library search/filter/export and wishlist-to-owned
+conversion. Keep the formal private AI evaluation as a gate before public
+rollout or model/cost optimization.

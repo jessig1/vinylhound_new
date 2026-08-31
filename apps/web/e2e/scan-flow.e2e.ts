@@ -60,6 +60,11 @@ test("groups two front-cover photos into an independently trackable batch", asyn
   await page.goto("/scan");
   await page.getByRole("button", { name: "Multiple records" }).click();
 
+  await expect(page.locator('input[type="file"][capture]')).toHaveAttribute(
+    "multiple",
+    "",
+  );
+
   await page.setInputFiles(uploadInput, [
     { name: "record-a.jpg", mimeType: "image/jpeg", buffer: coverJpeg },
     { name: "record-b.jpg", mimeType: "image/jpeg", buffer: backJpeg },

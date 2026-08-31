@@ -3,6 +3,7 @@ import {
   bigint,
   char,
   check,
+  date,
   index,
   integer,
   jsonb,
@@ -69,6 +70,22 @@ export const providerErrorCategoryEnum = pgEnum("provider_error_category", [
 export const libraryListEnum = pgEnum("library_list", [
   "collection",
   "wishlist",
+]);
+
+export const catalogProviderEnum = pgEnum("catalog_provider", ["musicbrainz"]);
+export const catalogEntityTypeEnum = pgEnum("catalog_entity_type", [
+  "album",
+  "release",
+]);
+export const recordConditionEnum = pgEnum("record_condition", [
+  "mint",
+  "near_mint",
+  "very_good_plus",
+  "very_good",
+  "good_plus",
+  "good",
+  "fair",
+  "poor",
 ]);
 
 export const users = pgTable("users", {
@@ -420,6 +437,41 @@ export const scanCandidates = pgTable(
   ],
 );
 
+export const catalogReferences = pgTable(
+  "catalog_references",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    provider: catalogProviderEnum("provider").notNull(),
+    entityType: catalogEntityTypeEnum("entity_type").notNull(),
+    externalId: varchar("external_id", { length: 255 }).notNull(),
+    albumId: uuid("album_id").references(() => albums.id, {
+      onDelete: "cascade",
+    }),
+    releaseId: uuid("release_id").references(() => releases.id, {
+      onDelete: "cascade",
+    }),
+    sourceUrl: text("source_url").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("catalog_references_external_identity_unique").on(
+      table.provider,
+      table.entityType,
+      table.externalId,
+    ),
+    index("catalog_references_album_id_idx").on(table.albumId),
+    index("catalog_references_release_id_idx").on(table.releaseId),
+    check(
+      "catalog_references_owner_check",
+      sql`(${table.entityType} = 'album'::catalog_entity_type and ${table.albumId} is not null and ${table.releaseId} is null)
+        or (${table.entityType} = 'release'::catalog_entity_type and ${table.releaseId} is not null and ${table.albumId} is null)`,
+    ),
+  ],
+);
+
 export const albums = pgTable(
   "albums",
   {
@@ -449,6 +501,11 @@ export const releases = pgTable(
       .references(() => albums.id, { onDelete: "cascade" }),
     identityKey: char("identity_key", { length: 64 }).notNull(),
     releaseYear: integer("release_year"),
+    releaseDate: varchar("release_date", { length: 10 }),
+    country: varchar("country", { length: 10 }),
+    format: varchar("format", { length: 255 }),
+    packaging: varchar("packaging", { length: 255 }),
+    releaseStatus: varchar("release_status", { length: 100 }),
     label: varchar("label", { length: 255 }),
     catalogNumber: varchar("catalog_number", { length: 255 }),
     barcode: varchar("barcode", { length: 255 }),
@@ -510,6 +567,48 @@ export const libraryItems = pgTable(
   ],
 );
 
+export const libraryCopies = pgTable(
+  "library_copies",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    libraryItemId: uuid("library_item_id")
+      .notNull()
+      .references(() => libraryItems.id, { onDelete: "cascade" }),
+    releaseId: uuid("release_id")
+      .notNull()
+      .references(() => releases.id, { onDelete: "cascade" }),
+    confirmedFromScanId: uuid("confirmed_from_scan_id").references(
+      () => scans.id,
+      { onDelete: "set null" },
+    ),
+    mediaCondition: recordConditionEnum("media_condition"),
+    sleeveCondition: recordConditionEnum("sleeve_condition"),
+    location: varchar("location", { length: 255 }),
+    notes: text("notes"),
+    acquiredAt: date("acquired_at", { mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("library_copies_library_item_created_idx").on(
+      table.libraryItemId,
+      table.createdAt,
+    ),
+    index("library_copies_release_id_idx").on(table.releaseId),
+    check(
+      "library_copies_notes_length_check",
+      sql`${table.notes} is null or char_length(${table.notes}) <= 2000`,
+    ),
+  ],
+);
+
 export const scanConfirmations = pgTable(
   "scan_confirmations",
   {
@@ -529,6 +628,9 @@ export const scanConfirmations = pgTable(
     libraryItemId: uuid("library_item_id")
       .notNull()
       .references(() => libraryItems.id, { onDelete: "restrict" }),
+    copyId: uuid("copy_id").references(() => libraryCopies.id, {
+      onDelete: "set null",
+    }),
     idempotencyKey: text("idempotency_key").notNull(),
     requestFingerprint: char("request_fingerprint", { length: 64 }).notNull(),
     reviewedRelease: jsonb("reviewed_release")
@@ -539,6 +641,18 @@ export const scanConfirmations = pgTable(
         label: string | null;
         catalogNumber: string | null;
         barcode: string | null;
+        releaseDate: string | null;
+        country: string | null;
+        format: string | null;
+        packaging: string | null;
+        releaseStatus: string | null;
+        catalogReference: {
+          provider: "musicbrainz";
+          releaseGroupId: string;
+          releaseId: string;
+          sourceUrl: string;
+          fetchedAt: string;
+        } | null;
       }>()
       .notNull(),
     confirmedAt: timestamp("confirmed_at", { withTimezone: true })
@@ -582,4 +696,6 @@ export type NewScanCandidateRow = typeof scanCandidates.$inferInsert;
 export type AlbumRow = typeof albums.$inferSelect;
 export type ReleaseRow = typeof releases.$inferSelect;
 export type LibraryItemRow = typeof libraryItems.$inferSelect;
+export type LibraryCopyRow = typeof libraryCopies.$inferSelect;
+export type CatalogReferenceRow = typeof catalogReferences.$inferSelect;
 export type ScanConfirmationRow = typeof scanConfirmations.$inferSelect;

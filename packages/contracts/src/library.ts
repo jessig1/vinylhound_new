@@ -1,7 +1,30 @@
 import { z } from "zod";
 
+import { CatalogReferenceSchema } from "./catalog.js";
+
 export const LibraryListSchema = z.enum(["collection", "wishlist"]);
 export type LibraryList = z.infer<typeof LibraryListSchema>;
+
+export const RecordConditionSchema = z.enum([
+  "mint",
+  "near_mint",
+  "very_good_plus",
+  "very_good",
+  "good_plus",
+  "good",
+  "fair",
+  "poor",
+]);
+
+export const CopyDetailsInputSchema = z
+  .object({
+    mediaCondition: RecordConditionSchema.nullable().default(null),
+    sleeveCondition: RecordConditionSchema.nullable().default(null),
+    location: z.string().trim().min(1).max(255).nullable().default(null),
+    notes: z.string().trim().max(2_000).nullable().default(null),
+    acquiredAt: z.iso.date().nullable().default(null),
+  })
+  .strict();
 
 export const ConfirmScanRequestSchema = z
   .object({
@@ -12,10 +35,30 @@ export const ConfirmScanRequestSchema = z
     label: z.string().trim().min(1).max(255).nullable(),
     catalogNumber: z.string().trim().min(1).max(255).nullable(),
     barcode: z.string().trim().min(1).max(255).nullable(),
+    releaseDate: z
+      .string()
+      .regex(/^\d{4}(?:-\d{2}(?:-\d{2})?)?$/)
+      .nullable()
+      .default(null),
+    country: z.string().trim().min(1).max(10).nullable().default(null),
+    format: z.string().trim().min(1).max(255).nullable().default(null),
+    packaging: z.string().trim().min(1).max(255).nullable().default(null),
+    releaseStatus: z.string().trim().min(1).max(100).nullable().default(null),
+    catalogReference: CatalogReferenceSchema.nullable().default(null),
     list: LibraryListSchema,
     notes: z.string().trim().max(2_000).nullable(),
+    copy: CopyDetailsInputSchema.nullable().default(null),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.list === "wishlist" && value.copy !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["copy"],
+        message: "Wishlist entries cannot include an owned copy.",
+      });
+    }
+  });
 
 export const ConfirmedReleaseSchema = z
   .object({
@@ -26,6 +69,25 @@ export const ConfirmedReleaseSchema = z
     label: z.string().nullable(),
     catalogNumber: z.string().nullable(),
     barcode: z.string().nullable(),
+    releaseDate: z.string().nullable(),
+    country: z.string().nullable(),
+    format: z.string().nullable(),
+    packaging: z.string().nullable(),
+    releaseStatus: z.string().nullable(),
+    catalogReference: CatalogReferenceSchema.nullable(),
+  })
+  .strict();
+
+export const LibraryCopySchema = z
+  .object({
+    id: z.string().uuid(),
+    mediaCondition: RecordConditionSchema.nullable(),
+    sleeveCondition: RecordConditionSchema.nullable(),
+    location: z.string().nullable(),
+    notes: z.string().nullable(),
+    acquiredAt: z.string().nullable(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
   })
   .strict();
 
@@ -38,6 +100,7 @@ export const ScanConfirmationSummarySchema = z
         id: z.string().uuid(),
         list: LibraryListSchema,
         notes: z.string().nullable(),
+        copy: LibraryCopySchema.nullable(),
       })
       .strict(),
     confirmedAt: z.string().datetime(),
@@ -54,6 +117,8 @@ export const LibraryItemResultSchema = z
     list: LibraryListSchema,
     notes: z.string().nullable(),
     release: ConfirmedReleaseSchema,
+    copyCount: z.number().int().nonnegative(),
+    copies: z.array(LibraryCopySchema).max(100),
     confirmedFromScanId: z.string().uuid().nullable(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -76,6 +141,8 @@ export const AddLibraryItemSchema = z
   .strict();
 
 export type AddLibraryItem = z.infer<typeof AddLibraryItemSchema>;
+export type CopyDetailsInput = z.infer<typeof CopyDetailsInputSchema>;
+export type LibraryCopy = z.infer<typeof LibraryCopySchema>;
 export type ConfirmScanRequest = z.infer<typeof ConfirmScanRequestSchema>;
 export type ConfirmedRelease = z.infer<typeof ConfirmedReleaseSchema>;
 export type ScanConfirmationSummary = z.infer<

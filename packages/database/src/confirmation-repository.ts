@@ -16,6 +16,8 @@ import type { Database } from "./database.js";
 import { DatabaseCommandError } from "./scan-repository.js";
 import {
   albums,
+  catalogReferences,
+  libraryCopies,
   libraryItems,
   releases,
   scanAttempts,
@@ -42,8 +44,15 @@ export async function confirmScan(
     input.confirmation.label,
     input.confirmation.catalogNumber,
     input.confirmation.barcode,
+    input.confirmation.releaseDate,
+    input.confirmation.country,
+    input.confirmation.format,
+    input.confirmation.packaging,
+    input.confirmation.releaseStatus,
+    input.confirmation.catalogReference,
     input.confirmation.list,
     input.confirmation.notes,
+    input.confirmation.copy,
   ]);
 
   return db.transaction(async (transaction) => {
@@ -149,24 +158,50 @@ export async function confirmScan(
       }
     }
 
+    if (input.confirmation.catalogReference) {
+      await transaction.execute(
+        sql`select pg_advisory_xact_lock(
+          hashtext(${input.confirmation.catalogReference.provider}),
+          hashtext(${input.confirmation.catalogReference.releaseGroupId})
+        )`,
+      );
+    }
+
     const normalizedArtist = normalizeReleaseIdentityPart(
       input.confirmation.artist,
     );
     const normalizedTitle = normalizeReleaseIdentityPart(
       input.confirmation.title,
     );
-    const [insertedAlbum] = await transaction
-      .insert(albums)
-      .values({
-        artist: input.confirmation.artist,
-        title: input.confirmation.title,
-        normalizedArtist,
-        normalizedTitle,
-      })
-      .onConflictDoNothing({
-        target: [albums.normalizedArtist, albums.normalizedTitle],
-      })
-      .returning();
+    const catalogReference = input.confirmation.catalogReference;
+    const existingAlbumReference = catalogReference
+      ? await transaction.query.catalogReferences.findFirst({
+          where: and(
+            eq(catalogReferences.provider, catalogReference.provider),
+            eq(catalogReferences.entityType, "album"),
+            eq(catalogReferences.externalId, catalogReference.releaseGroupId),
+          ),
+        })
+      : null;
+    const referencedAlbum = existingAlbumReference?.albumId
+      ? await transaction.query.albums.findFirst({
+          where: eq(albums.id, existingAlbumReference.albumId),
+        })
+      : null;
+    const [insertedAlbum] = referencedAlbum
+      ? [referencedAlbum]
+      : await transaction
+          .insert(albums)
+          .values({
+            artist: input.confirmation.artist,
+            title: input.confirmation.title,
+            normalizedArtist,
+            normalizedTitle,
+          })
+          .onConflictDoNothing({
+            target: [albums.normalizedArtist, albums.normalizedTitle],
+          })
+          .returning();
     const album =
       insertedAlbum ??
       (await transaction.query.albums.findFirst({
@@ -182,26 +217,80 @@ export async function confirmScan(
       );
     }
 
-    const identityKey = hashJson([
-      normalizedArtist,
-      normalizedTitle,
-      input.confirmation.releaseYear,
-      normalizeOptionalReleaseIdentityPart(input.confirmation.label),
-      normalizeOptionalReleaseIdentityPart(input.confirmation.catalogNumber),
-      normalizeOptionalReleaseIdentityPart(input.confirmation.barcode),
-    ]);
-    const [insertedRelease] = await transaction
-      .insert(releases)
-      .values({
-        albumId: album.id,
-        identityKey,
-        releaseYear: input.confirmation.releaseYear,
-        label: input.confirmation.label,
-        catalogNumber: input.confirmation.catalogNumber,
-        barcode: input.confirmation.barcode,
-      })
-      .onConflictDoNothing({ target: releases.identityKey })
-      .returning();
+    if (catalogReference && !existingAlbumReference) {
+      await transaction
+        .insert(catalogReferences)
+        .values({
+          provider: catalogReference.provider,
+          entityType: "album",
+          externalId: catalogReference.releaseGroupId,
+          albumId: album.id,
+          sourceUrl: `https://musicbrainz.org/release-group/${catalogReference.releaseGroupId}`,
+          fetchedAt: new Date(catalogReference.fetchedAt),
+        })
+        .onConflictDoNothing({
+          target: [
+            catalogReferences.provider,
+            catalogReferences.entityType,
+            catalogReferences.externalId,
+          ],
+        });
+    }
+
+    const existingReleaseReference = catalogReference
+      ? await transaction.query.catalogReferences.findFirst({
+          where: and(
+            eq(catalogReferences.provider, catalogReference.provider),
+            eq(catalogReferences.entityType, "release"),
+            eq(catalogReferences.externalId, catalogReference.releaseId),
+          ),
+        })
+      : null;
+    const referencedRelease = existingReleaseReference?.releaseId
+      ? await transaction.query.releases.findFirst({
+          where: eq(releases.id, existingReleaseReference.releaseId),
+        })
+      : null;
+    if (referencedRelease && referencedRelease.albumId !== album.id) {
+      throw new DatabaseCommandError(
+        "conflict",
+        "The catalog release is already linked to a different album.",
+      );
+    }
+    const identityKey = catalogReference
+      ? hashJson([catalogReference.provider, catalogReference.releaseId])
+      : hashJson([
+          normalizedArtist,
+          normalizedTitle,
+          input.confirmation.releaseYear,
+          normalizeOptionalReleaseIdentityPart(input.confirmation.label),
+          normalizeOptionalReleaseIdentityPart(
+            input.confirmation.catalogNumber,
+          ),
+          normalizeOptionalReleaseIdentityPart(input.confirmation.barcode),
+          normalizeOptionalReleaseIdentityPart(input.confirmation.releaseDate),
+          normalizeOptionalReleaseIdentityPart(input.confirmation.country),
+          normalizeOptionalReleaseIdentityPart(input.confirmation.format),
+        ]);
+    const [insertedRelease] = referencedRelease
+      ? [referencedRelease]
+      : await transaction
+          .insert(releases)
+          .values({
+            albumId: album.id,
+            identityKey,
+            releaseYear: input.confirmation.releaseYear,
+            releaseDate: input.confirmation.releaseDate,
+            country: input.confirmation.country,
+            format: input.confirmation.format,
+            packaging: input.confirmation.packaging,
+            releaseStatus: input.confirmation.releaseStatus,
+            label: input.confirmation.label,
+            catalogNumber: input.confirmation.catalogNumber,
+            barcode: input.confirmation.barcode,
+          })
+          .onConflictDoNothing({ target: releases.identityKey })
+          .returning();
     const release =
       insertedRelease ??
       (await transaction.query.releases.findFirst({
@@ -212,6 +301,26 @@ export async function confirmScan(
         "conflict",
         "The normalized release identity could not be resolved.",
       );
+    }
+
+    if (catalogReference && !existingReleaseReference) {
+      await transaction
+        .insert(catalogReferences)
+        .values({
+          provider: catalogReference.provider,
+          entityType: "release",
+          externalId: catalogReference.releaseId,
+          releaseId: release.id,
+          sourceUrl: catalogReference.sourceUrl,
+          fetchedAt: new Date(catalogReference.fetchedAt),
+        })
+        .onConflictDoNothing({
+          target: [
+            catalogReferences.provider,
+            catalogReferences.entityType,
+            catalogReferences.externalId,
+          ],
+        });
     }
 
     const now = new Date();
@@ -241,6 +350,25 @@ export async function confirmScan(
       })
       .returning();
 
+    const [copy] =
+      input.confirmation.list === "collection"
+        ? await transaction
+            .insert(libraryCopies)
+            .values({
+              userId: input.userId,
+              libraryItemId: libraryItem!.id,
+              releaseId: release.id,
+              confirmedFromScanId: scan.id,
+              mediaCondition: input.confirmation.copy?.mediaCondition ?? null,
+              sleeveCondition: input.confirmation.copy?.sleeveCondition ?? null,
+              location: input.confirmation.copy?.location ?? null,
+              notes: input.confirmation.copy?.notes ?? null,
+              acquiredAt: input.confirmation.copy?.acquiredAt ?? null,
+              updatedAt: now,
+            })
+            .returning()
+        : [undefined];
+
     const [confirmation] = await transaction
       .insert(scanConfirmations)
       .values({
@@ -249,6 +377,7 @@ export async function confirmScan(
         selectedCandidateId: input.confirmation.selectedCandidateId,
         releaseId: release.id,
         libraryItemId: libraryItem!.id,
+        copyId: copy?.id,
         idempotencyKey: input.idempotencyKey,
         requestFingerprint,
         reviewedRelease: {
@@ -258,6 +387,12 @@ export async function confirmScan(
           label: input.confirmation.label,
           catalogNumber: input.confirmation.catalogNumber,
           barcode: input.confirmation.barcode,
+          releaseDate: input.confirmation.releaseDate,
+          country: input.confirmation.country,
+          format: input.confirmation.format,
+          packaging: input.confirmation.packaging,
+          releaseStatus: input.confirmation.releaseStatus,
+          catalogReference,
         },
         confirmedAt: now,
       })
@@ -276,6 +411,7 @@ export async function confirmScan(
           id: libraryItem!.id,
           list: libraryItem!.list,
           notes: libraryItem!.notes,
+          copy: copy ? serializeCopy(copy) : null,
         },
         confirmedAt: confirmation!.confirmedAt.toISOString(),
       },
@@ -334,6 +470,14 @@ async function readConfirmationResponse(
       eq(libraryItems.userId, userId),
     ),
   });
+  const copy = confirmation.copyId
+    ? await db.query.libraryCopies.findFirst({
+        where: and(
+          eq(libraryCopies.id, confirmation.copyId),
+          eq(libraryCopies.userId, userId),
+        ),
+      })
+    : null;
   if (!release || !album || !libraryItem) {
     throw new DatabaseCommandError(
       "invalid_state",
@@ -352,6 +496,7 @@ async function readConfirmationResponse(
       id: libraryItem.id,
       list: libraryItem.list,
       notes: libraryItem.notes,
+      copy: copy ? serializeCopy(copy) : null,
     },
     confirmedAt: confirmation.confirmedAt.toISOString(),
   };
@@ -359,4 +504,17 @@ async function readConfirmationResponse(
 
 function hashJson(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function serializeCopy(copy: typeof libraryCopies.$inferSelect) {
+  return {
+    id: copy.id,
+    mediaCondition: copy.mediaCondition,
+    sleeveCondition: copy.sleeveCondition,
+    location: copy.location,
+    notes: copy.notes,
+    acquiredAt: copy.acquiredAt,
+    createdAt: copy.createdAt.toISOString(),
+    updatedAt: copy.updatedAt.toISOString(),
+  };
 }

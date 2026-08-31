@@ -70,7 +70,8 @@ it (ADR-0007).
 The database integration suite also verifies reviewed confirmation, idempotent
 replay, release normalization, transactional wishlist-to-collection
 conversion, batch grouping (idempotent batch creation, scans linked under one
-batch, cross-batch isolation), retrying a failed scan as a new attempt with
+batch, cross-batch isolation, transactional enforcement of the 20-scan server
+limit), retrying a failed scan as a new attempt with
 idempotent replay of a pending retry, canceling a queued scan so the
 outbox dispatcher skips its job without publishing it, and aggregating
 token/cost usage across a batch and across an account-wide window (ADR-0008):
@@ -78,7 +79,9 @@ a failed attempt with no recorded token usage is excluded from cost totals
 but still counted by outcome, and estimated cost matches the per-model
 pricing table in `packages/domain`. The worker integration
 suite additionally verifies that a scan canceled after being queued is
-skipped without a provider call.
+skipped without a provider call. Database coverage also proves that a scan
+completed before migration 009 falls back to its validated original object
+when no normalized analysis copy exists.
 
 `npm run test:e2e` runs Playwright at a phone viewport against a production
 build served from `.next-e2e` on port 3100, fully isolated from a running dev

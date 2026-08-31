@@ -6,6 +6,7 @@ import {
   ANALYZE_SCAN_JOB,
   AnalyzeScanJobSchema,
   RETRYABLE_SCAN_STATUSES,
+  MAX_SCANS_PER_BATCH,
   type AnalyzeScanJob,
   type ImageMimeType,
   type ImageViewType,
@@ -23,7 +24,11 @@ import {
 } from "./schema.js";
 
 export type DatabaseCommandErrorCode =
-  "conflict" | "invalid_state" | "not_found" | "scan_image_limit";
+  | "batch_scan_limit"
+  | "conflict"
+  | "invalid_state"
+  | "not_found"
+  | "scan_image_limit";
 
 export class DatabaseCommandError extends Error {
   constructor(
@@ -59,14 +64,45 @@ export async function createOrGetScan(
 ) {
   return db.transaction(async (transaction) => {
     if (input.batchId) {
-      const batch = await transaction.query.batches.findFirst({
-        where: and(
-          eq(batches.id, input.batchId),
-          eq(batches.userId, input.userId),
-        ),
-      });
+      const [batch] = await transaction
+        .select({ id: batches.id })
+        .from(batches)
+        .where(
+          and(eq(batches.id, input.batchId), eq(batches.userId, input.userId)),
+        )
+        .for("update");
       if (!batch) {
         throw new DatabaseCommandError("not_found", "Batch not found.");
+      }
+
+      const existing = await transaction.query.scans.findFirst({
+        where: and(
+          eq(scans.userId, input.userId),
+          eq(scans.idempotencyKey, input.idempotencyKey),
+        ),
+      });
+      if (existing) {
+        if (
+          existing.source !== input.source ||
+          existing.batchId !== input.batchId
+        ) {
+          throw new DatabaseCommandError(
+            "conflict",
+            "That idempotency key was already used with different scan data.",
+          );
+        }
+        return { record: existing, created: false } as const;
+      }
+
+      const [{ value: batchScanCount }] = await transaction
+        .select({ value: count() })
+        .from(scans)
+        .where(eq(scans.batchId, input.batchId));
+      if (batchScanCount >= MAX_SCANS_PER_BATCH) {
+        throw new DatabaseCommandError(
+          "batch_scan_limit",
+          `A batch cannot contain more than ${MAX_SCANS_PER_BATCH} scans.`,
+        );
       }
     }
 

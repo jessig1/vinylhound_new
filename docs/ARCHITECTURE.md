@@ -30,8 +30,11 @@ Camera uploads and batch analysis are slower and less reliable than normal HTTP 
 4. Worker claims the job, marks it `processing`, reads the authoritative validated objects, creates request-scoped Base64 data URLs, and calls the AI adapter.
 5. Structured output is validated. Domain policy independently determines whether the result can be presented as identified or needs review.
 6. User confirmation creates or selects a canonical release and adds or converts
-   a library item in one transaction. The confirmation retains the selected AI
-   candidate, reviewed corrections, and originating scan.
+   a library item in one transaction. If the user owns it, the same transaction
+   creates a physical-copy row. A user-triggered MusicBrainz search may attach
+   namespaced release-group/release references and richer reviewed metadata;
+   catalog output remains a candidate. The confirmation retains the selected AI
+   candidate, reviewed corrections, catalog provenance, and originating scan.
 
 Submission writes the `queued` scan state and a versioned outbox message in one
 PostgreSQL transaction. The worker publishes pending messages to BullMQ using a
@@ -44,7 +47,7 @@ steps causes a safe duplicate publication attempt instead of a lost scan.
 - Web/API: authentication, authorization, signed URLs, commands, queries, idempotency, and orchestration.
 - Worker: retries, provider calls, concurrency controls, scan attempts, and terminal failure handling.
 - Domain: review policy, legal status transitions, duplicate rules, and library invariants.
-- Providers: OpenAI, queue, storage, and future catalog sources behind interfaces.
+- Providers: OpenAI, MusicBrainz catalog, queue, and storage behind interfaces.
 
 ## Deployment evolution
 

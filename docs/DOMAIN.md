@@ -16,7 +16,7 @@ An `Album` is the artistic work (artist + title). A `Release` is a published edi
 | Candidate   | A normalized AI/catalog candidate           | artist, title, release facts, confidence, evidence, rank                     |
 | Album       | Canonical artistic work                     | id, normalized artist/title                                                  |
 | Release     | A particular edition when known             | id, album_id, year, label, catalog number, barcode, country                  |
-| Copy        | A physical owned copy                       | id, release_id, condition/location/notes (post-MVP)                          |
+| Copy        | A physical owned copy                       | id, user_id, release_id, condition, location, notes, acquired_at             |
 | LibraryItem | User intent for a release                   | user_id, release_id, list, notes, confirmed_from_scan_id                     |
 
 ## Invariants
@@ -27,12 +27,15 @@ An `Album` is the artistic work (artist + title). A `Release` is a published edi
 - Candidates are immutable for a successful provider delivery. Queue retries append a delivery audit row under the same logical scan attempt; explicit user retries create a new logical attempt.
 - Only a user-confirmed candidate/correction may create a library item.
 - A user cannot have duplicate wishlist entries for the same release.
+- A collection library item may own multiple physical copies of its release;
+  a wishlist item owns none.
 - Adding an owned item for a wished-for release should remove or convert the wishlist entry transactionally.
 - Object keys are opaque and scoped to a user/scan; public URLs are never persisted as identifiers.
 
-For the first vertical slice, one library item represents a user's relationship
-to a release. Confirmation creates that item atomically. A later copy model can
-permit multiple owned physical copies without weakening wishlist uniqueness.
+One library item represents a user's relationship to a release. Each
+collection confirmation creates a separate physical copy beneath that item,
+while repeated scans reuse the relationship. Wishlist confirmation creates no
+copy, preserving one wishlist entry per user/release.
 
 ## Scan state machine
 
@@ -42,7 +45,7 @@ awaiting_upload -> queued -> processing -> identified
                                   |       -> unresolved
                                   -> failed
 
-failed/unresolved/needs_review -> queued (explicit retry)
+failed/unresolved -> queued (explicit retry)
 ```
 
 `identified` means the system has a high-confidence candidate ready for confirmation. It does not mean the user owns it or that the precise pressing is verified.

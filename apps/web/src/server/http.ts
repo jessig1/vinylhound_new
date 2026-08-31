@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { ApiErrorSchema, IdempotencyKeySchema } from "@vinylhound/contracts";
+import { CatalogProviderError } from "@vinylhound/catalog";
 import { DatabaseCommandError } from "@vinylhound/database";
 import {
   ImageValidationError,
@@ -92,6 +93,14 @@ export function errorResponse(error: unknown, requestId: string) {
   if (error instanceof DatabaseCommandError) {
     const status = error.code === "not_found" ? 404 : 409;
     return createError(status, error.code, error.message, requestId);
+  }
+  if (error instanceof CatalogProviderError) {
+    return createError(
+      error.category === "rate_limit" ? 429 : 502,
+      `catalog_${error.category}`,
+      error.message,
+      requestId,
+    );
   }
   if (error instanceof ImageValidationError) {
     return createError(422, error.code, error.message, requestId);

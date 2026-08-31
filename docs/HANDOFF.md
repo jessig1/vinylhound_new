@@ -13,7 +13,7 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-08-30
+## Current state — verified 2026-08-31
 
 - Milestone 1 (single-image vertical slice) is complete. The maintainer accepted
   Sol + `high` + prompt-v2 artist/title quality for the early build; the formal
@@ -49,17 +49,38 @@ the log.
      private `packages/evals` into `packages/domain`
      (`estimateTokenUsageCostUsd`) so both share one definition; `evals`
      re-exports it unchanged so nothing there broke.
+- Codex independently reviewed Milestone 2 and fixed uncovered edge cases:
+  the 20-scan batch cap is now enforced transactionally on the server; batch
+  scans record `batch_upload`; retrying from an all-terminal batch restarts
+  polling; images completed before migration 009 fall back to their original
+  object; and versioned Terra/Luna model names use their specific pricing
+  instead of the generic Sol-family prefix. The production build also restored
+  the generated `next-env.d.ts` imports from `.next/dev` to `.next`.
+- Every file chooser shown in Multiple records mode now accepts several images
+  in one selection. The explicit upload inputs already supported this; the
+  camera inputs now opt into `multiple` in batch mode as well so desktop
+  browsers that render `capture` as a normal file dialog do not force
+  one-at-a-time selection. One-record camera capture remains single-file.
+- Milestone 3 task 1 is complete. `docs/CATALOG_EVALUATION.md` and ADR-0009
+  select MusicBrainz as the primary canonical catalog (release group = album,
+  release = edition), with Discogs deferred as an optional pressing cross-check
+  requiring a fresh terms/attribution/caching review.
+- Milestone 3 task 2 is complete. `packages/catalog` provides the catalog port
+  and MusicBrainz adapter with a meaningful User-Agent, serialized 1 req/s
+  access, 429/503 retry, and 24-hour in-memory cache. The review page exposes a
+  user-triggered catalog search and persists selected release-group/release
+  MBIDs plus source/fetch provenance. Migration 010 adds richer release fields,
+  namespaced `catalog_references`, and `library_copies`; repeated owned
+  confirmations reuse one library item but create separate physical copies
+  (ADR-0010).
 - `npm run check` passes in WSL on Node 22.23.2: formatting, ESLint,
-  typecheck, and 48/48 unit tests.
-- `npm run build` passes: the Next.js web app (23 routes, +2 this session:
-  `/account/usage`, `/api/v1/usage`), worker, and eval package compile
-  cleanly.
-- `npm run test:integration` passes in WSL/Docker: database (10, +1 this
-  session covering batch/account cost aggregation), storage (1), queue (1),
-  and worker (6) suites, 18/18 total. One worker-suite run hit a transient
-  Postgres deadlock (`40P01`) on an unrelated pre-existing retry test under
-  concurrent load; it passed cleanly on immediate re-run and in isolation,
-  so it was not investigated further as a regression.
+  typecheck, and 53/53 unit tests.
+- `npm run build` passes: the Next.js web app (24 routes, including the new
+  `/api/v1/catalog/releases` route), worker, and eval package compile cleanly.
+- `npm run test:integration` passes in WSL/Docker: database (12), storage (1),
+  queue (1), and worker (6) suites, 20/20 total. Confirmation coverage includes
+  catalog provenance, wishlist conversion, and two physical copies sharing one
+  user/release library item.
 - `npm run test:e2e` passes in WSL: 5/5 Playwright tests against a
   production build with the synthetic worker.
 - Manually verified `/account/usage` and `/account` in a running dev server
@@ -69,11 +90,10 @@ the log.
   (a `fullPage` screenshot made it look clipped, but scrolling to the
   bottom shows `content-page`'s existing 100px bottom padding clears it).
 - Docker Compose services (postgres, redis, minio) are running and healthy.
-- This session's normalization-pipeline commit (`43de522`) and the two
-  commits before it (`a1ac19d`, `dd349a1`) are all pushed to
-  `origin/main`. The batch/provider-cost dashboard work described above is
-  uncommitted as of this write-up; the maintainer should review before
-  commit.
+- Milestone 2's original work is committed through `a248eb9`; the subsequent
+  audit fixes, MusicBrainz catalog integration, physical-copy model, related
+  docs/tests, and the hydration-warning adjustment are committed as `c8f99cd`
+  and pushed to `origin/main`.
 - The maintainer's private dataset folder contains 52 JPEG cover photos plus a
   draft `manifest.json` and `LABELING_PROMPT.md`. These files remain outside
   the repository and still need app-assisted labels and maintainer verification.
@@ -92,18 +112,21 @@ the log.
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Milestone 3: evaluate a catalog source for canonical IDs, search,
-deduplication, and pressing detail; add richer collection metadata and
-duplicate-copy modeling; improve search/filter/export and
-wishlist-to-owned conversion (`docs/ROADMAP.md`). This is a research-first
-milestone — start by evaluating catalog source candidates (e.g. Discogs,
-MusicBrainz) for licensing terms, rate limits, and data quality before
-committing to a schema/integration design; likely worth an ADR once a
-source is chosen, since it's a new external provider dependency. The
-private AI matrix remains deferred until public rollout or model/cost
-optimization.
+**Task:** Continue Milestone 3 task 3: improve collection/wishlist
+search/filter/export and complete the explicit wishlist-to-owned management
+flow. The confirmation path already converts wishlist items atomically and now
+creates physical copies; general library PATCH/DELETE/copy-management endpoints
+remain planned. Keep the private AI matrix deferred until public rollout or
+model/cost optimization.
 
 Recently completed, for context:
+
+- Milestone 2 audit and Milestone 3 provider evaluation (2026-08-31): fixed
+  server-side batch-size enforcement, correct batch ingestion provenance,
+  terminal-batch retry polling, legacy pre-normalization image retries, and
+  versioned-model pricing. Selected MusicBrainz over Discogs as the primary
+  canonical source and recorded the lookup/deduplication rules and adapter
+  requirements in ADR-0009 and `docs/CATALOG_EVALUATION.md`.
 
 - Batch and provider-cost dashboards (this session, ADR-0008,
   `docs/API.md`): shared `UsageCostSummarySchema` in
@@ -185,6 +208,10 @@ Recently completed, for context:
 
 ## Known gaps and risks
 
+- MusicBrainz search has fixture-backed adapter coverage but has not yet been
+  exercised against the 20-case metadata acceptance set in
+  `docs/CATALOG_EVALUATION.md`. Search remains user-triggered and reviewable;
+  there is no automatic enrichment or cover-art fetching.
 - No AI eval baseline; broad model/prompt optimization is not yet measurable.
 - A historical live check on one byte-identical 4000x3000 cover photo produced
   three materially different Terra outcomes (no candidate, Cherubs / _Heroin
@@ -230,6 +257,49 @@ Recently completed, for context:
 
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
+
+- **2026-08-31 - Codex.** At the maintainer's request, committed and pushed the
+  validated accumulated audit and Milestone 3 tasks 1-2 work as `c8f99cd`
+  (`add MusicBrainz catalog integration`), including the existing one-line
+  `suppressHydrationWarning` layout adjustment. Refreshed workspace links with
+  `npm install`; `npm run check` passes in WSL (53/53 unit tests). The Windows
+  Node runtime could not run the check due its restricted home-directory path.
+
+- **2026-08-31 - Codex.** Enabled multi-file selection on the camera/fallback
+  file inputs while in Multiple records mode; the dedicated upload inputs
+  already supported multi-select. Kept One record camera capture single-file
+  and added an e2e assertion covering the formerly missing `multiple`
+  attribute. Prettier, focused ESLint, and typecheck pass in WSL/Node 22.23.2;
+  the targeted batch-upload Playwright test passes (1/1).
+
+- **2026-08-31 - Codex.** Completed Milestone 3 task 2. Added the catalog port,
+  rate-limited/cached/retrying MusicBrainz adapter, review-page catalog search,
+  richer release contracts/persistence, namespaced catalog references, and the
+  separate physical-copy model (migration 010, ADR-0010). Confirmation remains
+  atomic and idempotent: wishlist creates no copy, wishlist-to-owned creates the
+  first copy, and a later scan of the same MBID creates another copy beneath the
+  same library item. Added contract, adapter, and database integration coverage.
+  Verified `npm run check` (53/53 unit tests), `npm run test:integration`
+  (20/20), `npm run build` (24 web routes plus worker/evals), and
+  `npm run test:e2e` (5/5) in WSL/Node 22.23.2.
+
+- **2026-08-31 - Codex.** Independently reviewed Milestone 2 against the
+  roadmap, ADRs, implementation, and full test stack. Confirmed the main four
+  slices, then fixed five uncovered edge cases: transactional server enforcement
+  of the 20-scan batch cap (with idempotent replay), `batch_upload` provenance,
+  polling restart after retrying an all-terminal batch, original-object fallback
+  for images completed before migration 009, and longest-prefix pricing for
+  versioned Terra/Luna model IDs. Corrected the stale retry state in
+  `docs/DOMAIN.md`, restored production `next-env.d.ts` imports via the build,
+  and ignored local `.claude` settings so checks are reproducible. Completed
+  Milestone 3 task 1 by comparing current official MusicBrainz and Discogs
+  documentation, selecting MusicBrainz in ADR-0009, and documenting lookup,
+  deduplication, rate-limit, licensing, provenance, and adapter acceptance
+  requirements. Verified WSL/Node 22.23.2: `npm run check` (49/49 unit tests),
+  `npm run test:integration` (20/20), `npm run test:e2e` (5/5), and
+  `npm run build`. Changes are uncommitted. A concurrent
+  `apps/web/src/app/layout.tsx` edit was preserved and not reviewed as part of
+  this work.
 
 - **2026-08-30 - Claude (fourth session).** Committed and pushed the prior
   session's thumbnail/normalization work (`43de522`, on top of already-pushed

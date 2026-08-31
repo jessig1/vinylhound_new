@@ -11,6 +11,9 @@ import {
   ConfirmScanResponseSchema,
   GetScanResponseSchema,
   RetryScanResponseSchema,
+  SearchCatalogReleasesResponseSchema,
+  type CatalogReference,
+  type CatalogReleaseCandidate,
   type GetScanResponse,
   type ScanCandidateResult,
 } from "@vinylhound/contracts";
@@ -24,8 +27,18 @@ type Draft = {
   label: string;
   catalogNumber: string;
   barcode: string;
+  releaseDate: string;
+  country: string;
+  format: string;
+  packaging: string;
+  releaseStatus: string;
   list: "collection" | "wishlist";
   notes: string;
+  mediaCondition: string;
+  sleeveCondition: string;
+  location: string;
+  copyNotes: string;
+  acquiredAt: string;
 };
 
 const emptyDraft: Draft = {
@@ -35,8 +48,18 @@ const emptyDraft: Draft = {
   label: "",
   catalogNumber: "",
   barcode: "",
+  releaseDate: "",
+  country: "",
+  format: "",
+  packaging: "",
+  releaseStatus: "",
   list: "collection",
   notes: "",
+  mediaCondition: "",
+  sleeveCondition: "",
+  location: "",
+  copyNotes: "",
+  acquiredAt: "",
 };
 
 export default function ScanResultPage() {
@@ -53,6 +76,13 @@ export default function ScanResultPage() {
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
+  const [catalogReference, setCatalogReference] =
+    useState<CatalogReference | null>(null);
+  const [catalogResults, setCatalogResults] = useState<
+    CatalogReleaseCandidate[]
+  >([]);
+  const [catalogPending, setCatalogPending] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +140,8 @@ export default function ScanResultPage() {
       notes: current.notes,
     }));
     setSubmitError(null);
+    setCatalogReference(null);
+    setCatalogResults([]);
   }
 
   function enterManually() {
@@ -120,6 +152,63 @@ export default function ScanResultPage() {
       notes: current.notes,
     }));
     setSubmitError(null);
+    setCatalogReference(null);
+    setCatalogResults([]);
+  }
+
+  function editDraft(patch: Partial<Draft>, preserveCatalog = false) {
+    setDraft((current) => ({ ...current, ...patch }));
+    if (!preserveCatalog) setCatalogReference(null);
+  }
+
+  async function searchCatalog() {
+    if (!draft.artist.trim() || !draft.title.trim() || catalogPending) return;
+    setCatalogPending(true);
+    setCatalogError(null);
+    try {
+      const query = new URLSearchParams({
+        artist: draft.artist,
+        title: draft.title,
+      });
+      const response = await fetch(`/api/v1/catalog/releases?${query}`, {
+        cache: "no-store",
+      });
+      const body = (await response.json()) as { error?: { message?: string } };
+      if (!response.ok) {
+        throw new Error(body.error?.message ?? "Catalog search failed.");
+      }
+      setCatalogResults(
+        SearchCatalogReleasesResponseSchema.parse(body).results,
+      );
+    } catch (caught) {
+      setCatalogError(
+        caught instanceof Error ? caught.message : "Catalog search failed.",
+      );
+    } finally {
+      setCatalogPending(false);
+    }
+  }
+
+  function selectCatalogRelease(candidate: CatalogReleaseCandidate) {
+    const firstLabel = candidate.labels[0];
+    editDraft(
+      {
+        artist: candidate.artist,
+        title: candidate.title,
+        releaseYear: candidate.releaseDate?.slice(0, 4) ?? "",
+        releaseDate: candidate.releaseDate ?? "",
+        country: candidate.country ?? "",
+        label: firstLabel?.name ?? "",
+        catalogNumber: firstLabel?.catalogNumber ?? "",
+        barcode: candidate.barcode ?? "",
+        format: candidate.formats.join(", "),
+        packaging: candidate.packaging ?? "",
+        releaseStatus: candidate.status ?? "",
+      },
+      true,
+    );
+    setCatalogReference(candidate.reference);
+    setCatalogError(null);
   }
 
   async function confirm(event: FormEvent<HTMLFormElement>) {
@@ -136,8 +225,24 @@ export default function ScanResultPage() {
         label: optional(draft.label),
         catalogNumber: optional(draft.catalogNumber),
         barcode: optional(draft.barcode),
+        releaseDate: optional(draft.releaseDate),
+        country: optional(draft.country),
+        format: optional(draft.format),
+        packaging: optional(draft.packaging),
+        releaseStatus: optional(draft.releaseStatus),
+        catalogReference,
         list: draft.list,
         notes: optional(draft.notes),
+        copy:
+          draft.list === "collection"
+            ? {
+                mediaCondition: optional(draft.mediaCondition),
+                sleeveCondition: optional(draft.sleeveCondition),
+                location: optional(draft.location),
+                notes: optional(draft.copyNotes),
+                acquiredAt: optional(draft.acquiredAt),
+              }
+            : null,
       });
       const response = await fetch(`/api/v1/scans/${scan.scanId}/confirm`, {
         method: "POST",
@@ -261,9 +366,12 @@ export default function ScanResultPage() {
           <h1>{confirmation.release.title}</h1>
           <p className="result-artist">{confirmation.release.artist}</p>
           <p>
-            Added to your {confirmation.libraryItem.list}. The reviewed details,
-            selected candidate, and model audit trail remain linked to this
-            scan.
+            Added to your {confirmation.libraryItem.list}.
+            {confirmation.libraryItem.copy
+              ? " This physical copy is tracked separately from the release."
+              : ""}{" "}
+            The reviewed details, selected candidate, and model audit trail
+            remain linked to this scan.
           </p>
           <div className="button-row">
             <Link
@@ -463,14 +571,58 @@ export default function ScanResultPage() {
               <p className="section-kicker">Your confirmation</p>
               <h2>Release details</h2>
             </div>
+            <button
+              className="text-button"
+              disabled={catalogPending || !draft.artist || !draft.title}
+              onClick={searchCatalog}
+              type="button"
+            >
+              {catalogPending ? "Searchingâ€¦" : "Search MusicBrainz"}
+            </button>
           </div>
+          {catalogError ? (
+            <p className="form-error" role="alert">
+              {catalogError}
+            </p>
+          ) : null}
+          {catalogResults.length ? (
+            <div className="candidate-list" aria-label="Catalog releases">
+              {catalogResults.map((candidate) => (
+                <button
+                  className={`candidate-card${
+                    catalogReference?.releaseId ===
+                    candidate.reference.releaseId
+                      ? " is-selected"
+                      : ""
+                  }`}
+                  key={candidate.reference.releaseId}
+                  onClick={() => selectCatalogRelease(candidate)}
+                  type="button"
+                >
+                  <span>
+                    <strong>{candidate.title}</strong>
+                    <small>
+                      {[
+                        candidate.artist,
+                        candidate.releaseDate,
+                        candidate.country,
+                      ]
+                        .filter(Boolean)
+                        .join(" Â· ")}
+                    </small>
+                  </span>
+                  <span className="candidate-card__confidence">
+                    {candidate.score}%
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div className="review-fields">
             <label className="field field--wide">
               <span>Artist</span>
               <input
-                onChange={(event) =>
-                  setDraft({ ...draft, artist: event.target.value })
-                }
+                onChange={(event) => editDraft({ artist: event.target.value })}
                 required
                 value={draft.artist}
               />
@@ -478,9 +630,7 @@ export default function ScanResultPage() {
             <label className="field field--wide">
               <span>Album title</span>
               <input
-                onChange={(event) =>
-                  setDraft({ ...draft, title: event.target.value })
-                }
+                onChange={(event) => editDraft({ title: event.target.value })}
                 required
                 value={draft.title}
               />
@@ -492,7 +642,7 @@ export default function ScanResultPage() {
                 max="2200"
                 min="1900"
                 onChange={(event) =>
-                  setDraft({ ...draft, releaseYear: event.target.value })
+                  editDraft({ releaseYear: event.target.value })
                 }
                 type="number"
                 value={draft.releaseYear}
@@ -501,9 +651,7 @@ export default function ScanResultPage() {
             <label className="field">
               <span>Label</span>
               <input
-                onChange={(event) =>
-                  setDraft({ ...draft, label: event.target.value })
-                }
+                onChange={(event) => editDraft({ label: event.target.value })}
                 value={draft.label}
               />
             </label>
@@ -511,7 +659,7 @@ export default function ScanResultPage() {
               <span>Catalog number</span>
               <input
                 onChange={(event) =>
-                  setDraft({ ...draft, catalogNumber: event.target.value })
+                  editDraft({ catalogNumber: event.target.value })
                 }
                 value={draft.catalogNumber}
               />
@@ -520,10 +668,50 @@ export default function ScanResultPage() {
               <span>Barcode</span>
               <input
                 inputMode="numeric"
-                onChange={(event) =>
-                  setDraft({ ...draft, barcode: event.target.value })
-                }
+                onChange={(event) => editDraft({ barcode: event.target.value })}
                 value={draft.barcode}
+              />
+            </label>
+            <label className="field">
+              <span>Release date</span>
+              <input
+                onChange={(event) =>
+                  editDraft({ releaseDate: event.target.value })
+                }
+                placeholder="YYYY, YYYY-MM, or YYYY-MM-DD"
+                value={draft.releaseDate}
+              />
+            </label>
+            <label className="field">
+              <span>Country</span>
+              <input
+                onChange={(event) => editDraft({ country: event.target.value })}
+                value={draft.country}
+              />
+            </label>
+            <label className="field">
+              <span>Format</span>
+              <input
+                onChange={(event) => editDraft({ format: event.target.value })}
+                value={draft.format}
+              />
+            </label>
+            <label className="field">
+              <span>Packaging</span>
+              <input
+                onChange={(event) =>
+                  editDraft({ packaging: event.target.value })
+                }
+                value={draft.packaging}
+              />
+            </label>
+            <label className="field">
+              <span>Release status</span>
+              <input
+                onChange={(event) =>
+                  editDraft({ releaseStatus: event.target.value })
+                }
+                value={draft.releaseStatus}
               />
             </label>
           </div>
@@ -534,7 +722,7 @@ export default function ScanResultPage() {
               <input
                 checked={draft.list === "collection"}
                 name="list"
-                onChange={() => setDraft({ ...draft, list: "collection" })}
+                onChange={() => editDraft({ list: "collection" }, true)}
                 type="radio"
               />
               <Icon name="collection" size={20} />
@@ -547,7 +735,7 @@ export default function ScanResultPage() {
               <input
                 checked={draft.list === "wishlist"}
                 name="list"
-                onChange={() => setDraft({ ...draft, list: "wishlist" })}
+                onChange={() => editDraft({ list: "wishlist" }, true)}
                 type="radio"
               />
               <Icon name="heart" size={20} />
@@ -558,12 +746,65 @@ export default function ScanResultPage() {
             </label>
           </fieldset>
 
+          {draft.list === "collection" ? (
+            <div className="review-fields">
+              <label className="field">
+                <span>Media condition</span>
+                <ConditionSelect
+                  onChange={(value) =>
+                    editDraft({ mediaCondition: value }, true)
+                  }
+                  value={draft.mediaCondition}
+                />
+              </label>
+              <label className="field">
+                <span>Sleeve condition</span>
+                <ConditionSelect
+                  onChange={(value) =>
+                    editDraft({ sleeveCondition: value }, true)
+                  }
+                  value={draft.sleeveCondition}
+                />
+              </label>
+              <label className="field">
+                <span>Storage location</span>
+                <input
+                  onChange={(event) =>
+                    editDraft({ location: event.target.value }, true)
+                  }
+                  value={draft.location}
+                />
+              </label>
+              <label className="field">
+                <span>Acquired on</span>
+                <input
+                  onChange={(event) =>
+                    editDraft({ acquiredAt: event.target.value }, true)
+                  }
+                  type="date"
+                  value={draft.acquiredAt}
+                />
+              </label>
+              <label className="field field--wide">
+                <span>Copy notes</span>
+                <textarea
+                  maxLength={2_000}
+                  onChange={(event) =>
+                    editDraft({ copyNotes: event.target.value }, true)
+                  }
+                  rows={2}
+                  value={draft.copyNotes}
+                />
+              </label>
+            </div>
+          ) : null}
+
           <label className="field field--wide">
             <span>Notes (optional)</span>
             <textarea
               maxLength={2_000}
               onChange={(event) =>
-                setDraft({ ...draft, notes: event.target.value })
+                editDraft({ notes: event.target.value }, true)
               }
               rows={3}
               value={draft.notes}
@@ -622,6 +863,28 @@ function CandidateEvidence({ candidate }: { candidate?: ScanCandidateResult }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ConditionSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select onChange={(event) => onChange(event.target.value)} value={value}>
+      <option value="">Not graded</option>
+      <option value="mint">Mint</option>
+      <option value="near_mint">Near Mint</option>
+      <option value="very_good_plus">Very Good Plus</option>
+      <option value="very_good">Very Good</option>
+      <option value="good_plus">Good Plus</option>
+      <option value="good">Good</option>
+      <option value="fair">Fair</option>
+      <option value="poor">Poor</option>
+    </select>
   );
 }
 
@@ -749,8 +1012,18 @@ function draftFromCandidate(candidate: ScanCandidateResult): Draft {
     label: candidate.label ?? "",
     catalogNumber: candidate.catalogNumber ?? "",
     barcode: candidate.barcode ?? "",
+    releaseDate: candidate.releaseYear?.toString() ?? "",
+    country: "",
+    format: "",
+    packaging: "",
+    releaseStatus: "",
     list: "collection",
     notes: "",
+    mediaCondition: "",
+    sleeveCondition: "",
+    location: "",
+    copyNotes: "",
+    acquiredAt: "",
   };
 }
 
