@@ -6,11 +6,11 @@ the evidence required to justify each step between them.
 
 ## Status legend
 
-| Label | Meaning |
-| --- | --- |
-| **Current** | Implemented in the repository and reflected in application code, migrations, or accepted ADRs. |
-| **Proposed** | A concrete target for review, not an implemented or accepted infrastructure decision. |
-| **Trigger** | Measurable evidence that would justify adopting the proposed change. |
+| Label        | Meaning                                                                                        |
+| ------------ | ---------------------------------------------------------------------------------------------- |
+| **Current**  | Implemented in the repository and reflected in application code, migrations, or accepted ADRs. |
+| **Proposed** | A concrete target for review, not an implemented or accepted infrastructure decision.          |
+| **Trigger**  | Measurable evidence that would justify adopting the proposed change.                           |
 
 ## Reading path
 
@@ -32,15 +32,15 @@ authoritative detailed references.
 
 ## Architecture at a glance
 
-| Concern | Current | Proposed direction |
-| --- | --- | --- |
-| Application shape | TypeScript modular monolith with separate Next.js web and Node.js worker processes | Preserve the two-process boundary; scale web and worker independently before considering service extraction |
-| Source of truth | PostgreSQL | Managed, encrypted PostgreSQL with backups and restore testing |
-| Asynchronous work | Transactional outbox to BullMQ on Redis | Managed Redis initially; reconsider transport only if reliability or operating cost data supports a change |
-| Image storage | S3-compatible MinIO locally; original, analysis, and thumbnail objects | Private S3 with lifecycle, retention, deletion, and encryption controls |
-| Identification | OpenAI Responses API plus user-triggered MusicBrainz vinyl search behind provider ports | Add scan-fingerprint reuse and a conservative album-likelihood gate after the MVP is operating |
-| Identity | One configured development user; persisted rows are already user-scoped | Federated identity plus an internal-user mapping, authorization tests, export, and deletion |
-| Operations | Local Docker Compose and GitHub Actions validation | Container runtime, infrastructure as code, observability, budgets, quotas, and tested recovery |
+| Concern           | Current                                                                                 | Proposed direction                                                                                          |
+| ----------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Application shape | TypeScript modular monolith with separate Next.js web and Node.js worker processes      | Preserve the two-process boundary; scale web and worker independently before considering service extraction |
+| Source of truth   | PostgreSQL                                                                              | Managed, encrypted PostgreSQL with backups and restore testing                                              |
+| Asynchronous work | Transactional outbox to BullMQ on Redis                                                 | Managed Redis initially; reconsider transport only if reliability or operating cost data supports a change  |
+| Image storage     | S3-compatible MinIO locally; original, analysis, and thumbnail objects                  | Private S3 with lifecycle, retention, deletion, and encryption controls                                     |
+| Identification    | OpenAI Responses API plus user-triggered MusicBrainz vinyl search behind provider ports | Add scan-fingerprint reuse and a conservative album-likelihood gate after the MVP is operating              |
+| Identity          | One configured development user; persisted rows are already user-scoped                 | Federated identity plus an internal-user mapping, authorization tests, export, and deletion                 |
+| Operations        | Local Docker Compose and GitHub Actions validation                                      | Container runtime, infrastructure as code, observability, budgets, quotas, and tested recovery              |
 
 ## Architectural position
 

@@ -68,17 +68,17 @@ already based on an internal user ID.
 
 ## Production responsibilities
 
-| Area | Proposed control |
-| --- | --- |
-| Delivery | Build immutable web and worker images, scan them, publish to ECR, deploy through reviewed infrastructure and application workflows, and retain a known-good rollback image |
-| Configuration | Keep non-secret configuration in task definitions and secrets in Secrets Manager; use separate roles for web and worker |
-| Database | Automated backups, point-in-time recovery, encryption, restricted security groups, migration job, and a scheduled restore exercise |
-| Redis | Encryption in transit/at rest, private access, bounded BullMQ retention, alarms for memory, failures, and queue age |
-| Object storage | Block public access, encryption, version/lifecycle policy, upload limits, malware/content controls as justified, and deletion reconciliation |
-| AI provider | Dedicated project/key, per-user and global concurrency, timeout/backoff, spend limits, usage alarms, and a circuit-breaker or kill switch |
+| Area             | Proposed control                                                                                                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Delivery         | Build immutable web and worker images, scan them, publish to ECR, deploy through reviewed infrastructure and application workflows, and retain a known-good rollback image     |
+| Configuration    | Keep non-secret configuration in task definitions and secrets in Secrets Manager; use separate roles for web and worker                                                        |
+| Database         | Automated backups, point-in-time recovery, encryption, restricted security groups, migration job, and a scheduled restore exercise                                             |
+| Redis            | Encryption in transit/at rest, private access, bounded BullMQ retention, alarms for memory, failures, and queue age                                                            |
+| Object storage   | Block public access, encryption, version/lifecycle policy, upload limits, malware/content controls as justified, and deletion reconciliation                                   |
+| AI provider      | Dedicated project/key, per-user and global concurrency, timeout/backoff, spend limits, usage alarms, and a circuit-breaker or kill switch                                      |
 | Catalog provider | Preserve the MusicBrainz one-request-per-second limiter, meaningful User-Agent, bounded cache, provenance, and user-triggered review flow; recheck terms before commercial use |
-| Observability | Structured logs, request/scan/job correlation, latency and error metrics, queue age, outbox backlog, scan outcomes, token/cost totals, and alerts tied to user impact |
-| Edge | TLS, WAF/rate limits, request-size boundaries, security headers, and origin access restricted to the edge path |
+| Observability    | Structured logs, request/scan/job correlation, latency and error metrics, queue age, outbox backlog, scan outcomes, token/cost totals, and alerts tied to user impact          |
+| Edge             | TLS, WAF/rate limits, request-size boundaries, security headers, and origin access restricted to the edge path                                                                 |
 
 ## Scaling model
 

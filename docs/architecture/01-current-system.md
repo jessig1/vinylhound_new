@@ -107,15 +107,15 @@ or centralized observability in the current implementation.
 
 ## Trust boundaries
 
-| Boundary | Current control |
-| --- | --- |
-| Browser to web | The browser never receives provider keys or unrestricted storage credentials; the development identity is resolved server-side. |
-| Browser to object storage | Object keys are generated server-side and uploads use short-lived, object-scoped signed instructions. |
-| Upload to trusted image | Completion rereads the object, checks declared and decoded type, size, dimensions, and checksum, then derives bounded JPEG copies. |
-| Database to queue | Scan state and an outbox message commit atomically; deterministic BullMQ job IDs make publication safe to retry. |
-| Worker to AI provider | The worker reads authoritative objects, sends request-scoped Base64 data URLs, validates structured output, and persists audit metadata. |
-| Web to catalog provider | MusicBrainz search is user-triggered, server-side, limited to one request per second, retried only for transient responses, cached for 24 hours, and persisted only after review. |
-| Candidate to library | Domain review policy and explicit user confirmation prevent AI output from becoming catalog truth automatically. |
+| Boundary                  | Current control                                                                                                                                                                   |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser to web            | The browser never receives provider keys or unrestricted storage credentials; the development identity is resolved server-side.                                                   |
+| Browser to object storage | Object keys are generated server-side and uploads use short-lived, object-scoped signed instructions.                                                                             |
+| Upload to trusted image   | Completion rereads the object, checks declared and decoded type, size, dimensions, and checksum, then derives bounded JPEG copies.                                                |
+| Database to queue         | Scan state and an outbox message commit atomically; deterministic BullMQ job IDs make publication safe to retry.                                                                  |
+| Worker to AI provider     | The worker reads authoritative objects, sends request-scoped Base64 data URLs, validates structured output, and persists audit metadata.                                          |
+| Web to catalog provider   | MusicBrainz search is user-triggered, server-side, limited to one request per second, retried only for transient responses, cached for 24 hours, and persisted only after review. |
+| Candidate to library      | Domain review policy and explicit user confirmation prevent AI output from becoming catalog truth automatically.                                                                  |
 
 ## Current quality attributes
 
