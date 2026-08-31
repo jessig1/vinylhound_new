@@ -279,8 +279,9 @@ decided.
   Updated the root README and `docs/ARCHITECTURE.md` to link the package. The
   AWS view is explicitly a proposal requiring a future ADR; no runtime
   architecture or provider choice changed. Verified Markdown fence balance
-  and local package links; application tests were not rerun for this
-  documentation-only change.
+  and local package links. GitHub Actions run 10 passed `npm run check` and
+  `npm run build` after the package was formatted with the repository's
+  pinned Prettier version.
 
 - **2026-08-31 - Codex.** At the maintainer's request, committed and pushed the
   validated accumulated audit and Milestone 3 tasks 1-2 work as `c8f99cd`
