@@ -77,7 +77,7 @@ npm run build
 ## Documentation
 
 - [Product definition](docs/PRODUCT.md)
-- [Architecture](docs/ARCHITECTURE.md)
+- [Architecture summary](docs/ARCHITECTURE.md) and [reviewer diagram package](docs/architecture/README.md)
 - [Domain model](docs/DOMAIN.md)
 - [API and job contracts](docs/API.md)
 - [OpenAI integration](docs/OPENAI_INTEGRATION.md)

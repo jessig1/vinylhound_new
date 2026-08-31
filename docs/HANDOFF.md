@@ -15,6 +15,13 @@ the log.
 
 ## Current state — verified 2026-08-31
 
+- A reviewer-oriented current-to-target architecture package now lives in
+  `docs/architecture/`. It documents the implemented system, including
+  MusicBrainz catalog enrichment and physical-copy modeling; labels an AWS
+  production deployment as proposed rather than implemented; and defines
+  trigger-driven phases for production hardening and post-release scan
+  recognition reuse. No runtime or accepted provider decision changed.
+
 - Milestone 1 (single-image vertical slice) is complete. The maintainer accepted
   Sol + `high` + prompt-v2 artist/title quality for the early build; the formal
   private AI eval baseline is deferred until public rollout or model/cost
@@ -257,6 +264,23 @@ Recently completed, for context:
 
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
+
+- **2026-08-31 - Codex.** Added a six-page reviewer-oriented architecture
+  package under `docs/architecture/`: landing page, current C4-style context/
+  container/module/deployment views, scan sequence and state diagrams, current
+  ERD and invariants, a proposed AWS production deployment, and a trigger-driven
+  current-to-target evolution plan. Reconciled the package with the latest
+  Milestone 3 implementation: MusicBrainz remains the accepted canonical
+  catalog, while `catalog_references`, `library_copies`, and their provenance/
+  ownership boundaries are shown as current. The evolution plan separately
+  captures the maintainer's post-release scan-recognition idea: conservative
+  non-album filtering, exact and perceptual fingerprint reuse, a versioned
+  shared scan-match catalog, AI fallback, and poisoning/privacy controls.
+  Updated the root README and `docs/ARCHITECTURE.md` to link the package. The
+  AWS view is explicitly a proposal requiring a future ADR; no runtime
+  architecture or provider choice changed. Verified Markdown fence balance
+  and local package links; application tests were not rerun for this
+  documentation-only change.
 
 - **2026-08-31 - Codex.** At the maintainer's request, committed and pushed the
   validated accumulated audit and Milestone 3 tasks 1-2 work as `c8f99cd`
