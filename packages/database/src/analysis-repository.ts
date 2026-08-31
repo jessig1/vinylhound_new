@@ -10,7 +10,10 @@ import type {
 
 import type { Database } from "./database.js";
 import { getScanConfirmationForUser } from "./confirmation-repository.js";
-import { DatabaseCommandError } from "./scan-repository.js";
+import {
+  DatabaseCommandError,
+  deriveImageObjectKey,
+} from "./scan-repository.js";
 import { imageAssets, scanAttempts, scanCandidates, scans } from "./schema.js";
 
 export interface PrepareScanAnalysisInput {
@@ -31,7 +34,7 @@ export type PrepareScanAnalysisResult =
         objectKey: string;
         viewType:
           "front" | "back" | "spine" | "label" | "barcode" | "runout" | "other";
-        mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+        mimeType: "image/jpeg";
         sizeBytes: number;
       }>;
     };
@@ -82,6 +85,7 @@ export async function prepareScanAnalysis(
         viewType: imageAssets.viewType,
         mimeType: imageAssets.mimeType,
         sizeBytes: imageAssets.sizeBytes,
+        analysisSizeBytes: imageAssets.analysisSizeBytes,
         completedAt: imageAssets.completedAt,
       })
       .from(imageAssets)
@@ -165,10 +169,13 @@ export async function prepareScanAnalysis(
       attemptId,
       images: requestedImages.map((image) => ({
         id: image!.id,
-        objectKey: image!.objectKey,
+        objectKey: deriveImageObjectKey(
+          { userId: scan.userId, scanId: scan.id, imageId: image!.id },
+          "analysis",
+        ),
         viewType: image!.viewType,
-        mimeType: image!.mimeType,
-        sizeBytes: image!.sizeBytes,
+        mimeType: "image/jpeg" as const,
+        sizeBytes: image!.analysisSizeBytes!,
       })),
     };
   });

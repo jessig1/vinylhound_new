@@ -145,6 +145,10 @@ describe("initial scan persistence schema", () => {
       completedAt: new Date(),
       width: 800,
       height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
     });
 
     await database.db.insert(scanAttempts).values({
@@ -195,6 +199,10 @@ describe("initial scan persistence schema", () => {
       imageId: upload.record.id,
       width: 800,
       height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
     });
 
     const idempotencyKey = `submit-${randomUUID()}`;
@@ -565,6 +573,10 @@ describe("batch grouping and scan lifecycle", () => {
       imageId: upload.record.id,
       width: 800,
       height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
     });
 
     await expect(
@@ -625,6 +637,10 @@ describe("batch grouping and scan lifecycle", () => {
       imageId: upload.record.id,
       width: 800,
       height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
     });
     const submitted = await submitScan(database.db, {
       userId,

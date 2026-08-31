@@ -219,6 +219,10 @@ export const imageAssets = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     width: integer("width"),
     height: integer("height"),
+    analysisSizeBytes: bigint("analysis_size_bytes", { mode: "number" }),
+    analysisWidth: integer("analysis_width"),
+    analysisHeight: integer("analysis_height"),
+    thumbnailSizeBytes: bigint("thumbnail_size_bytes", { mode: "number" }),
   },
   (table) => [
     uniqueIndex("image_assets_object_key_unique").on(table.objectKey),
@@ -254,6 +258,22 @@ export const imageAssets = pgTable(
           ${table.completedAt} is not null
           and ${table.width} > 0
           and ${table.height} > 0
+        )`,
+    ),
+    check(
+      "image_assets_analysis_check",
+      sql`(
+          ${table.completedAt} is null
+          and ${table.analysisSizeBytes} is null
+          and ${table.analysisWidth} is null
+          and ${table.analysisHeight} is null
+          and ${table.thumbnailSizeBytes} is null
+        ) or (
+          ${table.completedAt} is not null
+          and ${table.analysisSizeBytes} > 0
+          and ${table.analysisWidth} > 0
+          and ${table.analysisHeight} > 0
+          and ${table.thumbnailSizeBytes} > 0
         )`,
     ),
   ],

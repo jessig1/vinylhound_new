@@ -144,7 +144,7 @@ returns the stored confirmation so a refresh or lost response can recover safely
 - Accept JPEG, PNG, WebP, and non-animated GIF at the public contract, then decode and normalize accepted assets server-side.
 - Limit each scan to 12 images and enforce per-file/request limits below provider limits.
 - Record a SHA-256 checksum and reject a declared MIME type that disagrees with decoded content.
-- Create thumbnails/previews asynchronously; retain the original according to the configured policy.
+- Derive an analysis copy and a thumbnail synchronously at upload completion; retain the original according to the configured policy.
 
 Exact product limits should be centralized configuration and returned by the create-scan response so clients do not hard-code them.
 
@@ -152,6 +152,15 @@ Upload completion reads the stored object server-side and verifies its actual by
 length, SHA-256 digest, signed `Content-Type`, binary signature, decoded dimensions,
 decoder validity, and frame count. Invalid or animated objects are rejected and
 removed from object storage.
+
+Once validated, the same decoded bytes are resized into a bounded analysis
+copy (JPEG, long edge capped at 2048px) and a UI thumbnail (JPEG, long edge
+capped at 400px), stored alongside the original under sibling object keys
+(`.../analysis`, `.../thumbnail`). Scan analysis reads the analysis copy, not
+the original, so per-request payload size and OpenAI token cost no longer
+scale with the phone camera's native resolution (ADR-0007). The
+`CompleteImageUploadResponse` contract is unchanged; `width`/`height`
+continue to describe the original as uploaded.
 
 The web client derives the declared MIME type from the file's magic bytes rather
 than the browser's extension-based `File.type`, so a misnamed file uploads under

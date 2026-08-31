@@ -30,7 +30,12 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
       records" mode toggle, and `/scans/batch/{batchId}` shows per-item
       status with cancel/retry actions. `/scans` now lists real persisted
       scan history instead of demo data.
-- [ ] Thumbnail/normalization pipeline and worker concurrency limits.
+- [x] Thumbnail/normalization pipeline (ADR-0007): upload completion derives a
+      bounded analysis copy and a UI thumbnail from the validated original;
+      scan analysis reads the analysis copy instead of the full-resolution
+      original. Worker concurrency limits (`ANALYSIS_CONCURRENCY`, wired into
+      BullMQ's `Worker` `concurrency` option) already existed since
+      Milestone 1; the roadmap note describing them as missing was stale.
 - [ ] Batch and provider-cost dashboards.
 
 ## Milestone 3 — catalog enrichment and collection quality
@@ -45,7 +50,6 @@ Exit criterion: one phone photo can become a user-confirmed collection or wishli
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
 - Accessibility and cross-device browser test matrix.
 
-The next recommended task is the third Milestone 2 slice: a thumbnail/
-normalization pipeline and worker concurrency limits, followed by batch and
+The next recommended task is Milestone 2's remaining slice: batch and
 provider-cost dashboards. Keep the formal private AI evaluation as a gate
 before public rollout or model/cost optimization.

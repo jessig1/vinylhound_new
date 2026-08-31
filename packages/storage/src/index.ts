@@ -18,8 +18,15 @@ export interface StoredObject {
   sizeBytes: number;
 }
 
+export interface PutObjectRequest {
+  objectKey: string;
+  bytes: Uint8Array;
+  contentType: string;
+}
+
 export interface ObjectStorage {
   createSignedUpload(request: CreateUploadRequest): Promise<SignedUpload>;
+  putObject(request: PutObjectRequest): Promise<void>;
   readObject(objectKey: string, maxBytes: number): Promise<StoredObject>;
   createSignedReadUrl(
     objectKey: string,
@@ -28,5 +35,6 @@ export interface ObjectStorage {
   deleteObject(objectKey: string): Promise<void>;
 }
 
+export * from "./image-normalization.js";
 export * from "./image-validation.js";
 export * from "./s3-object-storage.js";

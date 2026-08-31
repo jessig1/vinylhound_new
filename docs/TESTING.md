@@ -62,6 +62,11 @@ transient retry, terminal failure, audit persistence, status projection, and
 succeeded redelivery without making OpenAI calls. Unit and CI checks remain
 secret-free and infrastructure-free.
 
+Unit coverage in `packages/storage` verifies `normalizeImage` bounds a large
+source image to the analysis/thumbnail dimension caps and re-encodes to JPEG,
+and leaves an already-small image at its original size rather than enlarging
+it (ADR-0007).
+
 The database integration suite also verifies reviewed confirmation, idempotent
 replay, release normalization, transactional wishlist-to-collection
 conversion, batch grouping (idempotent batch creation, scans linked under one

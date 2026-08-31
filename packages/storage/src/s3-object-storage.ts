@@ -11,6 +11,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type {
   CreateUploadRequest,
   ObjectStorage,
+  PutObjectRequest,
   StoredObject,
 } from "./index.js";
 
@@ -76,6 +77,17 @@ export function createS3ObjectStorage(
           "content-type": request.mimeType,
         },
       };
+    },
+
+    async putObject(request: PutObjectRequest) {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: options.bucket,
+          Key: request.objectKey,
+          Body: request.bytes,
+          ContentType: request.contentType,
+        }),
+      );
     },
 
     async readObject(

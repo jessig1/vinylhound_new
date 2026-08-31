@@ -39,6 +39,15 @@ export async function ensureDevelopmentUser(db: Database, userId: string) {
   await db.insert(users).values({ id: userId }).onConflictDoNothing();
 }
 
+export type ImageObjectVariant = "original" | "analysis" | "thumbnail";
+
+export function deriveImageObjectKey(
+  input: { userId: string; scanId: string; imageId: string },
+  variant: ImageObjectVariant,
+): string {
+  return `${input.userId}/${input.scanId}/${input.imageId}/${variant}`;
+}
+
 export async function createOrGetScan(
   db: Database,
   input: {
@@ -181,7 +190,10 @@ export async function createOrGetImageUpload(
         id: imageId,
         scanId: input.scanId,
         idempotencyKey: input.idempotencyKey,
-        objectKey: `${input.userId}/${input.scanId}/${imageId}/original`,
+        objectKey: deriveImageObjectKey(
+          { userId: input.userId, scanId: input.scanId, imageId },
+          "original",
+        ),
         filename: input.filename,
         viewType,
         mimeType: input.mimeType,
@@ -224,6 +236,10 @@ export async function completeImageUpload(
     imageId: string;
     width: number;
     height: number;
+    analysisSizeBytes: number;
+    analysisWidth: number;
+    analysisHeight: number;
+    thumbnailSizeBytes: number;
   },
 ) {
   const existing = await getImageUploadForUser(db, input);
@@ -237,6 +253,10 @@ export async function completeImageUpload(
       completedAt: new Date(),
       width: input.width,
       height: input.height,
+      analysisSizeBytes: input.analysisSizeBytes,
+      analysisWidth: input.analysisWidth,
+      analysisHeight: input.analysisHeight,
+      thumbnailSizeBytes: input.thumbnailSizeBytes,
     })
     .where(
       and(

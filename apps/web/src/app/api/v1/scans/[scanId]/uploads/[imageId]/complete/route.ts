@@ -4,10 +4,12 @@ import {
 } from "@vinylhound/contracts";
 import {
   completeImageUpload,
+  deriveImageObjectKey,
   getImageUploadForUser,
 } from "@vinylhound/database";
 import {
   ImageValidationError,
+  normalizeImage,
   StoredObjectTooLargeError,
   validateImage,
 } from "@vinylhound/storage";
@@ -46,8 +48,9 @@ export async function POST(
     }
 
     let validated;
+    let stored;
     try {
-      const stored = await context.storage.readObject(
+      stored = await context.storage.readObject(
         image.objectKey,
         MAX_IMAGE_SIZE_BYTES,
       );
@@ -68,10 +71,28 @@ export async function POST(
       throw error;
     }
 
+    const normalized = await normalizeImage(stored.bytes);
+    await Promise.all([
+      context.storage.putObject({
+        objectKey: deriveImageObjectKey(lookup, "analysis"),
+        bytes: normalized.analysis.bytes,
+        contentType: normalized.analysis.mimeType,
+      }),
+      context.storage.putObject({
+        objectKey: deriveImageObjectKey(lookup, "thumbnail"),
+        bytes: normalized.thumbnail.bytes,
+        contentType: normalized.thumbnail.mimeType,
+      }),
+    ]);
+
     const completed = await completeImageUpload(context.database.db, {
       ...lookup,
       width: validated.width,
       height: validated.height,
+      analysisSizeBytes: normalized.analysis.sizeBytes,
+      analysisWidth: normalized.analysis.width,
+      analysisHeight: normalized.analysis.height,
+      thumbnailSizeBytes: normalized.thumbnail.sizeBytes,
     });
     return completedResponse(completed, requestId);
   } catch (error) {

@@ -55,6 +55,9 @@ const storage: ObjectStorage = {
   async createSignedUpload() {
     throw new Error("Not used by scan analysis tests.");
   },
+  async putObject() {
+    throw new Error("Not used by scan analysis tests.");
+  },
   async createSignedReadUrl() {
     throw new Error("Not used by scan analysis tests.");
   },
@@ -131,6 +134,10 @@ async function createQueuedScan(
       imageId: upload.record.id,
       width: 800,
       height: 800,
+      analysisSizeBytes: 3,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 1,
     });
   }
   return submitScan(database.db, {
