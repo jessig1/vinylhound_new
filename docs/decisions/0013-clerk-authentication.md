@@ -136,3 +136,67 @@ requireUserId(request)` instead of `context.config.DEVELOPMENT_USER_ID`;
 - Local development data created under `DEVELOPMENT_USER_ID` is not
   reachable from a real Clerk-authenticated session without a manual data
   migration the maintainer performs deliberately per environment.
+
+## Amendment (2026-08-31): `AUTH_MODE=production` was never actually enforced until real Clerk keys were tested
+
+When this ADR was first implemented, `AUTH_MODE=production` was verified
+only statically — typecheck, lint, and a successful `next build` (which
+does show `ƒ Proxy (Middleware)` in its route table) — because no real
+Clerk account/keys were available in that session. The first time this was
+tested against real `CLERK_SECRET_KEY`/`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+values, a protected route (`/dashboard`) returned `200` instead of
+redirecting to `/sign-in`, revealing that `AUTH_MODE`, `CLERK_SECRET_KEY`,
+and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` were all `undefined` inside
+`apps/web/src/proxy.ts` and `next.config.ts` at runtime, even though `.env`
+had them set correctly.
+
+**Root cause.** `@next/env`'s `loadEnvConfig(dir, dev, log, forceReload)`
+caches its result at module scope after the first call in a process and,
+without `forceReload: true`, every later call silently returns that stale
+cache — it does not re-read any files, even for a different `dir`. Next.js
+calls `loadEnvConfig` internally, scoped to `apps/web` (this repo's Next.js
+project root, which has no `.env` of its own), before `next.config.ts` is
+even evaluated. Both of this repo's own `loadEnvConfig` calls
+(`next.config.ts` and `apps/web/src/server/auth.ts`'s sibling,
+`apps/web/src/server/context.ts`) pass the monorepo-root `.env` path but
+omitted `forceReload`, so they were hitting that internal cache and never
+actually reading the root `.env` — silently. `context.ts`'s config-loading
+path (used by every route/page via `getServerContext()`) happened to still
+work because `DATABASE_URL`, `OPENAI_API_KEY`, and friends were reaching
+`process.env` through a different path in whatever session first tested
+those routes; `AUTH_MODE`/`CLERK_SECRET_KEY` specifically were never
+exercised end-to-end until this amendment, so the gap went unnoticed.
+
+**Fix.** Both `loadEnvConfig` call sites now pass `forceReload: true`
+(4th argument) and the `dev` boolean (2nd argument,
+`process.env.NODE_ENV !== "production"`) explicitly, so the root `.env` is
+always genuinely re-read rather than trusting Next.js's internal cache.
+Separately, `next.config.ts` gained an `env` block
+(`AUTH_MODE`/`CLERK_SECRET_KEY`/`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`) to
+statically inline those values into every bundle Next.js builds, including
+the Edge middleware/proxy bundle — `apps/web/src/proxy.ts` runs in a
+separately-compiled bundle that never executes `next.config.ts`'s
+`loadEnvConfig()` call at request time, so without static inlining via
+`env`, the proxy would still see `undefined` even with the cache fixed
+elsewhere. `CLERK_SECRET_KEY` going through `next.config.ts`'s `env` block
+is safe specifically because Edge middleware bundles run server/edge-side
+only and are never shipped to the browser — this would not be safe for a
+value referenced from client component code.
+
+`apps/web/e2e/env.ts` also gained an explicit `AUTH_MODE=development`/
+`NEXT_PUBLIC_AUTH_MODE=development` override (plus the same
+`forceReload: true` fix on its own two `loadEnvConfig` calls), since the
+e2e suite's `scan-flow.e2e.ts` tests navigate straight to protected routes
+with no sign-in step — before this fix, a local `.env` with
+`AUTH_MODE=production` (set while testing this very fix) silently broke
+the entire e2e suite by redirecting every test to `/sign-in`.
+
+**Verification.** Real Clerk test-mode keys were wired into `.env`, and
+with the fix: `/dashboard` correctly `307`s to
+`/sign-in?redirect_url=%2Fdashboard` with genuine
+`x-clerk-auth-status: signed-out` response headers; `/sign-in` renders
+Clerk's real hosted UI (screenshotted); `/` remains public. `npm run check`
+(69/69), `npm run test:integration` (33/33), and `npm run test:e2e` (5/5,
+now genuinely isolated from the local `.env`'s `AUTH_MODE`) all still pass.
+Signing up as a real test user and confirming JIT provisioning end-to-end
+was not done in this session and remains the next verification step.

@@ -281,15 +281,29 @@ public rollout or model/cost optimization.
 
 Things worth knowing before extending this further:
 
-- Getting a real Clerk account/keys to exercise `AUTH_MODE=production`
-  end-to-end (sign-up → JIT-provisioned `users` row → protected route →
-  sign-out) was not done this session — everything was verified through
-  `AUTH_MODE=development`'s unaffected path (unit/integration/e2e, all
-  passing) plus static/build verification of the production-mode code
-  paths (typecheck, lint, a successful `next build` including the
-  `/sign-in`/`/sign-up` routes). Manually verifying the production path
-  against a real Clerk test instance is a good first step for whoever
-  continues this.
+- **`AUTH_MODE=production` is now verified against real Clerk test-mode
+  keys and actually enforces route protection** — this was not true before
+  this session amended ADR-0013 (see its "Amendment" section for the full
+  root cause): `@next/env`'s `loadEnvConfig` silently returns a stale cache
+  on any call after the first in a process unless `forceReload: true` is
+  passed, so `AUTH_MODE`/`CLERK_SECRET_KEY`/the publishable key were all
+  `undefined` inside `apps/web/src/proxy.ts` and `next.config.ts` at
+  request time despite being set correctly in `.env` — `/dashboard`
+  returned `200` unauthenticated instead of redirecting. Fixed by passing
+  `forceReload: true` to both `loadEnvConfig` call sites
+  (`next.config.ts`, `apps/web/src/server/context.ts`) and adding a
+  `next.config.ts` `env` block so Edge middleware's separately-compiled
+  bundle gets `AUTH_MODE`/Clerk's keys statically inlined (it never
+  executes `next.config.ts`'s `loadEnvConfig()` call itself).
+  `apps/web/e2e/env.ts` now explicitly forces `AUTH_MODE=development` for
+  the same reason: without that, a local `.env` with
+  `AUTH_MODE=production` silently broke the entire e2e suite. Verified: a
+  real protected-route redirect with genuine Clerk response headers,
+  Clerk's real hosted `/sign-in` UI (screenshotted), and the full
+  check/integration/e2e suite all still passing. **Not yet done**: actually
+  signing up as a test user and confirming JIT provisioning creates a
+  `users` row end-to-end — that's the next concrete step, not a full
+  re-verification of the auth design.
 - `clerk_user_id` is nullable with a placeholder backfill for existing rows
   (migration 011), deliberately not tightened to `not null` yet (see
   ADR-0013's Migration section) — do that tightening only after confirming
@@ -514,6 +528,40 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
+
+- **2026-08-31 - Claude (fifth session, same conversation).** At the
+  maintainer's request, wired real Clerk test-mode keys into `.env` to
+  finally exercise `AUTH_MODE=production` for real — and found that it
+  didn't work: `/dashboard` returned `200` unauthenticated instead of
+  redirecting to `/sign-in`. Root-caused it to `@next/env`'s `loadEnvConfig`
+  silently returning a stale cache on any call after the first in a process
+  unless `forceReload: true` is passed; Next.js's own internal call (scoped
+  to `apps/web`, no monorepo-root `.env`) runs first and poisoned the cache
+  for both of this repo's own `loadEnvConfig` calls
+  (`next.config.ts`, `apps/web/src/server/context.ts`), so `AUTH_MODE`/
+  Clerk's keys were `undefined` at request time despite being set correctly
+  in `.env` — reproduced and confirmed the exact mechanism with a standalone
+  Node script before touching any code. Fixed both call sites with
+  `forceReload: true`, and added a `next.config.ts` `env` block so Edge
+  middleware's separately-compiled bundle (which never executes
+  `next.config.ts`'s `loadEnvConfig()` at request time) gets the values
+  statically inlined. Also fixed `apps/web/e2e/env.ts`, which broke as a
+  direct consequence: e2e's tests navigate straight to protected routes with
+  no sign-in step, so once `AUTH_MODE=production` actually worked, a local
+  `.env` set to `production` (as it now is, for this verification) started
+  failing the entire e2e suite by redirecting every test to `/sign-in`;
+  fixed by forcing `AUTH_MODE=development` explicitly in the e2e env
+  builder rather than inheriting whatever `.env` has. Verified with real
+  Clerk keys: `/dashboard` correctly redirects with genuine Clerk auth
+  headers, `/sign-in` renders Clerk's real hosted UI (screenshotted), and
+  `npm run check` (69/69)/`test:integration` (33/33)/`test:e2e` (5/5) all
+  still pass. Documented the full root cause as an amendment to ADR-0013
+  rather than a new ADR, since it corrects a claimed-but-unverified
+  behavior rather than changing the design. Also declined to run a
+  pasted Clerk-CLI setup skill against this repo (would have re-scaffolded
+  over the existing hand-built integration) after confirming with the
+  maintainer it wasn't the intended path. Uncommitted; the maintainer
+  should review before commit.
 
 - **2026-08-31 - Claude (fourth session).** Committed and pushed task 1
   (production authentication, `9507cad`) at the maintainer's request, then

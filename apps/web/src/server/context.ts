@@ -7,7 +7,18 @@ import { createMusicBrainzCatalog } from "@vinylhound/catalog";
 import { createDatabase } from "@vinylhound/database";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 
-loadEnvConfig(path.resolve(process.cwd(), "../.."));
+// forceReload (4th arg) is required: Next.js's own internal loadEnvConfig
+// call runs first, scoped to this directory (apps/web, no monorepo-root
+// .env), and caches that result at module scope inside @next/env. Without
+// forceReload, this call silently returns that stale cache instead of ever
+// reading the root .env — discovered when AUTH_MODE and Clerk's keys came
+// back undefined at request time despite being set correctly in .env.
+loadEnvConfig(
+  path.resolve(process.cwd(), "../.."),
+  process.env.NODE_ENV !== "production",
+  console,
+  true,
+);
 
 function createServerContext() {
   const config = loadDevelopmentWebConfig();
