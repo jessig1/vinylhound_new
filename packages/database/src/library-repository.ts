@@ -1,10 +1,12 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 
 import type {
   GetLibraryResponse,
   LibraryItemResult,
+  LibraryCopy,
   LibraryList,
   LibrarySort,
+  UpdateLibraryCopy,
   UpdateLibraryItem,
 } from "@vinylhound/contracts";
 
@@ -39,6 +41,22 @@ export async function listLibraryItemsForUser(
     input.sort ?? "recent",
   );
   return { list: input.list, items };
+}
+
+export async function countLibraryItemsForUser(
+  db: Database,
+  input: { userId: string; list: LibraryList },
+): Promise<number> {
+  const [result] = await db
+    .select({ value: count() })
+    .from(libraryItems)
+    .where(
+      and(
+        eq(libraryItems.userId, input.userId),
+        eq(libraryItems.list, input.list),
+      ),
+    );
+  return result?.value ?? 0;
 }
 
 export function filterLibraryItemsByQuery(
@@ -192,6 +210,88 @@ export async function deleteLibraryItem(
   });
 }
 
+export async function updateLibraryCopy(
+  db: Database,
+  input: {
+    userId: string;
+    itemId: string;
+    copyId: string;
+    update: UpdateLibraryCopy;
+  },
+): Promise<LibraryCopy> {
+  return db.transaction(async (transaction) => {
+    await lockLibraryItem(transaction, input.userId, input.itemId);
+    const [copy] = await transaction
+      .select()
+      .from(libraryCopies)
+      .where(
+        and(
+          eq(libraryCopies.id, input.copyId),
+          eq(libraryCopies.libraryItemId, input.itemId),
+          eq(libraryCopies.userId, input.userId),
+        ),
+      )
+      .for("update");
+    if (!copy) {
+      throw new DatabaseCommandError("not_found", "Library copy not found.");
+    }
+    const now = new Date();
+    const [updated] = await transaction
+      .update(libraryCopies)
+      .set({ ...input.update, updatedAt: now })
+      .where(eq(libraryCopies.id, copy.id))
+      .returning();
+    await transaction
+      .update(libraryItems)
+      .set({ updatedAt: now })
+      .where(eq(libraryItems.id, input.itemId));
+    return serializeLibraryCopy(updated!);
+  });
+}
+
+export async function deleteLibraryCopy(
+  db: Database,
+  input: { userId: string; itemId: string; copyId: string },
+): Promise<{ id: string }> {
+  return db.transaction(async (transaction) => {
+    await lockLibraryItem(transaction, input.userId, input.itemId);
+    const [deleted] = await transaction
+      .delete(libraryCopies)
+      .where(
+        and(
+          eq(libraryCopies.id, input.copyId),
+          eq(libraryCopies.libraryItemId, input.itemId),
+          eq(libraryCopies.userId, input.userId),
+        ),
+      )
+      .returning({ id: libraryCopies.id });
+    if (!deleted) {
+      throw new DatabaseCommandError("not_found", "Library copy not found.");
+    }
+    await transaction
+      .update(libraryItems)
+      .set({ updatedAt: new Date() })
+      .where(eq(libraryItems.id, input.itemId));
+    return deleted;
+  });
+}
+
+async function lockLibraryItem(
+  transaction: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  userId: string,
+  itemId: string,
+) {
+  const [item] = await transaction
+    .select({ id: libraryItems.id })
+    .from(libraryItems)
+    .where(and(eq(libraryItems.id, itemId), eq(libraryItems.userId, userId)))
+    .for("update");
+  if (!item) {
+    throw new DatabaseCommandError("not_found", "Library item not found.");
+  }
+  return item;
+}
+
 async function selectLibraryItemRows(
   db: Pick<Database, "select">,
   input: { userId: string; list?: LibraryList; itemId?: string },
@@ -285,19 +385,25 @@ async function attachCopiesAndSerialize(
         catalogReference,
       },
       copyCount: itemCopies.length,
-      copies: itemCopies.map((copy) => ({
-        id: copy.id,
-        mediaCondition: copy.mediaCondition,
-        sleeveCondition: copy.sleeveCondition,
-        location: copy.location,
-        notes: copy.notes,
-        acquiredAt: copy.acquiredAt,
-        createdAt: copy.createdAt.toISOString(),
-        updatedAt: copy.updatedAt.toISOString(),
-      })),
+      copies: itemCopies.map(serializeLibraryCopy),
       confirmedFromScanId: row.confirmedFromScanId,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
   });
+}
+
+function serializeLibraryCopy(
+  copy: typeof libraryCopies.$inferSelect,
+): LibraryCopy {
+  return {
+    id: copy.id,
+    mediaCondition: copy.mediaCondition,
+    sleeveCondition: copy.sleeveCondition,
+    location: copy.location,
+    notes: copy.notes,
+    acquiredAt: copy.acquiredAt,
+    createdAt: copy.createdAt.toISOString(),
+    updatedAt: copy.updatedAt.toISOString(),
+  };
 }

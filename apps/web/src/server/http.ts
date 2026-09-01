@@ -91,7 +91,12 @@ export function errorResponse(error: unknown, requestId: string) {
     );
   }
   if (error instanceof DatabaseCommandError) {
-    const status = error.code === "not_found" ? 404 : 409;
+    const status =
+      error.code === "not_found"
+        ? 404
+        : error.code === "quota_exceeded"
+          ? 429
+          : 409;
     return createError(status, error.code, error.message, requestId);
   }
   if (error instanceof CatalogProviderError) {

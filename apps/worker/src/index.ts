@@ -70,9 +70,10 @@ async function dispatchAvailableMessages() {
     if (result.status !== "published") {
       return;
     }
-    console.info(
-      `[worker] published outbox message; messageId=${result.messageId} jobId=${result.jobId}`,
-    );
+    console.info("[worker] outbox_message_published", {
+      messageId: result.messageId,
+      jobId: result.jobId,
+    });
   }
 }
 
@@ -110,10 +111,9 @@ for (const signal of shutdownSignals) {
   process.once(signal, () => void shutdown(signal));
 }
 
-console.info("[worker] durable scan outbox publisher started");
-console.info(
-  analysisWorker
-    ? "[worker] OpenAI scan consumer started"
-    : "[worker] OpenAI scan consumer disabled; set OPENAI_API_KEY to enable analysis",
-);
+console.info("[worker] started", {
+  outboxPollIntervalMs: config.OUTBOX_POLL_INTERVAL_MS,
+  analysisEnabled: Boolean(analysisWorker),
+  analysisConcurrency: config.ANALYSIS_CONCURRENCY,
+});
 void poll();

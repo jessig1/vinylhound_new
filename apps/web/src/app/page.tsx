@@ -20,6 +20,9 @@ export default function LandingPage() {
             list in one beautifully organized place.
           </p>
         </div>
+        <Link className="text-button" href="/privacy">
+          Privacy notice
+        </Link>
 
         <div className="record-stack" aria-hidden="true">
           <div className="record-sleeve record-sleeve--back">

@@ -3,7 +3,9 @@
 ## Milestone 0 — foundation (complete)
 
 - Monorepo, web shell, worker boundary, contracts, domain review policy, AI adapter, local infrastructure, CI, and project documentation.
-- Navigable account and library dashboard prototype, using local demo state until persistence and production authentication are implemented.
+- Navigable account and library dashboard. The dashboard reads the authenticated
+  user's persisted scan, collection, and wishlist data; it no longer uses demo
+  activity, fixed counts, or a fixed date.
 
 ## Milestone 1 — single-image vertical slice (complete)
 
@@ -82,7 +84,15 @@ future slice.
       (`albums`/`releases`) are never touched. A privacy/retention policy is
       documented in `docs/SECURITY.md`; a user-facing privacy notice is
       still needed.
-- Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
+- [x] Managed-infrastructure operational readiness: the deployment topology,
+      managed service requirements, backup retention, and monthly restore drill
+      are documented in `docs/OPERATIONS.md`; `npm run ops:restore-test`
+      verifies a local logical PostgreSQL backup against an isolated restore
+      database. Public health (`/api/healthz`) and database readiness
+      (`/api/readyz`) endpoints support service monitoring. Transactional
+      per-user daily-analysis, active-scan, and rolling-spend controls reserve
+      budget before initial jobs and retries enter the outbox; production must
+      configure the related environment limits and provider-side spend cap.
 - [x] Accessibility and cross-device browser test matrix: WCAG 2 A/AA checks
       cover the primary authenticated routes, keyboard focus/skip navigation is
       explicit in the shell, and Playwright defines mobile Chromium, desktop

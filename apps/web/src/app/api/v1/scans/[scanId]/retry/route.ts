@@ -28,6 +28,12 @@ export async function POST(
     const result = await retryScan(context.database.db, {
       userId,
       scanId,
+      quotaLimits: {
+        dailyAnalysisLimit: context.config.USER_DAILY_ANALYSIS_LIMIT,
+        activeScanLimit: context.config.USER_ACTIVE_SCAN_LIMIT,
+        monthlySpendLimitUsd: context.config.USER_MONTHLY_SPEND_LIMIT_USD,
+        scanCostReservationUsd: context.config.SCAN_COST_RESERVATION_USD,
+      },
     });
     const response = RetryScanResponseSchema.parse({
       scanId: result.record.id,

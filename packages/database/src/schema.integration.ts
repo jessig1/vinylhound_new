@@ -299,6 +299,64 @@ describe("initial scan persistence schema", () => {
     expect(publishedMessage?.publishedAt).toBeInstanceOf(Date);
   });
 
+  it("rejects a submission that exceeds the per-user daily analysis quota", async () => {
+    const quotaUserId = randomUUID();
+    await database.db.insert(users).values({ id: quotaUserId });
+    const createCompletedScan = async () => {
+      const scan = await createOrGetScan(database.db, {
+        userId: quotaUserId,
+        source: "single_upload",
+        idempotencyKey: `quota-scan-${randomUUID()}`,
+      });
+      const upload = await createOrGetImageUpload(database.db, {
+        userId: quotaUserId,
+        scanId: scan.record.id,
+        idempotencyKey: `quota-upload-${randomUUID()}`,
+        filename: "front.jpg",
+        mimeType: "image/jpeg",
+        sizeBytes: 512,
+        checksumSha256: "b".repeat(64),
+        maxImages: 12,
+      });
+      await completeImageUpload(database.db, {
+        userId: quotaUserId,
+        scanId: scan.record.id,
+        imageId: upload.record.id,
+        width: 800,
+        height: 800,
+        analysisSizeBytes: 200,
+        analysisWidth: 800,
+        analysisHeight: 800,
+        thumbnailSizeBytes: 40,
+      });
+      return scan.record.id;
+    };
+
+    const first = await createCompletedScan();
+    await submitScan(database.db, {
+      userId: quotaUserId,
+      scanId: first,
+      idempotencyKey: `quota-submit-${randomUUID()}`,
+    });
+    const second = await createCompletedScan();
+
+    await expect(
+      submitScan(database.db, {
+        userId: quotaUserId,
+        scanId: second,
+        idempotencyKey: `quota-submit-${randomUUID()}`,
+        quotaLimits: {
+          dailyAnalysisLimit: 1,
+          activeScanLimit: 20,
+          monthlySpendLimitUsd: 20,
+          scanCostReservationUsd: 0.25,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "quota_exceeded" });
+
+    await database.db.delete(users).where(eq(users.id, quotaUserId));
+  });
+
   it("enforces per-user idempotency keys", async () => {
     const idempotencyKey = `duplicate-${randomUUID()}`;
     await database.db.insert(scans).values({

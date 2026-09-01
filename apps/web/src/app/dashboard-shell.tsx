@@ -24,7 +24,15 @@ function useClerkDisplayName() {
   return user?.fullName ?? user?.username ?? null;
 }
 
-export function DashboardShell({ children }: { children: ReactNode }) {
+export function DashboardShell({
+  children,
+  collectionCount,
+  wishlistCount,
+}: {
+  children: ReactNode;
+  collectionCount: number;
+  wishlistCount: number;
+}) {
   const pathname = usePathname();
   const displayName = toDisplayName(useDisplayName());
   const initials = displayName
@@ -68,8 +76,12 @@ export function DashboardShell({ children }: { children: ReactNode }) {
               >
                 <Icon name={item.icon} size={20} />
                 <span>{item.label}</span>
-                {item.label === "Collection" ? <small>48</small> : null}
-                {item.label === "Wishlist" ? <small>12</small> : null}
+                {item.label === "Collection" ? (
+                  <small>{collectionCount}</small>
+                ) : null}
+                {item.label === "Wishlist" ? (
+                  <small>{wishlistCount}</small>
+                ) : null}
               </Link>
             );
           })}

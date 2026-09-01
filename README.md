@@ -82,6 +82,7 @@ npm run build
 - [API and job contracts](docs/API.md)
 - [OpenAI integration](docs/OPENAI_INTEGRATION.md)
 - [Security and privacy](docs/SECURITY.md)
+- [Operations runbook](docs/OPERATIONS.md)
 - [Testing and AI evaluations](docs/TESTING.md)
 - [Private model evaluation runner](docs/EVALUATION.md)
 - [Catalog source evaluation](docs/CATALOG_EVALUATION.md)

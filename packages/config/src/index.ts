@@ -30,6 +30,29 @@ const AuthModeSchema = z
   .enum(["development", "production"])
   .default("development");
 
+const OperationsConfigShape = {
+  // These limits are enforced before a scan job enters the durable outbox.
+  // Keep the defaults generous enough for local batch testing; production
+  // deployments should set values appropriate to their OpenAI project budget.
+  USER_DAILY_ANALYSIS_LIMIT: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10_000)
+    .default(100),
+  USER_ACTIVE_SCAN_LIMIT: z.coerce.number().int().min(1).max(100).default(20),
+  USER_MONTHLY_SPEND_LIMIT_USD: z.coerce
+    .number()
+    .positive()
+    .max(10_000)
+    .default(20),
+  SCAN_COST_RESERVATION_USD: z.coerce
+    .number()
+    .positive()
+    .max(100)
+    .default(0.25),
+};
+
 export const DevelopmentWebConfigSchema = z
   .object({
     NODE_ENV: NodeEnvironmentSchema,
@@ -42,6 +65,7 @@ export const DevelopmentWebConfigSchema = z
       .default("00000000-0000-4000-8000-000000000001"),
     CLERK_SECRET_KEY: OptionalNonEmptyStringSchema,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: OptionalNonEmptyStringSchema,
+    ...OperationsConfigShape,
   })
   .superRefine((value, ctx) => {
     if (value.AUTH_MODE !== value.NEXT_PUBLIC_AUTH_MODE) {

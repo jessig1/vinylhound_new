@@ -71,4 +71,22 @@ describe("DevelopmentWebConfigSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("provides bounded operational safeguards by default", () => {
+    const config = DevelopmentWebConfigSchema.parse(baseEnv);
+
+    expect(config.USER_DAILY_ANALYSIS_LIMIT).toBe(100);
+    expect(config.USER_ACTIVE_SCAN_LIMIT).toBe(20);
+    expect(config.USER_MONTHLY_SPEND_LIMIT_USD).toBe(20);
+    expect(config.SCAN_COST_RESERVATION_USD).toBe(0.25);
+  });
+
+  it("rejects a non-positive spend reservation", () => {
+    const result = DevelopmentWebConfigSchema.safeParse({
+      ...baseEnv,
+      SCAN_COST_RESERVATION_USD: "0",
+    });
+
+    expect(result.success).toBe(false);
+  });
 });

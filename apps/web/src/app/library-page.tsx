@@ -8,6 +8,7 @@ import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
 import { LibraryItemActions } from "./library-item-actions";
+import { LibraryCopyEditor } from "./library-copy-editor";
 import { LibraryToolbar } from "./library-toolbar";
 import { Art, Icon } from "./ui";
 
@@ -80,9 +81,19 @@ export async function LibraryPage({
                 <p>{release.artist}</p>
                 <small>{facts.join(" · ") || "Release details not set"}</small>
                 {!wishlist ? (
-                  <small>
-                    {item.copyCount} {item.copyCount === 1 ? "copy" : "copies"}
-                  </small>
+                  <>
+                    <small>
+                      {item.copyCount}{" "}
+                      {item.copyCount === 1 ? "copy" : "copies"}
+                    </small>
+                    {item.copies.map((copy) => (
+                      <LibraryCopyEditor
+                        copy={copy}
+                        itemId={item.id}
+                        key={copy.id}
+                      />
+                    ))}
+                  </>
                 ) : null}
                 <LibraryItemActions
                   copyCount={item.copyCount}

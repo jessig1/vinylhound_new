@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, count, desc, eq, isNull, lte, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lte,
+  sql,
+} from "drizzle-orm";
 
 import {
   ANALYZE_SCAN_JOB,
@@ -12,6 +23,7 @@ import {
   type ImageViewType,
   type IngestionSource,
 } from "@vinylhound/contracts";
+import { estimateTokenUsageCostUsd } from "@vinylhound/domain";
 
 import type { Database } from "./database.js";
 import {
@@ -28,6 +40,7 @@ export type DatabaseCommandErrorCode =
   | "conflict"
   | "invalid_state"
   | "not_found"
+  | "quota_exceeded"
   | "scan_image_limit";
 
 export class DatabaseCommandError extends Error {
@@ -339,13 +352,112 @@ export async function completeImageUpload(
 
 const INITIAL_SCAN_ATTEMPT = 1;
 
+export interface ScanQuotaLimits {
+  dailyAnalysisLimit: number;
+  activeScanLimit: number;
+  monthlySpendLimitUsd: number;
+  scanCostReservationUsd: number;
+}
+
+const DEFAULT_SCAN_QUOTA_LIMITS: ScanQuotaLimits = {
+  dailyAnalysisLimit: 100,
+  activeScanLimit: 20,
+  monthlySpendLimitUsd: 20,
+  scanCostReservationUsd: 0.25,
+};
+
+async function enforceScanQuota(
+  transaction: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  input: { userId: string; limits: ScanQuotaLimits; now: Date },
+) {
+  // Serializing quota checks per user makes concurrent browser tabs/batch
+  // submissions see the same reservation balance before either can enqueue.
+  await transaction.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${input.userId}))`,
+  );
+  const dayStart = new Date(input.now);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const monthStart = new Date(input.now);
+  monthStart.setUTCDate(monthStart.getUTCDate() - 30);
+
+  const [{ value: dailyAnalysisCount }] = await transaction
+    .select({ value: count() })
+    .from(outboxMessages)
+    .innerJoin(scans, eq(scans.id, outboxMessages.aggregateId))
+    .where(
+      and(
+        eq(scans.userId, input.userId),
+        gte(outboxMessages.createdAt, dayStart),
+      ),
+    );
+  if (dailyAnalysisCount >= input.limits.dailyAnalysisLimit) {
+    throw new DatabaseCommandError(
+      "quota_exceeded",
+      "Your daily scan limit has been reached. Please try again tomorrow.",
+    );
+  }
+
+  const [{ value: activeScanCount }] = await transaction
+    .select({ value: count() })
+    .from(scans)
+    .where(
+      and(
+        eq(scans.userId, input.userId),
+        inArray(scans.status, ["queued", "processing"]),
+      ),
+    );
+  if (activeScanCount >= input.limits.activeScanLimit) {
+    throw new DatabaseCommandError(
+      "quota_exceeded",
+      "You already have the maximum number of scans in progress. Please wait for one to finish.",
+    );
+  }
+
+  const attempts = await transaction
+    .select({
+      model: scanAttempts.model,
+      inputTokens: scanAttempts.inputTokens,
+      outputTokens: scanAttempts.outputTokens,
+    })
+    .from(scanAttempts)
+    .innerJoin(scans, eq(scans.id, scanAttempts.scanId))
+    .where(
+      and(
+        eq(scans.userId, input.userId),
+        gte(scanAttempts.startedAt, monthStart),
+      ),
+    );
+  const actualSpendUsd = attempts.reduce((total, attempt) => {
+    return (
+      total +
+      (estimateTokenUsageCostUsd(attempt.model, {
+        inputTokens: attempt.inputTokens ?? 0,
+        outputTokens: attempt.outputTokens ?? 0,
+      }) ?? 0)
+    );
+  }, 0);
+  const reservedSpendUsd =
+    (activeScanCount + 1) * input.limits.scanCostReservationUsd;
+  if (actualSpendUsd + reservedSpendUsd > input.limits.monthlySpendLimitUsd) {
+    throw new DatabaseCommandError(
+      "quota_exceeded",
+      "This scan would exceed your monthly analysis budget. Please try again after the budget period resets.",
+    );
+  }
+}
+
 function analyzeScanJobId(scanId: string, attemptNumber: number) {
   return `scan-${scanId}-attempt-${attemptNumber}`;
 }
 
 export async function submitScan(
   db: Database,
-  input: { userId: string; scanId: string; idempotencyKey: string },
+  input: {
+    userId: string;
+    scanId: string;
+    idempotencyKey: string;
+    quotaLimits?: ScanQuotaLimits;
+  },
 ) {
   return db.transaction(async (transaction) => {
     const [scan] = await transaction
@@ -414,6 +526,12 @@ export async function submitScan(
       );
     }
 
+    await enforceScanQuota(transaction, {
+      userId: input.userId,
+      limits: input.quotaLimits ?? DEFAULT_SCAN_QUOTA_LIMITS,
+      now: new Date(),
+    });
+
     const submittedAt = new Date();
     const job = AnalyzeScanJobSchema.parse({
       jobVersion: 1,
@@ -450,7 +568,7 @@ export async function submitScan(
 
 export async function retryScan(
   db: Database,
-  input: { userId: string; scanId: string },
+  input: { userId: string; scanId: string; quotaLimits?: ScanQuotaLimits },
 ) {
   return db.transaction(async (transaction) => {
     const [scan] = await transaction
@@ -511,6 +629,12 @@ export async function retryScan(
         "The scan is missing completed images to retry.",
       );
     }
+
+    await enforceScanQuota(transaction, {
+      userId: input.userId,
+      limits: input.quotaLimits ?? DEFAULT_SCAN_QUOTA_LIMITS,
+      now: new Date(),
+    });
 
     const requestedAt = new Date();
     const job = AnalyzeScanJobSchema.parse({

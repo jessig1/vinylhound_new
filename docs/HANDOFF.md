@@ -15,6 +15,27 @@ the log.
 
 ## Current state — verified 2026-08-31
 
+- The dashboard now reads authenticated, persisted data rather than the old
+  hard-coded demo dataset: its activity section shows the three most recent
+  scans, and its collection/wishlist previews show the three most recently
+  updated items and exact server-side counts. Empty states are explicit. This
+  change is uncommitted, alongside the pre-existing working-tree changes.
+
+- **Milestone 4's managed-infrastructure/operations task is complete at the
+  repository level.** `docs/OPERATIONS.md` defines the managed PostgreSQL,
+  Redis, and object-storage topology; backup retention; monthly recovery
+  drill; health checks; log/alert signals; and production secret boundaries.
+  `npm run ops:restore-test` takes a local Compose logical DB backup, restores
+  it to `vinylhound_restore_verification`, validates migration metadata, then
+  drops that isolated verification database; it passed on 2026-08-31. Public
+  `/api/healthz` (process) and `/api/readyz` (PostgreSQL) probes are excluded
+  from Clerk protection for external monitoring. Before each first submission
+  or retry, the server serializes per-user quota checks using a PostgreSQL
+  advisory transaction lock: daily outbox volume, queued/processing scans,
+  and rolling actual token cost plus a configured reservation for each active
+  scan. Exceeding a limit returns 429 `quota_exceeded`; defaults and required
+  production configuration are in `.env.example`/`docs/OPERATIONS.md`.
+
 - **Milestone 4 task 3, accessibility and cross-device testing, is complete.**
   `@axe-core/playwright` checks WCAG 2 A/AA violations on dashboard, scan,
   collection, wishlist, and account routes, and an e2e assertion verifies a
@@ -274,12 +295,24 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Milestone 4 tasks 1-3 are complete. The next session should check
-with the maintainer for the next priority rather than assuming. Candidates are
-managed infrastructure/backups/restore, observability/quotas/abuse controls,
-a published user-facing privacy notice, or Milestone 3's deferred per-copy
-condition/location/notes/acquisition-date edit and delete flow. Keep the
-private AI matrix deferred until public rollout or model/cost optimization.
+**Task:** Milestone 4 is complete except a published user-facing privacy
+notice. The next session should check with the maintainer for the next priority
+rather than assuming. Candidates are the privacy notice or Milestone 3's
+deferred per-copy condition/location/notes/acquisition-date edit and delete
+flow. Keep the private AI matrix deferred until public rollout or model/cost
+optimization.
+
+The delivery roadmap cannot truthfully be called fully complete until those
+three explicitly deferred items (privacy notice, per-copy editing/deletion,
+and the private AI evaluation before public rollout) are completed or formally
+removed from it.
+
+GitHub security automation is now configured but GitHub repository settings
+still need the maintainer: enable Code scanning, Secret scanning, Dependabot
+alerts/security updates, and branch protection requiring the CI and Security
+checks listed in `docs/SECURITY.md`. The workflow publishes CodeQL and
+redacted Gitleaks SARIF results to the Security tab for trusted repository
+runs; fork PRs still fail their scan but cannot upload SARIF by design.
 
 Things worth knowing before extending this further:
 
@@ -528,8 +561,54 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 ## Session log
 
+- **2026-08-31 - Codex.** Replaced the dashboard shell's fixed Collection
+  (`48`) and Wishlist (`12`) navigation badges with per-user database counts
+  fetched by the server layout. `npm run typecheck` passes.
+
+- **2026-08-31 - Codex.** Added a public `/privacy` notice linked from the
+  landing page, and implemented per-copy `PATCH`/`DELETE` endpoints with
+  ownership checks, parent-item locks, and collection-page controls for copy
+  location, acquisition date, notes, and deletion. The remaining private AI
+  evaluation cannot safely run yet: the private 52-case manifest exists and
+  an API key is configured, but zero cases meet its required maintainer
+  verification/consent readiness gate. No billable calls were made. `npm run
+typecheck` passes.
+
+- **2026-08-31 - Codex.** Audited `docs/ROADMAP.md` at the maintainer's
+  request and replaced the dashboard's hard-coded `data.ts` content with live,
+  authenticated database reads: three latest scans, collection/wishlist
+  previews, and exact server-side item counts. Replaced the fixed date and
+  boilerplate labels with current or data-derived content and added explicit
+  empty states. The audit confirmed the roadmap still explicitly defers a
+  published privacy notice, per-copy editing/deletion, and the private AI eval
+  baseline; it is therefore not fully complete. `npm run check`, `npm run
+build`, and `git diff --check` pass. Changes are uncommitted and coexist
+  with unrelated existing working-tree changes.
+
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
+
+- **2026-08-31 - Codex.** Added GitHub security automation. The new Security
+  workflow runs CodeQL, a full-history/redacted Gitleaks scan with SARIF upload,
+  and pull-request dependency review; all are visible Action runs and status
+  checks, while CodeQL/Gitleaks alerts appear in the Security tab. Added weekly
+  npm Dependabot configuration and documented the repository settings/branch
+  protections a maintainer must enable. No GitHub settings were changed because
+  this workspace has no repository-administration credential.
+
+- **2026-08-31 - Codex.** Implemented the skipped Milestone 4 operations
+  slice. Added `docs/OPERATIONS.md`, production service/backup/monitoring and
+  alert guidance, public liveness/readiness probes, structured worker startup
+  and outbox-publish logs, and the `ops:restore-test` command. The restore
+  drill passed against the local Compose Postgres service and cleans up only
+  its dedicated `vinylhound_restore_verification` database and temporary dump.
+  Added transactional per-user daily analysis, active scan, and rolling spend
+  protections (with active-job cost reservation) before outbox submission and
+  retry; quota failures are HTTP 429. Added config coverage and a database
+  integration quota test. `npm run check` passed (71 unit tests),
+  `npm run test:database` passed (26 integration tests), and the restore drill
+  passed. No cloud provider resources were provisioned because no provider
+  account, region, or deployment authority was supplied.
 
 - **2026-08-31 - Codex.** Implemented Milestone 4 task 3: added axe-core
   WCAG 2 A/AA checks for the main authenticated routes and a keyboard-focus

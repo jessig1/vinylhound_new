@@ -110,6 +110,28 @@ export const LibraryCopySchema = z
   })
   .strict();
 
+export const UpdateLibraryCopySchema = z
+  .object({
+    mediaCondition: RecordConditionSchema.nullable().optional(),
+    sleeveCondition: RecordConditionSchema.nullable().optional(),
+    location: z.string().trim().min(1).max(255).nullable().optional(),
+    notes: z.string().trim().max(2_000).nullable().optional(),
+    acquiredAt: z.iso.date().nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (Object.keys(value).length === 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Provide a copy field to update.",
+      });
+    }
+  });
+
+export const DeleteLibraryCopyResponseSchema = z
+  .object({ id: z.string().uuid() })
+  .strict();
+
 export const ScanConfirmationSummarySchema = z
   .object({
     selectedCandidateId: z.string().uuid().nullable(),
@@ -192,6 +214,7 @@ export type DeleteLibraryItemResponse = z.infer<
 >;
 export type CopyDetailsInput = z.infer<typeof CopyDetailsInputSchema>;
 export type LibraryCopy = z.infer<typeof LibraryCopySchema>;
+export type UpdateLibraryCopy = z.infer<typeof UpdateLibraryCopySchema>;
 export type ConfirmScanRequest = z.infer<typeof ConfirmScanRequestSchema>;
 export type ConfirmedRelease = z.infer<typeof ConfirmedReleaseSchema>;
 export type ScanConfirmationSummary = z.infer<

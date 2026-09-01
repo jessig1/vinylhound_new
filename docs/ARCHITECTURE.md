@@ -65,6 +65,14 @@ For personal use, web and worker can run on one host with one PostgreSQL/Redis d
 - Record model, prompt version, image count, status, latency, token usage, and normalized error category.
 - Retry timeouts, rate limits, and provider 5xx responses with exponential backoff and jitter. Do not retry invalid inputs or schema failures indefinitely.
 - Jobs must be idempotent and safe to redeliver. Terminal failures remain visible and manually retryable.
+- `GET /api/healthz` is a process liveness probe and `GET /api/readyz`
+  verifies PostgreSQL readiness without exposing dependency details. The
+  operational alerting, backup, and restore procedure is in
+  `docs/OPERATIONS.md`.
+- Before a scan job enters the outbox, a per-user transactional quota check
+  enforces daily analysis volume, active scans, and rolling spend. Active jobs
+  reserve a configured cost while their actual token usage is unknown, so
+  concurrent submissions cannot evade a monthly budget.
 
 ## Authentication
 

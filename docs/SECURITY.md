@@ -11,11 +11,15 @@ Album photos are user content. They may unintentionally include faces, addresses
 - Generate object keys server-side and scope them by user and scan.
 - Validate size, MIME declaration, decoded file signature, dimensions, and animation before processing.
 - Strip EXIF from derived images. Define whether originals retain EXIF and communicate that policy.
-- Encrypt traffic and managed storage; back up PostgreSQL and test restoration.
-- Apply CSRF protection/session hardening, rate limits, upload quotas, and per-user job concurrency.
+- Encrypt traffic and managed storage; back up PostgreSQL and test restoration
+  according to `docs/OPERATIONS.md`.
+- Apply CSRF protection/session hardening, rate limits, upload quotas, and
+  per-user job concurrency. Per-user daily-analysis, active-scan, and rolling
+  spend controls are enforced before provider jobs enter the outbox.
 - Hash stable user identifiers before using any provider safety identifier.
 - Redact credentials, signed query strings, and user content from logs and error trackers.
-- Set provider spend/rate limits and alert on unusual scan volume.
+- Set provider spend/rate limits and alert on unusual scan volume. The
+  application limits are defense in depth, not a substitute for provider caps.
 
 ## AI-specific threats
 
@@ -47,3 +51,27 @@ scanning, secret scanning, abuse controls, and an incident-response
 contact/process. Account export/deletion is implemented (ADR-0014); a
 published privacy notice describing this policy in user-facing terms is
 still needed.
+
+## GitHub security automation
+
+`.github/workflows/security.yml` runs on pull requests, pushes to `main`, a
+weekly schedule, and manual dispatch. It provides three visible Actions/PR
+checks:
+
+- **Security / CodeQL** scans JavaScript/TypeScript and uploads findings to
+  the repository Security tab's code-scanning view.
+- **Security / Secret scan** runs Gitleaks against complete committed history,
+  redacts findings, uploads SARIF to the same Security view, and fails the
+  check when it finds a secret. SARIF publishing is skipped only for untrusted
+  fork pull requests, where GitHub withholds `security-events: write`.
+- **Security / Dependency review** fails a pull request that introduces a
+  high-or-higher severity dependency or an AGPL-licensed dependency.
+
+Enable **Code scanning alerts**, **Secret scanning alerts**, **Dependabot
+alerts**, and **Dependabot security updates** in the repository's GitHub
+Security settings. CodeQL/Gitleaks findings then appear in the Security tab;
+Dependabot advisories appear there independently of workflow runs. Configure
+the protected `main` branch to require `CI / validate`, `Security / CodeQL`,
+`Security / Secret scan`, and `Security / Dependency review` before merging.
+`dependabot.yml` checks npm dependencies weekly; review its pull requests with
+the same required checks.
