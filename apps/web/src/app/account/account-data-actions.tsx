@@ -93,7 +93,9 @@ export function AccountDataActions() {
         </button>
       </div>
       {exportError ? (
-        <p className="settings-card__error">{exportError}</p>
+        <p className="settings-card__error" role="alert">
+          {exportError}
+        </p>
       ) : null}
 
       {confirmOpen ? (
@@ -102,11 +104,14 @@ export function AccountDataActions() {
             This permanently deletes your account, scans, images, and library.
             Type <strong>{CONFIRM_PHRASE}</strong> to confirm.
           </p>
-          <input
-            onChange={(event) => setConfirmText(event.target.value)}
-            placeholder={CONFIRM_PHRASE}
-            value={confirmText}
-          />
+          <label>
+            <span>Confirmation phrase</span>
+            <input
+              onChange={(event) => setConfirmText(event.target.value)}
+              placeholder={CONFIRM_PHRASE}
+              value={confirmText}
+            />
+          </label>
           <div className="settings-actions">
             <button
               className="text-button text-button--danger"
@@ -130,7 +135,9 @@ export function AccountDataActions() {
             </button>
           </div>
           {deleteError ? (
-            <p className="settings-card__error">{deleteError}</p>
+            <p className="settings-card__error" role="alert">
+              {deleteError}
+            </p>
           ) : null}
         </div>
       ) : (

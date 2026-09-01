@@ -310,6 +310,7 @@ export default function ScanPage() {
       <div className="capture-mode-toggle" role="group" aria-label="Scan mode">
         <button
           className={mode === "single" ? "is-active" : ""}
+          aria-pressed={mode === "single"}
           disabled={busy}
           onClick={() => switchMode("single")}
           type="button"
@@ -318,6 +319,7 @@ export default function ScanPage() {
         </button>
         <button
           className={mode === "batch" ? "is-active" : ""}
+          aria-pressed={mode === "batch"}
           disabled={busy}
           onClick={() => switchMode("batch")}
           type="button"

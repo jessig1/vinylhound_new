@@ -5,7 +5,9 @@
 - Unit: pure domain policy, normalization, state transitions, schema validation.
 - Contract: fixtures for HTTP/job schemas and backwards compatibility.
 - Integration: PostgreSQL transactions/outbox, object-storage signing, queue redelivery, OpenAI adapter with recorded/synthetic responses.
-- End to end: phone-sized browser flows for camera/file inputs, upload progress, refresh recovery, review, and library changes.
+- End to end: WCAG 2 A/AA accessibility checks plus mobile and desktop browser
+  flows for camera/file inputs, upload progress, refresh recovery, review, and
+  library changes.
 - AI evaluations: live provider runs against a private labeled image set; not part of every CI run.
 
 CI should never require production secrets or make billable OpenAI calls. Provider integration tests are opt-in and use a dedicated low-budget project.
@@ -44,6 +46,7 @@ npm run check
 npm run build
 npm run test:integration
 npm run test:e2e
+npm run test:e2e:matrix
 npm run eval:ai -- --manifest <private-manifest-path> --dry-run
 ```
 
@@ -83,10 +86,10 @@ skipped without a provider call. Database coverage also proves that a scan
 completed before migration 009 falls back to its validated original object
 when no normalized analysis copy exists.
 
-`npm run test:e2e` runs Playwright at a phone viewport against a production
-build served from `.next-e2e` on port 3100, fully isolated from a running dev
-server: a dedicated `vinylhound_e2e` database (created and migrated by the
-global setup), a dedicated queue name, and a synthetic worker
+`npm run test:e2e` is the fast mobile-Chromium gate. It runs Playwright against
+a production build served from `.next-e2e` on port 3100, fully isolated from a
+running dev server: a dedicated `vinylhound_e2e` database (created and migrated
+by the global setup), a dedicated queue name, and a synthetic worker
 (`apps/worker/src/e2e-worker.ts`) that exercises the real outbox, queue,
 storage, and persistence path without calling OpenAI. It covers grouping
 labeled front/back/spine photos into one multi-view scan, grouping two
@@ -95,7 +98,13 @@ front-cover photos into an independently trackable batch (mode toggle on
 and cross-navigation back from a batch item's review page), upload of a
 misnamed cover file (content sniffing), identification review, refresh
 recovery, confirmation into the collection, the collection listing, and
-pre-upload rejection messaging for non-image and HEIC files. It requires the
-Docker Compose services and a one-time `npx playwright install chromium`
-(Linux/WSL also needs the browser's OS shared libraries: `sudo npx playwright
-install-deps` once per machine).
+pre-upload rejection messaging for non-image and HEIC files. The suite also
+runs axe-core WCAG 2 A/AA checks against dashboard, scan, collection, wishlist,
+and account routes, and verifies a keyboard-visible focus target.
+
+`npm run test:e2e:matrix` runs the same suite in four profiles: mobile Chromium
+(Pixel 7), desktop Chromium, desktop Firefox, and mobile WebKit (iPhone 13).
+It requires the Docker Compose services and a one-time
+`npx playwright install chromium firefox webkit` (Linux/WSL also needs the
+browser's OS shared libraries: `sudo npx playwright install-deps` once per
+machine).

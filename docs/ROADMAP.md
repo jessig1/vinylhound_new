@@ -83,7 +83,10 @@ future slice.
       documented in `docs/SECURITY.md`; a user-facing privacy notice is
       still needed.
 - Managed infrastructure, backups/restore test, observability, quotas, abuse/spend controls.
-- Accessibility and cross-device browser test matrix.
+- [x] Accessibility and cross-device browser test matrix: WCAG 2 A/AA checks
+      cover the primary authenticated routes, keyboard focus/skip navigation is
+      explicit in the shell, and Playwright defines mobile Chromium, desktop
+      Chromium, desktop Firefox, and mobile WebKit profiles.
 
 Milestone 2 and Milestone 3 are complete except per-copy edit/delete, which
 remains explicitly deferred to a future slice (not currently the next

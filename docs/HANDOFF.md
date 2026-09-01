@@ -15,6 +15,16 @@ the log.
 
 ## Current state — verified 2026-08-31
 
+- **Milestone 4 task 3, accessibility and cross-device testing, is complete.**
+  `@axe-core/playwright` checks WCAG 2 A/AA violations on dashboard, scan,
+  collection, wishlist, and account routes, and an e2e assertion verifies a
+  keyboard-visible focus target. The app shell has a skip-to-content link,
+  `:focus-visible` treatment, and reduced-motion support; destructive account
+  confirmation input and client-side error messages now have explicit labels
+  and alert semantics. Playwright projects define a fast Pixel 7 Chromium gate
+  plus desktop Chromium, desktop Firefox, and iPhone 13 WebKit coverage via
+  `npm run test:e2e:matrix`. Firefox and WebKit engines are installed locally.
+
 - **Milestone 4 task 1, production authentication, is complete** (ADR-0013).
   Clerk (`@clerk/nextjs@^7.8.3`) resolves session identity when
   `AUTH_MODE=production`: `apps/web/src/proxy.ts` (Next.js 16's Proxy
@@ -264,20 +274,12 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Milestone 4 tasks 1 and 2 (production authentication, ADR-0013;
-account export/deletion, ADR-0014) are both complete — see "Current state"
-above for the full shape. Task 1 is committed and pushed (`9507cad`); task 2
-is **uncommitted** — the maintainer should review before commit. There is no
-other in-flight Milestone 4 work queued. The next session should check with
-the maintainer for the next priority rather than assuming — candidates
-include: Milestone 4's remaining items (managed infrastructure/backups/
-observability/quotas/abuse controls; accessibility and cross-device test
-matrix; a published user-facing privacy notice describing the retention
-policy `docs/SECURITY.md` now states), or Milestone 3's one remaining
-deferred piece (per-copy condition/location/notes/acquisition-date edit and
-delete — `PATCH`/`DELETE /library/{itemId}/copies/{copyId}` or similar, not
-yet designed; ADR-0010, ADR-0011). Keep the private AI matrix deferred until
-public rollout or model/cost optimization.
+**Task:** Milestone 4 tasks 1-3 are complete. The next session should check
+with the maintainer for the next priority rather than assuming. Candidates are
+managed infrastructure/backups/restore, observability/quotas/abuse controls,
+a published user-facing privacy notice, or Milestone 3's deferred per-copy
+condition/location/notes/acquisition-date edit and delete flow. Keep the
+private AI matrix deferred until public rollout or model/cost optimization.
 
 Things worth knowing before extending this further:
 
@@ -528,6 +530,20 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 Newest first. One entry per agent session: date, agent, what changed, what was
 decided.
+
+- **2026-08-31 - Codex.** Implemented Milestone 4 task 3: added axe-core
+  WCAG 2 A/AA checks for the main authenticated routes and a keyboard-focus
+  e2e check; added visible focus, skip navigation, reduced-motion behavior,
+  explicit alert semantics, and a label for the destructive-confirmation
+  input. Expanded Playwright into mobile Chromium (fast default), desktop
+  Chromium, desktop Firefox, and mobile WebKit; `test:e2e:matrix` runs all
+  profiles. Installed Firefox/WebKit locally. `npm run check` passes (69/69).
+  The local e2e/matrix run could not start because this Windows session's
+  Node 22 began failing `os.userInfo()` with `uv_os_get_passwd` `ENOMEM` while
+  the synthetic e2e worker starts; this is environment-level (a direct
+  `node -e` reproduces it), not an assertion failure. Preserve the existing
+  uncommitted Clerk redirect edits in the sign-in/sign-up pages when committing
+  this work.
 
 - **2026-08-31 - Claude (fifth session, same conversation).** At the
   maintainer's request, wired real Clerk test-mode keys into `.env` to

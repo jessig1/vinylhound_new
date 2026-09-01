@@ -104,7 +104,11 @@ export function LibraryItemActions({
           </button>
         )}
       </div>
-      {error ? <p className="library-item-actions__error">{error}</p> : null}
+      {error ? (
+        <p className="library-item-actions__error" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

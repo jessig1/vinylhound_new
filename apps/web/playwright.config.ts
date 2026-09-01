@@ -2,8 +2,10 @@ import { defineConfig, devices } from "@playwright/test";
 
 import { buildE2eEnv, E2E_PORT } from "./e2e/env";
 
-// Phone-sized end-to-end coverage for the capture-to-confirm path. Requires
-// the Docker Compose services; never calls OpenAI (see e2e/global-setup.ts).
+// Cross-device browser coverage for the capture-to-confirm path. The default
+// npm command keeps the fast mobile Chromium gate; `test:e2e:matrix` runs every
+// supported browser/device profile. Both require Compose services and never
+// call OpenAI (see e2e/global-setup.ts).
 
 export default defineConfig({
   testDir: "./e2e",
@@ -15,10 +17,27 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"]],
   use: {
-    ...devices["Pixel 7"],
     baseURL: `http://localhost:${E2E_PORT}`,
     trace: "retain-on-failure",
   },
+  projects: [
+    {
+      name: "mobile-chromium",
+      use: { ...devices["Pixel 7"] },
+    },
+    {
+      name: "desktop-chromium",
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "desktop-firefox",
+      use: { ...devices["Desktop Firefox"] },
+    },
+    {
+      name: "mobile-webkit",
+      use: { ...devices["iPhone 13"] },
+    },
+  ],
   // A production build in a dedicated distDir: Next allows only one dev
   // server per app directory, and e2e must not disturb a running `npm run
   // dev` session.

@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --project=mobile-chromium",
+    "test:e2e:matrix": "playwright test"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.8.3",
@@ -22,6 +23,7 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.62.1",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.0",

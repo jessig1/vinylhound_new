@@ -36,6 +36,9 @@ export function DashboardShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
       <aside className="sidebar">
         <Link className="sidebar__brand" href="/dashboard">
           <BrandMark compact />
@@ -97,7 +100,9 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         </Link>
       </header>
 
-      <div className="app-content">{children}</div>
+      <div className="app-content" id="main-content" tabIndex={-1}>
+        {children}
+      </div>
 
       <nav className="mobile-nav" aria-label="Mobile navigation">
         <Link
