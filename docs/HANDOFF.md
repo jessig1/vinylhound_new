@@ -25,6 +25,8 @@ the log.
   TTLs, shared deployment/cleanup concurrency locks, conditional costly
   runtime resources, Aurora/S3 persistence, autoscaling, telemetry, alarms,
   budgets, and a $15 activation guard. ADR-0015 records the platform decision.
+  The implementation was committed and pushed to `main` as `f29016e` on
+  2026-09-02; GitHub workflow results remain the next verification gate.
 - **Do not make the repository public yet.** The real Gemini credential found
   in historical `.env.example` was rotated, and its only containing branch,
   `experiment/gemini-vs-openai`, was deleted locally and on GitHub on
@@ -583,6 +585,12 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-02 - Codex.** Ran `npm run check` (73 tests) and `npm run build`
+  successfully, then committed and pushed the complete Phase 2 implementation
+  to `main` as `f29016e` (`add Phase 2 public deployment platform`). The next
+  maintainer action is to review the resulting GitHub CI, Security, and
+  Platform workflow results before the visibility-change gate.
 
 - **2026-09-02 - Codex.** The maintainer rotated the historical Gemini key and
   deleted its sole containing branch, `experiment/gemini-vs-openai`. A local
