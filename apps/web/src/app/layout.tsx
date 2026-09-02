@@ -17,6 +17,11 @@ export const viewport: Viewport = {
   themeColor: "#20221f",
 };
 
+// Clerk's browser-visible publishable key is injected by ECS when the
+// standalone server starts. Prevent a build-time placeholder from being
+// captured in prerendered output.
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
@@ -26,5 +31,14 @@ export default function RootLayout({
     </html>
   );
 
-  return isProductionAuth ? <ClerkProvider>{body}</ClerkProvider> : body;
+  // Bracket access keeps this browser-visible value runtime configurable in
+  // the standalone server. CLERK_SECRET_KEY stays server-only.
+  const publishableKey =
+    process.env["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"] ?? undefined;
+
+  return isProductionAuth ? (
+    <ClerkProvider publishableKey={publishableKey}>{body}</ClerkProvider>
+  ) : (
+    body
+  );
 }

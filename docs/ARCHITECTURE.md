@@ -93,3 +93,34 @@ resolved per request (ADR-0013):
 Introducing `production` mode changed identity issuance and session
 verification only, not the data model — every foreign key still points at
 `users.id` exactly as before.
+
+## Phase 2 AWS deployment
+
+ADR-0015 preserves the web/worker boundary on ECS Fargate rather than changing
+the application into deployment-driven microservices. GitHub Actions builds
+ARM64 web and worker images once, identifies them by ECR digest, validates them
+in staging, and promotes that same pair of digests to production.
+
+```mermaid
+flowchart LR
+  GitHub[GitHub Actions OIDC] --> ECR[(ECR)]
+  GitHub --> Terraform[Terraform]
+  Internet --> ALB[ALB + ACM]
+  ALB --> Web[ECS web]
+  Web --> S3[(Private S3)]
+  Web --> Aurora[(Aurora PostgreSQL)]
+  Web --> Valkey[(ElastiCache Valkey)]
+  Valkey --> Worker[ECS worker]
+  Worker --> S3
+  Worker --> Aurora
+  Worker --> OpenAI
+```
+
+Web and worker tasks run in private subnets without public IPs. A single NAT
+gateway exists only while the environment is active because the application
+must reach Clerk, MusicBrainz, and OpenAI. An S3 gateway endpoint keeps object
+traffic off the NAT path. Security groups allow PostgreSQL and Valkey traffic
+only from the application task groups.
+
+The persistent/active resource split, scaling limits, and deactivation safety
+gate are defined in ADR-0015 and `docs/OPERATIONS.md`.

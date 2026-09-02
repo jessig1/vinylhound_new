@@ -22,6 +22,14 @@ export interface ScanQueue {
     payload: AnalyzeScanJob,
     idempotencyKey: string,
   ): Promise<{ jobId: string }>;
+  hasJob(jobId: string): Promise<boolean>;
+  getOperationalState(): Promise<{
+    waiting: number;
+    active: number;
+    delayed: number;
+    failed: number;
+    oldestWaitingAgeSeconds: number;
+  }>;
   close(): Promise<void>;
 }
 
@@ -46,6 +54,30 @@ export function createBullMqScanQueue(
         jobId: idempotencyKey,
       });
       return { jobId: job.id! };
+    },
+    async hasJob(jobId) {
+      return (await queue.getJob(jobId)) !== undefined;
+    },
+    async getOperationalState() {
+      const counts = await queue.getJobCounts(
+        "wait",
+        "active",
+        "delayed",
+        "failed",
+      );
+      const [oldestWaiting] = await queue.getJobs(["wait"], 0, 0, true);
+      return {
+        waiting: counts.wait ?? 0,
+        active: counts.active ?? 0,
+        delayed: counts.delayed ?? 0,
+        failed: counts.failed ?? 0,
+        oldestWaitingAgeSeconds: oldestWaiting
+          ? Math.max(
+              0,
+              Math.floor((Date.now() - oldestWaiting.timestamp) / 1000),
+            )
+          : 0,
+      };
     },
     close: () => queue.close(),
   };

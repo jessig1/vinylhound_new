@@ -1,0 +1,45 @@
+name: Feature proposal
+description: Propose a scoped improvement after opening a Discussion
+title: "feature: "
+labels: ["feature", "needs-design"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        VinylHound is issue-first. Substantial proposals should be discussed before implementation.
+  - type: input
+    id: discussion
+    attributes:
+      label: Related Discussion
+      description: Link the Discussion where the problem and scope were explored.
+      placeholder: https://github.com/jessig1/vinylhound_new/discussions/...
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or operational problem without prescribing a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What observable behavior would make this complete?
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Scope and tradeoffs
+      description: Note data, contract, provider, security, cost, or compatibility impact.
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Readiness
+      options:
+        - label: I searched existing issues and Discussions for duplicates.
+          required: true
+        - label: I will not begin a substantial implementation until scope is accepted.
+          required: true

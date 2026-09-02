@@ -1,0 +1,88 @@
+name: Deactivate expired environment
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deactivate
+        required: true
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deactivate:
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.environment) || '["staging","production"]') }}
+    name: Deactivate ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ matrix.environment }}
+    concurrency:
+      group: ${{ matrix.environment }}-platform
+      cancel-in-progress: false
+    env:
+      AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: "true"
+      TF_VAR_environment: ${{ matrix.environment }}
+      TF_VAR_vpc_cidr: ${{ vars.VPC_CIDR }}
+      TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
+      TF_VAR_hostname: ${{ vars.APP_HOSTNAME }}
+      TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.13.3
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Check activation and expiry
+        id: expiry
+        run: |
+          active="$(aws ssm get-parameter --name "/vinylhound/${{ matrix.environment }}/active" --query 'Parameter.Value' --output text 2>/dev/null || echo false)"
+          expires="$(aws ssm get-parameter --name "/vinylhound/${{ matrix.environment }}/expires-at" --query 'Parameter.Value' --output text 2>/dev/null || echo inactive)"
+          should_deactivate=false
+          if [[ "$active" == "true" ]]; then
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$expires" == "inactive" || "$(date -u -d "$expires" +%s)" -le "$(date -u +%s)" ]]; then
+              should_deactivate=true
+            fi
+          fi
+          echo "deactivate=$should_deactivate" >> "$GITHUB_OUTPUT"
+      - name: Initialize environment state
+        if: steps.expiry.outputs.deactivate == 'true'
+        run: >-
+          terraform -chdir=infra/terraform/environment init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="region=${AWS_REGION}"
+          -backend-config="key=environments/${{ matrix.environment }}.tfstate"
+      - name: Stop new submissions
+        if: steps.expiry.outputs.deactivate == 'true'
+        run: |
+          cluster="$(terraform -chdir=infra/terraform/environment output -raw ecs_cluster_name)"
+          aws ecs update-service --cluster "$cluster" --service web --desired-count 0 >/dev/null
+      - name: Drain durable work
+        if: steps.expiry.outputs.deactivate == 'true'
+        run: |
+          for attempt in {1..10}; do
+            if bash scripts/aws/run-worker-command.sh drain-check; then exit 0; fi
+            sleep 60
+          done
+          echo "Environment did not drain within ten minutes." >&2
+          exit 1
+      - name: Deactivate runtime resources
+        if: steps.expiry.outputs.deactivate == 'true'
+        env:
+          TF_VAR_environment_active: "false"
+          TF_VAR_deploy_services: "false"
+          TF_VAR_expires_at: inactive
+        run: terraform -chdir=infra/terraform/environment apply -auto-approve

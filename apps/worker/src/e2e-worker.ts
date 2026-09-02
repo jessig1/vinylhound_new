@@ -4,6 +4,7 @@ import type { AlbumIdentifier } from "@vinylhound/ai";
 import { loadQueueWorkerConfig } from "@vinylhound/config";
 import {
   createDatabase,
+  databaseOptionsFromConfig,
   dispatchNextOutboxMessage,
 } from "@vinylhound/database";
 import {
@@ -68,7 +69,7 @@ const syntheticIdentifier: AlbumIdentifier = {
   },
 };
 
-const database = createDatabase({ connectionString: config.DATABASE_URL });
+const database = createDatabase(databaseOptionsFromConfig(config));
 const queue = createBullMqScanQueue({
   redisUrl: config.REDIS_URL,
   queueName: config.SCAN_QUEUE_NAME,

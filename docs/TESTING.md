@@ -48,7 +48,30 @@ npm run test:integration
 npm run test:e2e
 npm run test:e2e:matrix
 npm run eval:ai -- --manifest <private-manifest-path> --dry-run
+npm run container:build
+terraform -chdir=infra/terraform/bootstrap validate
+terraform -chdir=infra/terraform/environment validate
 ```
+
+## Platform and public-repository gates
+
+Pull requests build both runtime images without publishing them, create SBOMs,
+scan the images, and validate both Terraform roots. Images must build without
+application secrets, run as a non-root user, expose a health check, and support
+ARM64 for Fargate. Terraform formatting and validation are secret-free; AWS
+plans and deployments use repository-scoped GitHub OIDC roles.
+
+Before making the repository public, run Gitleaks against the complete Git
+history and manually inspect historical filenames for environment files,
+exports, logs, signed URLs, private evaluation artifacts, and user images.
+Fork pull requests must pass the ordinary CI and security jobs but cannot
+receive repository secrets, GitHub environment secrets, or an AWS role. The
+Phase 2 rehearsal records a fork-based run as evidence of this boundary.
+
+Staging lifecycle validation must prove activation, a forward-only migration,
+smoke and integration checks, and cleanup. Production rehearsal additionally
+proves bounded TTL cleanup, safe queue drain, cache reconciliation, rollback,
+Aurora cold resume and restore, and persistence across deactivate/reactivate.
 
 The private live-model harness is documented in `docs/EVALUATION.md`. It validates
 consent and maintainer-verified labels before any request, compares configurable

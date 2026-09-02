@@ -1,0 +1,34 @@
+# Apply these labels in GitHub before opening the repository to contributions.
+- name: bug
+  color: d73a4a
+  description: Reproducible incorrect behavior
+- name: feature
+  color: 1d76db
+  description: Accepted product capability
+- name: security
+  color: b60205
+  description: Public security hardening work only; vulnerabilities stay private
+- name: documentation
+  color: 0075ca
+  description: Documentation-only change
+- name: infrastructure
+  color: 5319e7
+  description: AWS, Terraform, containers, CI, or operations
+- name: good first issue
+  color: 7057ff
+  description: Approachable for a first contribution
+- name: help wanted
+  color: 008672
+  description: Maintainer welcomes contributor help
+- name: needs-design
+  color: fbca04
+  description: Requires scope or design agreement
+- name: needs-triage
+  color: ededed
+  description: Has not yet been reviewed by a maintainer
+- name: blocked
+  color: bfdadc
+  description: Cannot proceed until a dependency or decision is resolved
+- name: skip-changelog
+  color: ffffff
+  description: Exclude from generated release notes

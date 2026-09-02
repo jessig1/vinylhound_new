@@ -1,0 +1,94 @@
+name: Platform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.13.3
+      - run: terraform fmt -check -recursive infra/terraform
+      - run: terraform -chdir=infra/terraform/bootstrap init -backend=false
+      - run: terraform -chdir=infra/terraform/bootstrap validate
+      - run: terraform -chdir=infra/terraform/environment init -backend=false
+      - run: terraform -chdir=infra/terraform/environment validate
+
+  terraform-plan:
+    name: Terraform plan (trusted PR)
+    needs: terraform
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.AWS_PLAN_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: "true"
+      TF_VAR_environment: staging
+      TF_VAR_environment_active: "false"
+      TF_VAR_vpc_cidr: ${{ vars.VPC_CIDR }}
+      TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
+      TF_VAR_hostname: ${{ vars.APP_HOSTNAME }}
+      TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.13.3
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: >-
+          terraform -chdir=infra/terraform/environment init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="region=${AWS_REGION}"
+          -backend-config="key=environments/staging.tfstate"
+      - run: terraform -chdir=infra/terraform/environment plan -lock-timeout=5m
+
+  containers:
+    name: Container build and scan (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [web, worker]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.service }}
+          load: true
+          tags: vinylhound-${{ matrix.service }}:ci
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: vinylhound-${{ matrix.service }}:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: vinylhound-${{ matrix.service }}:ci
+          artifact-name: vinylhound-${{ matrix.service }}-sbom.spdx.json

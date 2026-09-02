@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a reproducible VinylHound defect
+title: "bug: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, signed URLs, private images, or personal data.
+        Report vulnerabilities through the Security tab instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest safe set of steps that reproduces the problem.
+      placeholder: |
+        1. Start the app with...
+        2. Open...
+        3. Observe...
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Version or commit
+      description: Commit SHA, tag, or branch where the issue occurs.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Web UI
+        - API
+        - Worker or queue
+        - Database
+        - Storage or uploads
+        - Infrastructure or deployment
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, browser, Node version, and local/AWS environment as relevant.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Include only the minimum redacted output needed to diagnose the issue.
+      render: shell
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, signed URLs, personal data, and private images.
+          required: true

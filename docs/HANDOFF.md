@@ -13,7 +13,35 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-08-31
+## Current state — verified 2026-09-02
+
+- **Phase 2's repository implementation is complete and awaiting account-level
+  activation/rehearsal.** Public community-health files, GitHub templates and
+  settings automation, pinned CI/security/platform workflows, digest-pinned
+  non-root web/worker containers, runtime-safe configuration, operational
+  drain/reconciliation commands, and isolated Terraform bootstrap/environment
+  roots are present. Staging and production use GitHub OIDC, immutable ECR
+  digests, two-step runtime/migration/service deployment, bounded production
+  TTLs, shared deployment/cleanup concurrency locks, conditional costly
+  runtime resources, Aurora/S3 persistence, autoscaling, telemetry, alarms,
+  budgets, and a $15 activation guard. ADR-0015 records the platform decision.
+- **Do not make the repository public yet.** The real Gemini credential found
+  in historical `.env.example` was rotated, and its only containing branch,
+  `experiment/gemini-vs-openai`, was deleted locally and on GitHub on
+  2026-09-02. `main` never contained the exposing commit; a local ref audit and
+  GitHub `ls-remote` both confirm no remaining branch points to it. The next
+  push must produce a clean full-history Gitleaks workflow run before the
+  visibility-change gate can pass. Never add an allowlist for a real finding.
+- Verification on 2026-09-02: `npm run check` passes all 73 unit tests;
+  `npm run build` succeeds; actionlint 1.7.7 reports no workflow findings; and
+  Terraform 1.13.3 validates both roots against the committed provider locks
+  (AWS 6.62.0, HTTP 3.6.1, random 3.9.0). A historical filename audit found no
+  committed images, exports, dumps, keys, or private evaluation artifacts
+  beyond documented source/evaluation filenames and `.env.example`. Docker's
+  daemon became unresponsive during local image verification, so the image
+  build/health/shutdown gate still needs to pass in GitHub CI or after Docker
+  Desktop is repaired. The Docker context problem found during the attempt was
+  fixed by excluding `.terraform`; context size fell from over 1 GB to 1.06 MB.
 
 - The dashboard now reads authenticated, persisted data rather than the old
   hard-coded demo dataset: its activity section shows the three most recent
@@ -295,24 +323,19 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Milestone 4 is complete except a published user-facing privacy
-notice. The next session should check with the maintainer for the next priority
-rather than assuming. Candidates are the privacy notice or Milestone 3's
-deferred per-copy condition/location/notes/acquisition-date edit and delete
-flow. Keep the private AI matrix deferred until public rollout or model/cost
-optimization.
+**Task:** Complete Phase 2 activation in this order. First push the completed
+Phase 2 repository changes and verify a clean full-history Gitleaks workflow
+run. Then complete the documented visibility-change gate, make the repository
+public, and run `scripts/configure-github-repository.ps1`. The script
+intentionally requires a public repository because its GitHub Free security
+settings depend on public-repository availability. Next bootstrap AWS,
+configure repository/environment variables and protected environment rules,
+populate AWS Secrets Manager, and run the documented staging, production,
+restore, teardown, and fork-security rehearsals. Do not enable branch
+protection until its required workflow contexts have run on GitHub.
 
-The delivery roadmap cannot truthfully be called fully complete until those
-three explicitly deferred items (privacy notice, per-copy editing/deletion,
-and the private AI evaluation before public rollout) are completed or formally
-removed from it.
-
-GitHub security automation is now configured but GitHub repository settings
-still need the maintainer: enable Code scanning, Secret scanning, Dependabot
-alerts/security updates, and branch protection requiring the CI and Security
-checks listed in `docs/SECURITY.md`. The workflow publishes CodeQL and
-redacted Gitleaks SARIF results to the Security tab for trusted repository
-runs; fork PRs still fail their scan but cannot upload SARIF by design.
+Phase 3 remains a placeholder only. Do not plan UI/UX polish or AI model
+training/optimization until Phase 2 has completed and been reviewed.
 
 Things worth knowing before extending this further:
 
@@ -326,10 +349,11 @@ Things worth knowing before extending this further:
   request time despite being set correctly in `.env` — `/dashboard`
   returned `200` unauthenticated instead of redirecting. Fixed by passing
   `forceReload: true` to both `loadEnvConfig` call sites
-  (`next.config.ts`, `apps/web/src/server/context.ts`) and adding a
-  `next.config.ts` `env` block so Edge middleware's separately-compiled
-  bundle gets `AUTH_MODE`/Clerk's keys statically inlined (it never
-  executes `next.config.ts`'s `loadEnvConfig()` call itself).
+  (`next.config.ts`, `apps/web/src/server/context.ts`). Phase 2 removed the
+  `next.config.ts` `env` block because it embedded the Clerk secret at build
+  time. The container build sets only the non-secret auth mode, the root layout
+  is forced dynamic, and ECS injects Clerk values when the standalone server
+  starts.
   `apps/web/e2e/env.ts` now explicitly forces `AUTH_MODE=development` for
   the same reason: without that, a local `.env` with
   `AUTH_MODE=production` silently broke the entire e2e suite. Verified: a
@@ -545,13 +569,12 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   owning row is deleted via the database's cascading foreign key (ADR-0007
   widened this from one orphaned object to three; it did not introduce the
   gap).
-- Production authentication (ADR-0013) is implemented but not yet exercised
-  against a real Clerk account/keys — see the Resume point above.
-  `clerk_user_id` is nullable with a placeholder backfill, not yet tightened
-  to `not null`. No Clerk webhook exists; a Clerk-side account deletion does
-  not currently propagate to the local `users` row. Account deletion/export
-  and a privacy/retention policy are separate, not yet started.
-- Local-only infrastructure; backups and observability are Milestone 4.
+- Production authentication (ADR-0013) has passed route-protection checks with
+  real Clerk test-mode keys, but the Phase 2 production rehearsal still needs
+  an end-to-end sign-up/JIT-provisioning run. `clerk_user_id` remains nullable
+  with a placeholder backfill; no Clerk deletion webhook exists.
+- AWS infrastructure, backups, observability, and delivery are implemented as
+  code but have not yet been applied or rehearsed in the target account.
 - `GET /usage` and `/account/usage` report a fixed rolling 30-day window
   with no pagination, custom range, or historical trend (ADR-0008,
   deliberate scope cut). `estimatedCostUsd` is `null` whenever no attempt
@@ -560,6 +583,32 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-02 - Codex.** The maintainer rotated the historical Gemini key and
+  deleted its sole containing branch, `experiment/gemini-vs-openai`. A local
+  ref audit and GitHub `ls-remote` verification confirmed that neither local
+  nor remote branches contain the exposing commit; `main` was never affected.
+  Updated the Phase 2 activation sequence to require a clean Gitleaks workflow
+  run, then public visibility and repository-settings automation (the script
+  itself refuses private repositories).
+
+- **2026-09-02 - Codex.** Implemented VinylHound Phase 2 at repository level:
+  public-repository governance, runtime/container hardening, task-role/default
+  AWS credentials, TLS/pool configuration, worker drain/reconciliation and
+  metrics, Terraform bootstrap plus isolated JIT environments, GitHub OIDC
+  delivery/cleanup workflows, cost/security/scaling/observability controls,
+  ADR-0015, and synchronized platform documentation. Hardened the result during
+  verification by splitting web/worker execution-secret roles, adding a real
+  worker heartbeat and shutdown ordering, excluding Terraform providers from
+  container contexts, adding trusted internal-PR plans, serializing deployment
+  and expiry workflows, and provisioning runtime/migrating before ECS service
+  rollout. `npm run check` (73/73), `npm run build`, actionlint, and both
+  Terraform validates pass. Local Docker image verification is outstanding
+  because Docker Desktop's daemon became unresponsive. The required redacted
+  full-history audit found a real historical Gemini credential matching the
+  ignored local `.env`; public visibility is explicitly blocked pending
+  rotation and an approved coordinated history rewrite. Nothing was applied to
+  GitHub or AWS, committed, pushed, or made public.
 
 - **2026-08-31 - Codex.** Replaced the dashboard shell's fixed Collection
   (`48`) and Wishlist (`12`) navigation badges with per-user database counts

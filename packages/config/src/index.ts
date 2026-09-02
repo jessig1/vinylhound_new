@@ -17,14 +17,54 @@ const OptionalNonEmptyStringSchema = z.preprocess(
 const InfrastructureConfigShape = {
   APP_URL: z.url(),
   DATABASE_URL: z.string().min(1),
+  DATABASE_MAX_CONNECTIONS: z.coerce.number().int().min(1).max(50).default(5),
+  DATABASE_CONNECT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(120_000)
+    .default(30_000),
+  DATABASE_SSL_MODE: z
+    .enum(["disable", "require", "verify-full"])
+    .default("disable"),
+  DATABASE_SSL_CA_BASE64: OptionalNonEmptyStringSchema,
   REDIS_URL: z.string().min(1),
   S3_ENDPOINT: z.url().optional(),
   S3_REGION: z.string().min(1),
   S3_BUCKET: z.string().min(1),
-  S3_ACCESS_KEY_ID: z.string().min(1),
-  S3_SECRET_ACCESS_KEY: z.string().min(1),
+  S3_ACCESS_KEY_ID: OptionalNonEmptyStringSchema,
+  S3_SECRET_ACCESS_KEY: OptionalNonEmptyStringSchema,
   S3_FORCE_PATH_STYLE: BooleanStringSchema.default(false),
+  DEPLOYMENT_VERSION: z.string().min(1).default("development"),
 };
+
+function validateInfrastructureConfig(
+  value: {
+    DATABASE_SSL_MODE: "disable" | "require" | "verify-full";
+    DATABASE_SSL_CA_BASE64?: string;
+    S3_ACCESS_KEY_ID?: string;
+    S3_SECRET_ACCESS_KEY?: string;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (Boolean(value.S3_ACCESS_KEY_ID) !== Boolean(value.S3_SECRET_ACCESS_KEY)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["S3_ACCESS_KEY_ID"],
+      message: "S3 access key ID and secret must be provided together.",
+    });
+  }
+  if (
+    value.DATABASE_SSL_MODE === "verify-full" &&
+    !value.DATABASE_SSL_CA_BASE64
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DATABASE_SSL_CA_BASE64"],
+      message: "A CA certificate is required for verify-full database TLS.",
+    });
+  }
+}
 
 const AuthModeSchema = z
   .enum(["development", "production"])
@@ -68,6 +108,7 @@ export const DevelopmentWebConfigSchema = z
     ...OperationsConfigShape,
   })
   .superRefine((value, ctx) => {
+    validateInfrastructureConfig(value, ctx);
     if (value.AUTH_MODE !== value.NEXT_PUBLIC_AUTH_MODE) {
       ctx.addIssue({
         code: "custom",
@@ -93,43 +134,68 @@ export const DevelopmentWebConfigSchema = z
     }
   });
 
-export const ServerConfigSchema = z.object({
-  NODE_ENV: NodeEnvironmentSchema,
-  ...InfrastructureConfigShape,
-  OPENAI_API_KEY: z.string().min(1),
-  OPENAI_VISION_MODEL: z.string().min(1).default("gpt-5.6-sol"),
-  OPENAI_IMAGE_DETAIL: z.enum(["low", "high", "auto"]).default("high"),
-  OPENAI_TIMEOUT_MS: z.coerce
-    .number()
-    .int()
-    .min(1_000)
-    .max(600_000)
-    .default(120_000),
-});
+export const ServerConfigSchema = z
+  .object({
+    NODE_ENV: NodeEnvironmentSchema,
+    ...InfrastructureConfigShape,
+    OPENAI_API_KEY: z.string().min(1),
+    OPENAI_VISION_MODEL: z.string().min(1).default("gpt-5.6-sol"),
+    OPENAI_IMAGE_DETAIL: z.enum(["low", "high", "auto"]).default("high"),
+    OPENAI_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(600_000)
+      .default(120_000),
+  })
+  .superRefine(validateInfrastructureConfig);
 
-export const QueueWorkerConfigSchema = z.object({
-  NODE_ENV: NodeEnvironmentSchema,
-  DATABASE_URL: z.string().min(1),
-  REDIS_URL: z.string().min(1),
-  S3_ENDPOINT: z.url().optional(),
-  S3_REGION: z.string().min(1),
-  S3_BUCKET: z.string().min(1),
-  S3_ACCESS_KEY_ID: z.string().min(1),
-  S3_SECRET_ACCESS_KEY: z.string().min(1),
-  S3_FORCE_PATH_STYLE: BooleanStringSchema.default(false),
-  OPENAI_API_KEY: OptionalNonEmptyStringSchema,
-  OPENAI_VISION_MODEL: z.string().min(1).default("gpt-5.6-sol"),
-  OPENAI_IMAGE_DETAIL: z.enum(["low", "high", "auto"]).default("high"),
-  OPENAI_TIMEOUT_MS: z.coerce
-    .number()
-    .int()
-    .min(1_000)
-    .max(600_000)
-    .default(120_000),
-  SCAN_QUEUE_NAME: z.string().min(1).default("vinylhound-scans"),
-  OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
-  ANALYSIS_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(1),
-});
+export const QueueWorkerConfigSchema = z
+  .object({
+    NODE_ENV: NodeEnvironmentSchema,
+    DATABASE_URL: z.string().min(1),
+    DATABASE_MAX_CONNECTIONS: z.coerce.number().int().min(1).max(50).default(5),
+    DATABASE_CONNECT_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(120_000)
+      .default(30_000),
+    DATABASE_SSL_MODE: z
+      .enum(["disable", "require", "verify-full"])
+      .default("disable"),
+    DATABASE_SSL_CA_BASE64: OptionalNonEmptyStringSchema,
+    REDIS_URL: z.string().min(1),
+    S3_ENDPOINT: z.url().optional(),
+    S3_REGION: z.string().min(1),
+    S3_BUCKET: z.string().min(1),
+    S3_ACCESS_KEY_ID: OptionalNonEmptyStringSchema,
+    S3_SECRET_ACCESS_KEY: OptionalNonEmptyStringSchema,
+    S3_FORCE_PATH_STYLE: BooleanStringSchema.default(false),
+    DEPLOYMENT_VERSION: z.string().min(1).default("development"),
+    OPENAI_API_KEY: OptionalNonEmptyStringSchema,
+    OPENAI_VISION_MODEL: z.string().min(1).default("gpt-5.6-sol"),
+    OPENAI_IMAGE_DETAIL: z.enum(["low", "high", "auto"]).default("high"),
+    OPENAI_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(600_000)
+      .default(120_000),
+    SCAN_QUEUE_NAME: z.string().min(1).default("vinylhound-scans"),
+    OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
+    ANALYSIS_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(1),
+    CLOUDWATCH_METRICS_ENABLED: BooleanStringSchema.default(false),
+    CLOUDWATCH_METRIC_NAMESPACE: z.string().min(1).default("VinylHound"),
+    CLOUDWATCH_METRICS_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(30_000)
+      .max(300_000)
+      .default(60_000),
+    ENVIRONMENT_NAME: z.string().min(1).default("development"),
+  })
+  .superRefine(validateInfrastructureConfig);
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type DevelopmentWebConfig = z.infer<typeof DevelopmentWebConfigSchema>;

@@ -1,0 +1,116 @@
+name: Deploy production demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full commit SHA that passed staging
+        required: true
+        type: string
+      ttl_hours:
+        description: Active demo duration in hours (1-8)
+        required: true
+        default: "4"
+        type: choice
+        options: ["1", "2", "4", "8"]
+      break_glass:
+        description: Allow activation after the $15 cost guard
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: production-platform
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_environment: production
+  TF_VAR_vpc_cidr: ${{ vars.VPC_CIDR }}
+  TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
+  TF_VAR_hostname: ${{ vars.APP_HOSTNAME }}
+  TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
+
+jobs:
+  deploy:
+    name: Activate production demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+      - name: Validate commit input
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: echo "$COMMIT_SHA" | grep -Eq '^[0-9a-f]{40}$'
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.13.3
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - env:
+          BREAK_GLASS: ${{ inputs.break_glass }}
+        run: bash scripts/aws/check-monthly-cost.sh 15 "$BREAK_GLASS"
+      - name: Resolve staging-verified image digests
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          web_digest="$(aws ecr describe-images --repository-name vinylhound-web --image-ids imageTag="staging-passed-${COMMIT_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
+          worker_digest="$(aws ecr describe-images --repository-name vinylhound-worker --image-ids imageTag="staging-passed-${COMMIT_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
+          echo "TF_VAR_web_image=${{ vars.ECR_WEB_REPOSITORY }}@${web_digest}" >> "$GITHUB_ENV"
+          echo "TF_VAR_worker_image=${{ vars.ECR_WORKER_REPOSITORY }}@${worker_digest}" >> "$GITHUB_ENV"
+      - name: Set activation metadata
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          TTL_HOURS: ${{ inputs.ttl_hours }}
+        run: |
+          echo "TF_VAR_deployment_version=${COMMIT_SHA}" >> "$GITHUB_ENV"
+          echo "TF_VAR_expires_at=$(date -u -d "+${TTL_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "TF_VAR_environment_active=true" >> "$GITHUB_ENV"
+          echo "TF_VAR_deploy_services=false" >> "$GITHUB_ENV"
+      - name: Initialize environment state
+        run: >-
+          terraform -chdir=infra/terraform/environment init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="region=${AWS_REGION}"
+          -backend-config="key=environments/production.tfstate"
+      - name: Create persistent foundation
+        run: terraform -chdir=infra/terraform/environment apply -auto-approve -var environment_active=false -var deploy_services=false
+      - name: Verify runtime secrets exist
+        run: |
+          terraform -chdir=infra/terraform/environment output -json runtime_secret_arns |
+            jq -r '.[]' |
+            while read -r secret; do aws secretsmanager get-secret-value --secret-id "$secret" >/dev/null; done
+      - name: Provision production runtime
+        run: terraform -chdir=infra/terraform/environment apply -auto-approve
+      - name: Run database migrations
+        id: migrate
+        run: bash scripts/aws/run-worker-command.sh migrate
+      - name: Deploy production services
+        run: |
+          echo "TF_VAR_deploy_services=true" >> "$GITHUB_ENV"
+          TF_VAR_deploy_services=true terraform -chdir=infra/terraform/environment apply -auto-approve
+      - name: Wait and smoke test
+        run: |
+          cluster="$(terraform -chdir=infra/terraform/environment output -raw ecs_cluster_name)"
+          aws ecs wait services-stable --cluster "$cluster" --services web worker
+          url="$(terraform -chdir=infra/terraform/environment output -raw application_url)"
+          curl --fail --retry 12 --retry-delay 10 "$url/api/healthz"
+          curl --fail --retry 12 --retry-delay 10 "$url/api/readyz"
+      - name: Deactivate after a failed migration
+        if: failure() && steps.migrate.outcome == 'failure'
+        env:
+          TF_VAR_environment_active: "false"
+          TF_VAR_deploy_services: "false"
+          TF_VAR_expires_at: inactive
+        run: terraform -chdir=infra/terraform/environment apply -auto-approve

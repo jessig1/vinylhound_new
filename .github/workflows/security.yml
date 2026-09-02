@@ -23,12 +23,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: github/codeql-action/init@fddeee1a7ece751b577e409a89057319e3172939 # v4
         with:
           languages: javascript-typescript
           build-mode: none
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@fddeee1a7ece751b577e409a89057319e3172939 # v4
         with:
           category: "/language:javascript-typescript"
 
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Gitleaks examines the complete committed history, not just a PR
           # checkout, so an accidentally committed historical secret is found.
@@ -49,7 +49,7 @@ jobs:
           docker run --rm \
             --volume "$GITHUB_WORKSPACE:/repo" \
             --workdir /repo \
-            zricethezav/gitleaks:v8.30.0 \
+            zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9 \
             detect --source=/repo --redact \
             --report-format sarif --report-path /repo/gitleaks.sarif
       - name: Publish redacted secret findings to code scanning
@@ -57,7 +57,7 @@ jobs:
           always() && hashFiles('gitleaks.sarif') != '' &&
           (github.event_name != 'pull_request' ||
           github.event.pull_request.head.repo.full_name == github.repository)
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@fddeee1a7ece751b577e409a89057319e3172939 # v4
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -74,12 +74,12 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-      - uses: github/dependency-review-action@v4
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           fail-on-severity: high
           deny-licenses: AGPL-1.0, AGPL-3.0

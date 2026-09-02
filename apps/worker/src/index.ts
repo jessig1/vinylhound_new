@@ -5,6 +5,7 @@ import {
 import { loadQueueWorkerConfig } from "@vinylhound/config";
 import {
   createDatabase,
+  databaseOptionsFromConfig,
   dispatchNextOutboxMessage,
 } from "@vinylhound/database";
 import {
@@ -12,16 +13,19 @@ import {
   createBullMqScanQueue,
 } from "@vinylhound/queue";
 import { createS3ObjectStorage } from "@vinylhound/storage";
+import { writeFile } from "node:fs/promises";
 
 import { createScanAnalysisHandler } from "./analysis-handler.js";
+import { startQueueMetricsPublisher } from "./metrics.js";
 
 const shutdownSignals = ["SIGINT", "SIGTERM"] as const;
 const config = loadQueueWorkerConfig();
-const database = createDatabase({ connectionString: config.DATABASE_URL });
+const database = createDatabase(databaseOptionsFromConfig(config));
 const queue = createBullMqScanQueue({
   redisUrl: config.REDIS_URL,
   queueName: config.SCAN_QUEUE_NAME,
 });
+const metricsPublisher = startQueueMetricsPublisher(queue, config);
 const storage = createS3ObjectStorage({
   endpoint: config.S3_ENDPOINT,
   region: config.S3_REGION,
@@ -57,6 +61,19 @@ const analysisWorker = config.OPENAI_API_KEY
 
 let stopping = false;
 let nextPoll: NodeJS.Timeout | undefined;
+let activePoll: Promise<void> | undefined;
+const healthFile = process.env.WORKER_HEALTH_FILE;
+
+async function recordHeartbeat() {
+  if (!healthFile) return;
+  try {
+    await writeFile(healthFile, new Date().toISOString(), "utf8");
+  } catch (error) {
+    console.error("[worker] health heartbeat failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+  }
+}
 
 async function dispatchAvailableMessages() {
   while (!stopping) {
@@ -74,6 +91,7 @@ async function dispatchAvailableMessages() {
       messageId: result.messageId,
       jobId: result.jobId,
     });
+    await recordHeartbeat();
   }
 }
 
@@ -85,10 +103,17 @@ async function poll() {
       errorName: error instanceof Error ? error.name : "UnknownError",
     });
   } finally {
+    await recordHeartbeat();
     if (!stopping) {
-      nextPoll = setTimeout(() => void poll(), config.OUTBOX_POLL_INTERVAL_MS);
+      nextPoll = setTimeout(runPoll, config.OUTBOX_POLL_INTERVAL_MS);
     }
   }
+}
+
+function runPoll() {
+  activePoll = poll().finally(() => {
+    activePoll = undefined;
+  });
 }
 
 async function shutdown(signal: (typeof shutdownSignals)[number]) {
@@ -100,11 +125,11 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
     clearTimeout(nextPoll);
   }
   console.info(`[worker] received ${signal}; shutting down cleanly`);
-  await Promise.allSettled([
-    analysisWorker?.close(),
-    queue.close(),
-    database.close(),
-  ]);
+  await Promise.allSettled([analysisWorker?.close(), activePoll]);
+  await metricsPublisher.close();
+  await queue.close();
+  await database.close();
+  console.info("[worker] shutdown complete");
 }
 
 for (const signal of shutdownSignals) {
@@ -112,8 +137,11 @@ for (const signal of shutdownSignals) {
 }
 
 console.info("[worker] started", {
+  deploymentVersion: config.DEPLOYMENT_VERSION,
   outboxPollIntervalMs: config.OUTBOX_POLL_INTERVAL_MS,
   analysisEnabled: Boolean(analysisWorker),
   analysisConcurrency: config.ANALYSIS_CONCURRENCY,
+  cloudWatchMetricsEnabled: config.CLOUDWATCH_METRICS_ENABLED,
 });
-void poll();
+void recordHeartbeat();
+runPoll();

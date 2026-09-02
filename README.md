@@ -1,5 +1,13 @@
 # VinylHound
 
+[![CI](https://github.com/jessig1/vinylhound_new/actions/workflows/ci.yml/badge.svg)](https://github.com/jessig1/vinylhound_new/actions/workflows/ci.yml)
+[![Security](https://github.com/jessig1/vinylhound_new/actions/workflows/security.yml/badge.svg)](https://github.com/jessig1/vinylhound_new/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+> **Project status:** Phase 1 MVP complete. Phase 2 adds a public contribution
+> workflow and just-in-time AWS deployment. The demonstration environment may
+> be offline outside scheduled portfolio demos.
+
 VinylHound is a mobile-first application for identifying vinyl albums from cover photos and organizing the results into a collection or wishlist. It supports camera capture, single-photo upload, and batch ingestion.
 
 This repository contains the completed project foundation and a working first
@@ -9,6 +17,10 @@ candidates for correction, and atomically adds the reviewed release to collectio
 or wishlist. PostgreSQL persistence, signed S3-compatible uploads, server-side
 validation, transactional queue delivery, OpenAI analysis, and the complete audit
 trail sit behind the web and worker boundaries.
+
+VinylHound is a portfolio and learning project, not a verified catalog service.
+AI and catalog results remain reviewable candidates, cover recognition does not
+prove a particular pressing, and no uptime or support SLA is offered.
 
 ## Product shape
 
@@ -37,7 +49,32 @@ packages/
   storage/      Object-storage port
 docs/
   decisions/    Architecture decision records
+infra/
+  terraform/    AWS platform and environment definitions
 ```
+
+## Architecture
+
+The application is a modular monolith with independently deployable web and
+worker processes. PostgreSQL is authoritative, Redis/Valkey transports durable
+jobs, and S3-compatible storage holds images. The worker calls OpenAI only after
+the web process commits the scan and transactional outbox record.
+
+```mermaid
+flowchart LR
+  Browser --> Web[Next.js web]
+  Browser -->|signed upload| S3[(S3)]
+  Web --> DB[(PostgreSQL)]
+  DB -->|outbox| Worker[Node worker]
+  Worker --> Queue[(Redis / Valkey)]
+  Queue --> Worker
+  Worker --> S3
+  Worker --> OpenAI
+  Worker --> DB
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for boundaries, reliability
+rules, authentication, and the AWS deployment evolution.
 
 ## Quick start
 
@@ -74,6 +111,20 @@ npm run check
 npm run build
 ```
 
+## Contributing and support
+
+VinylHound uses an issue-first contribution model. Small fixes and
+documentation improvements are welcome; discuss substantial features or
+architecture changes before implementation.
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+- Use [GitHub Discussions](https://github.com/jessig1/vinylhound_new/discussions)
+  for proposals, questions, and support.
+- Use [GitHub Issues](https://github.com/jessig1/vinylhound_new/issues) for
+  accepted work and reproducible bugs.
+- Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
+- Follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Documentation
 
 - [Product definition](docs/PRODUCT.md)
@@ -83,12 +134,19 @@ npm run build
 - [OpenAI integration](docs/OPENAI_INTEGRATION.md)
 - [Security and privacy](docs/SECURITY.md)
 - [Operations runbook](docs/OPERATIONS.md)
+- [Public repository operations](docs/PUBLIC_REPOSITORY.md)
 - [Testing and AI evaluations](docs/TESTING.md)
 - [Private model evaluation runner](docs/EVALUATION.md)
 - [Catalog source evaluation](docs/CATALOG_EVALUATION.md)
 - [Delivery roadmap](docs/ROADMAP.md)
 - [Architecture decisions](docs/decisions/README.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security reporting](SECURITY.md)
 
 ## Current boundaries
 
 The repository is a modular monolith, not a collection of deployed microservices. The web app and worker are separate processes, while shared packages enforce boundaries. That is enough separation for independent scaling later without forcing distributed-system overhead into the personal-project phase.
+
+## License
+
+VinylHound is available under the [MIT License](LICENSE).

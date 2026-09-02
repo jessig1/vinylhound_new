@@ -17,6 +17,48 @@ describe("ServerConfigSchema", () => {
 
     expect(config.OPENAI_VISION_MODEL).toBe("gpt-5.6-sol");
     expect(config.OPENAI_IMAGE_DETAIL).toBe("high");
+    expect(config.DATABASE_MAX_CONNECTIONS).toBe(5);
+    expect(config.DATABASE_CONNECT_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it("accepts task-role S3 credentials and verified database TLS", () => {
+    const config = ServerConfigSchema.parse({
+      APP_URL: "https://vinylhound.example",
+      DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      DATABASE_SSL_MODE: "verify-full",
+      DATABASE_SSL_CA_BASE64: Buffer.from("test-ca").toString("base64"),
+      REDIS_URL: "rediss://cache:6379",
+      S3_REGION: "us-east-1",
+      S3_BUCKET: "vinylhound",
+      OPENAI_API_KEY: "test-key",
+    });
+
+    expect(config.S3_ACCESS_KEY_ID).toBeUndefined();
+    expect(config.DATABASE_SSL_MODE).toBe("verify-full");
+  });
+
+  it("rejects partial S3 credentials and verify-full without a CA", () => {
+    const partialCredentials = ServerConfigSchema.safeParse({
+      APP_URL: "https://vinylhound.example",
+      DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      REDIS_URL: "rediss://cache:6379",
+      S3_REGION: "us-east-1",
+      S3_BUCKET: "vinylhound",
+      S3_ACCESS_KEY_ID: "only-half",
+      OPENAI_API_KEY: "test-key",
+    });
+    const missingCa = ServerConfigSchema.safeParse({
+      APP_URL: "https://vinylhound.example",
+      DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      DATABASE_SSL_MODE: "verify-full",
+      REDIS_URL: "rediss://cache:6379",
+      S3_REGION: "us-east-1",
+      S3_BUCKET: "vinylhound",
+      OPENAI_API_KEY: "test-key",
+    });
+
+    expect(partialCredentials.success).toBe(false);
+    expect(missingCa.success).toBe(false);
   });
 });
 

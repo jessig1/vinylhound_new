@@ -12,6 +12,55 @@ Set `AUTH_MODE=production`, Clerk keys, a non-local `DATABASE_URL`/`REDIS_URL`,
 and scoped object-storage credentials only in the web/worker service secret
 stores. The web service needs no OpenAI key; only the worker receives it.
 
+The Phase 2 AWS implementation is in `infra/terraform`. Bootstrap owns the
+encrypted/versioned Terraform state bucket, immutable ECR repositories, and
+GitHub OIDC roles. The environment root owns isolated staging or production
+infrastructure. Apply bootstrap once with an administrator identity; all later
+plans and applies use GitHub OIDC.
+
+AWS tasks use IAM task roles instead of static S3 credentials. Aurora and
+Valkey require TLS; `DATABASE_SSL_MODE=verify-full` and the regional RDS CA
+bundle are supplied by Terraform. Database pools default to five connections
+per task so autoscaling cannot silently exhaust Aurora connections.
+
+## Just-in-time lifecycle
+
+`environment_active=false` is the normal resting state. It retains the VPC,
+image bucket, zero-ACU Aurora cluster, secrets, certificate, logs, alarms, and
+state, but removes NAT, ALB, application DNS, Valkey, and ECS services.
+
+- Every merge to `main` builds digest-addressed ARM64 images, activates
+  staging runtime without services, migrates, deploys the services,
+  smoke-tests, marks the digests staging-verified, and deactivates staging.
+- Production is a manual GitHub deployment of a full commit SHA that has
+  staging-verified ECR tags. Its TTL is one, two, four, or eight hours.
+- An hourly workflow reads the SSM activation/expiry markers and deactivates an
+  expired environment.
+- Before production deactivation, scale web to zero and run
+  `npm run ops:drain-check` as a one-off worker task. Do not remove Valkey until
+  the database outbox and queue are drained.
+- If Valkey is lost while database scans remain queued, run
+  `npm run ops:reconcile-queue`; it checks deterministic job IDs and republishes
+  only missing jobs.
+
+Terraform protects Aurora and the image bucket from destruction. Account
+decommissioning requires an explicit code review that removes `prevent_destroy`;
+normal JIT workflows never do this.
+
+## Deployment and rollback
+
+Terraform first provisions the active runtime and task definition with ECS
+services disabled. Migrations then run in a one-off regular Fargate task; only
+a successful migration permits the services and autoscaling targets to be
+created. Migrations are forward-only and must remain compatible with the
+previous application image. ECS deployment circuit breakers roll back failed
+services. An operator rollback redeploys the previous ECR digest; it does not
+reverse a database migration.
+
+Before the first activation, populate the Clerk secret, Clerk publishable key,
+and OpenAI key containers named by Terraform outputs. Never put those values in
+Terraform variables or GitHub secrets.
+
 ## Backup and restoration
 
 Managed PostgreSQL must retain daily backups and point-in-time recovery for at
@@ -60,3 +109,18 @@ monthly limit while token usage is still unknown. The defaults are for local
 development; production must deliberately set values aligned with the OpenAI
 project's hard monthly limit. The OpenAI project must additionally have its own
 spend cap and rate limits, because application controls are defense in depth.
+
+## AWS telemetry and budget
+
+The AWS stack provides a low-cardinality `VinylHound` CloudWatch namespace.
+Each active worker publishes pending-job count, oldest waiting-job age, and
+failed-job count once per minute. ECS scales workers from one to five tasks on
+pending work; web tasks scale from one to three on CPU. Basic service metrics
+and seven-day staging/thirty-day production logs are the default; Container
+Insights stays disabled to avoid an unmeasured telemetry bill.
+
+AWS Budgets sends notifications at $5, $10, $15, and $20. Deployment checks
+month-to-date AWS spend and refuses normal activation at $15. A production
+operator can use the explicit break-glass input only after reviewing active
+resources and expected demo duration. Budget data is delayed and is not a hard
+billing cap; TTL teardown remains the primary control.
