@@ -44,16 +44,14 @@ the log.
   build/health/shutdown gate still needs to pass in GitHub CI or after Docker
   Desktop is repaired. The Docker context problem found during the attempt was
   fixed by excluding `.terraform`; context size fell from over 1 GB to 1.06 MB.
-- **Initial GitHub workflow failures are remediated locally and awaiting a
-  follow-up push.** CI and Terraform validation were already successful.
-  Gitleaks found no leaks, but private-repository SARIF/CodeQL uploads failed
-  because code scanning is not enabled; those uploads now run only after the
-  public visibility gate. Staging was trying to assume an AWS role before its
-  environment variables existed; staging and scheduled deactivation now skip
-  safely until configured, while manual production activation validates and
-  fails clearly when configuration is missing. Trivy correctly blocked the
-  runtime images on npm/corepack transitive vulnerabilities, so the runtime
-  stages now remove package-manager tooling they do not need.
+- **Initial GitHub workflow failures are resolved.** The follow-up commit
+  `a8bdff5` passed CI, Security (including a clean full-history Gitleaks scan),
+  staging's pre-activation guard, Terraform validation, and both container
+  build/Trivy/SBOM jobs on 2026-09-02. Private-repository SARIF/CodeQL uploads
+  now wait for the public visibility gate; staging and scheduled deactivation
+  skip safely until configured, while manual production activation validates
+  and fails clearly when configuration is missing. Runtime images remove unused
+  npm/corepack package-manager tooling, eliminating its inherited Trivy findings.
 
 - The dashboard now reads authenticated, persisted data rather than the old
   hard-coded demo dataset: its activity section shows the three most recent
@@ -595,6 +593,13 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-02 - Codex.** Pushed `a8bdff5` (`fix pre-activation pipeline
+failures`) and verified the resulting GitHub Actions runs: CI, Security,
+  staging, Terraform validation, and both container build/Trivy/SBOM jobs all
+  completed successfully. The only intentionally skipped jobs were CodeQL and
+  SARIF publication until the repository becomes public, the AWS plan absent a
+  trusted pull request, and deployment work absent environment configuration.
 
 - **2026-09-02 - Codex.** Diagnosed the first GitHub Actions runs after Phase 2
   delivery using authenticated read-only API/log access. CI and Terraform
