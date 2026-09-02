@@ -88,6 +88,12 @@ pinned to commit SHAs. Pull-request workflows never use `pull_request_target`,
 AWS OIDC, deployment environments, OpenAI/Clerk keys, or AWS runtime secrets.
 Only an exact repository/environment OIDC subject can assume a deploy role.
 
+The private pre-release repository still runs the full-history Gitleaks check,
+but does not attempt to upload Gitleaks SARIF or CodeQL results until the
+visibility-change gate has completed and GitHub code scanning is enabled. This
+keeps security scanning enforced without failing solely because private-repo
+code-scanning uploads are unavailable.
+
 Container builds use a digest-pinned Node base, run as a non-root user with a
 read-only root filesystem, produce SBOM/provenance attestations, and are scanned
 before deployment. ECS web and worker task roles are separate; only the worker

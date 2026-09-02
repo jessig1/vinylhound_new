@@ -46,6 +46,12 @@ them. The production workflow remains manual even without that paid control.
 AWS and provider credentials never belong in GitHub; runtime values live in
 AWS Secrets Manager and deployments use GitHub OIDC.
 
+Until every required staging environment variable is configured, pushes to
+`main` record a successful staging-deployment skip and request no AWS
+credentials. Scheduled deactivation uses the same guard. Once configured,
+missing or invalid AWS setup remains a deployment failure rather than being
+silently ignored.
+
 ## Visibility-change gate
 
 Before making the repository public:

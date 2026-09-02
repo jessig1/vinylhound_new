@@ -31,10 +31,6 @@ env:
   AWS_REGION: us-east-1
   TF_IN_AUTOMATION: "true"
   TF_VAR_environment: production
-  TF_VAR_vpc_cidr: ${{ vars.VPC_CIDR }}
-  TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
-  TF_VAR_hostname: ${{ vars.APP_HOSTNAME }}
-  TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
 
 jobs:
   deploy:
@@ -43,6 +39,29 @@ jobs:
     timeout-minutes: 60
     environment: production
     steps:
+      - name: Load production deployment configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          ECR_WEB_REPOSITORY: ${{ vars.ECR_WEB_REPOSITORY }}
+          ECR_WORKER_REPOSITORY: ${{ vars.ECR_WORKER_REPOSITORY }}
+          VPC_CIDR: ${{ vars.VPC_CIDR }}
+          DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+          APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+          BUDGET_ALERT_EMAIL: ${{ vars.BUDGET_ALERT_EMAIL }}
+        run: |
+          missing=()
+          for name in AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET ECR_WEB_REPOSITORY ECR_WORKER_REPOSITORY VPC_CIDR DOMAIN_NAME APP_HOSTNAME BUDGET_ALERT_EMAIL; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error title=Production deployment is not configured::Set the production environment variables first: ${missing[*]}."
+            exit 1
+          fi
+          echo "TF_VAR_vpc_cidr=$VPC_CIDR" >> "$GITHUB_ENV"
+          echo "TF_VAR_domain_name=$DOMAIN_NAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_hostname=$APP_HOSTNAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_budget_alert_email=$BUDGET_ALERT_EMAIL" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.commit_sha }}

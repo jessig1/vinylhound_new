@@ -9,9 +9,10 @@ on:
   workflow_dispatch:
 
 # `security-events: write` lets CodeQL and the redacted Gitleaks SARIF report
-# create code-scanning alerts in GitHub's Security tab. Fork PRs still scan and
-# fail their check, but GitHub intentionally withholds this permission from
-# their tokens, so SARIF upload is skipped for those untrusted runs.
+# create code-scanning alerts in GitHub's Security tab once code scanning is
+# enabled for the public repository. Fork PRs still scan and fail their check,
+# but GitHub intentionally withholds this permission from their tokens, so
+# SARIF upload is skipped for those untrusted runs.
 permissions:
   actions: read
   contents: read
@@ -20,6 +21,9 @@ permissions:
 jobs:
   codeql:
     name: CodeQL
+    # GitHub does not enable code-scanning uploads for this private pre-release
+    # repository. Run CodeQL after the documented public-visibility gate.
+    if: github.event.repository.visibility == 'public'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -54,7 +58,8 @@ jobs:
             --report-format sarif --report-path /repo/gitleaks.sarif
       - name: Publish redacted secret findings to code scanning
         if: >-
-          always() && hashFiles('gitleaks.sarif') != '' &&
+          always() && github.event.repository.visibility == 'public' &&
+          hashFiles('gitleaks.sarif') != '' &&
           (github.event_name != 'pull_request' ||
           github.event.pull_request.head.repo.full_name == github.repository)
         uses: github/codeql-action/upload-sarif@fddeee1a7ece751b577e409a89057319e3172939 # v4

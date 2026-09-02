@@ -17,10 +17,6 @@ env:
   AWS_REGION: us-east-1
   TF_IN_AUTOMATION: "true"
   TF_VAR_environment: staging
-  TF_VAR_vpc_cidr: ${{ vars.VPC_CIDR }}
-  TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
-  TF_VAR_hostname: ${{ vars.APP_HOSTNAME }}
-  TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
 
 jobs:
   deploy:
@@ -29,20 +25,53 @@ jobs:
     timeout-minutes: 60
     environment: staging
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+      - name: Load staging deployment configuration
+        id: configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          ECR_WEB_REPOSITORY: ${{ vars.ECR_WEB_REPOSITORY }}
+          ECR_WORKER_REPOSITORY: ${{ vars.ECR_WORKER_REPOSITORY }}
+          VPC_CIDR: ${{ vars.VPC_CIDR }}
+          DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+          APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+          BUDGET_ALERT_EMAIL: ${{ vars.BUDGET_ALERT_EMAIL }}
+        run: |
+          missing=()
+          for name in AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET ECR_WEB_REPOSITORY ECR_WORKER_REPOSITORY VPC_CIDR DOMAIN_NAME APP_HOSTNAME BUDGET_ALERT_EMAIL; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::notice title=Staging deployment skipped::Configure the staging environment variables first: ${missing[*]}."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "TF_VAR_vpc_cidr=$VPC_CIDR" >> "$GITHUB_ENV"
+          echo "TF_VAR_domain_name=$DOMAIN_NAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_hostname=$APP_HOSTNAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_budget_alert_email=$BUDGET_ALERT_EMAIL" >> "$GITHUB_ENV"
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.13.3
           terraform_wrapper: false
-      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-      - run: bash scripts/aws/check-monthly-cost.sh 15 false
-      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - if: steps.configuration.outputs.configured == 'true'
+        run: bash scripts/aws/check-monthly-cost.sh 15 false
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build and push web
         id: web
+        if: steps.configuration.outputs.configured == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -56,6 +85,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=web
       - name: Build and push worker
         id: worker
+        if: steps.configuration.outputs.configured == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -68,19 +98,23 @@ jobs:
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
       - name: Initialize environment state
+        if: steps.configuration.outputs.configured == 'true'
         run: >-
           terraform -chdir=infra/terraform/environment init
           -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
           -backend-config="region=${AWS_REGION}"
           -backend-config="key=environments/staging.tfstate"
       - name: Create persistent foundation
+        if: steps.configuration.outputs.configured == 'true'
         run: terraform -chdir=infra/terraform/environment apply -auto-approve -var environment_active=false
       - name: Verify runtime secrets exist
+        if: steps.configuration.outputs.configured == 'true'
         run: |
           terraform -chdir=infra/terraform/environment output -json runtime_secret_arns |
             jq -r '.[]' |
             while read -r secret; do aws secretsmanager get-secret-value --secret-id "$secret" >/dev/null; done
       - name: Provision staging runtime
+        if: steps.configuration.outputs.configured == 'true'
         env:
           TF_VAR_environment_active: "true"
           TF_VAR_deploy_services: "false"
@@ -91,8 +125,10 @@ jobs:
         run: terraform -chdir=infra/terraform/environment apply -auto-approve
       - name: Run database migrations
         id: migrate
+        if: steps.configuration.outputs.configured == 'true'
         run: bash scripts/aws/run-worker-command.sh migrate
       - name: Deploy staging services
+        if: steps.configuration.outputs.configured == 'true'
         env:
           TF_VAR_environment_active: "true"
           TF_VAR_deploy_services: "true"
@@ -102,22 +138,25 @@ jobs:
           TF_VAR_expires_at: staging-pipeline
         run: terraform -chdir=infra/terraform/environment apply -auto-approve
       - name: Wait for services
+        if: steps.configuration.outputs.configured == 'true'
         run: |
           cluster="$(terraform -chdir=infra/terraform/environment output -raw ecs_cluster_name)"
           aws ecs wait services-stable --cluster "$cluster" --services web worker
       - name: Smoke test
+        if: steps.configuration.outputs.configured == 'true'
         run: |
           url="$(terraform -chdir=infra/terraform/environment output -raw application_url)"
           curl --fail --retry 12 --retry-delay 10 "$url/api/healthz"
           curl --fail --retry 12 --retry-delay 10 "$url/api/readyz"
       - name: Mark images as staging verified
+        if: steps.configuration.outputs.configured == 'true'
         run: |
           for repository in vinylhound-web vinylhound-worker; do
             manifest="$(aws ecr batch-get-image --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}" --query 'images[0].imageManifest' --output text)"
             aws ecr put-image --repository-name "$repository" --image-tag "staging-passed-${GITHUB_SHA}" --image-manifest "$manifest"
           done
       - name: Deactivate staging
-        if: always()
+        if: always() && steps.configuration.outputs.configured == 'true'
         env:
           TF_VAR_environment_active: "false"
           TF_VAR_deploy_services: "false"
