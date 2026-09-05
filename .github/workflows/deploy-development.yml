@@ -44,6 +44,10 @@ jobs:
             echo "configured=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [[ "$APP_HOSTNAME" != *."$DOMAIN_NAME" ]]; then
+            echo "::error title=Invalid development hostname::APP_HOSTNAME must be a fully qualified subdomain of DOMAIN_NAME (for example, dev.$DOMAIN_NAME)."
+            exit 1
+          fi
           echo "configured=true" >> "$GITHUB_OUTPUT"
           echo "TF_VAR_domain_name=$DOMAIN_NAME" >> "$GITHUB_ENV"
           echo "TF_VAR_hostname=$APP_HOSTNAME" >> "$GITHUB_ENV"
@@ -74,6 +78,8 @@ jobs:
           file: Dockerfile.web
           platforms: linux/arm64
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ vars.ECR_WEB_REPOSITORY }}:${{ github.sha }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
@@ -86,6 +92,8 @@ jobs:
           file: Dockerfile.worker-lambda
           platforms: linux/arm64
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ vars.ECR_WORKER_LAMBDA_REPOSITORY }}:${{ github.sha }}
           cache-from: type=gha,scope=worker-lambda
           cache-to: type=gha,mode=max,scope=worker-lambda

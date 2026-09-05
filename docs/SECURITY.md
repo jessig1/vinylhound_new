@@ -95,8 +95,10 @@ keeps security scanning enforced without failing solely because private-repo
 code-scanning uploads are unavailable.
 
 Container builds use digest-pinned bases, run as a non-root user with a
-read-only root filesystem, produce SBOM/provenance attestations, and are scanned
-before deployment. Development Lambda roles, staging ECS task roles, and
+read-only root filesystem, produce standalone CI SBOMs, and are scanned before
+deployment. Development deployment images omit attached SBOM/provenance
+attestations because Lambda requires a single supported image manifest.
+Development Lambda roles, staging ECS task roles, and
 production EKS Pod Identity roles separate web from worker access; only worker
 runtimes receive the OpenAI key. S3 and SQS are private and encrypted, S3 is
 versioned, and AWS access uses short-lived role credentials.

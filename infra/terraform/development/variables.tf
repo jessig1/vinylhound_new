@@ -11,6 +11,15 @@ variable "domain_name" {
 variable "hostname" {
   description = "Development application hostname."
   type        = string
+
+  validation {
+    condition = (
+      length(var.hostname) <= 253 &&
+      can(regex("^[a-z0-9][a-z0-9.-]*[a-z0-9]$", var.hostname)) &&
+      endswith(var.hostname, ".${var.domain_name}")
+    )
+    error_message = "hostname must be a valid fully qualified subdomain of domain_name."
+  }
 }
 
 variable "web_image" {

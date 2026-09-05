@@ -36,6 +36,12 @@ the log.
   Lambda cold start, EventBridge dispatch, and SQS partial-batch failure. All
   runtimes are non-root and omit npm; tests made no OpenAI calls and removed
   their disposable containers/databases. No real AWS plan/apply was attempted.
+- Terraform 1.13.3 is installed for both Windows and WSL. The exact WSL
+  `terraform -chdir=infra/terraform/bootstrap init` command succeeds and the
+  bootstrap root validates with AWS provider 6.62.0. Its lock now includes the
+  Linux package hash alongside the Windows hash. All four roots also pass
+  formatting and Windows validation; GitHub's Linux Terraform validation job
+  passed for milestone commit `fdece7b`.
 
 - **Do not make the repository public yet.** The real Gemini credential found
   in historical `.env.example` was rotated, and its only containing branch,
@@ -592,6 +598,51 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-05 - Codex.** Diagnosed development deployment run `33991720573`:
+  GitHub obtained an OIDC token, but AWS rejected it before builds or Terraform.
+  CloudTrail showed the actual subject as the stable-ID form
+  `repo:jessig1@13804284/vinylhound_new@1345526931:environment:development`,
+  while bootstrap trusted the legacy name-only prefix. GitHub's OIDC
+  customization API confirmed that stable prefix. Updated bootstrap plan and
+  environment trust policies to use the exact prefix and documented how forks
+  retrieve and override it. Applied the bootstrap update to the existing
+  `vinylhound-tf` state: all four GitHub IAM roles changed in place with no
+  resources created or destroyed, and the next deployment authenticated
+  successfully.
+
+- **2026-09-05 - Codex.** Continued development deployment run `33991720573`
+  through three attempts. Corrected the development ECR variables from bare
+  names to full account/region repository URLs, after which both runtime images
+  built and pushed successfully. The first Terraform apply then exposed two
+  configuration defects: `APP_HOSTNAME=dev-vh` was not an ACM-compatible FQDN,
+  and Buildx's attached attestations produced image indexes unsupported by
+  Lambda. Corrected the live hostname to `dev-vh.siliconforest.io`; added an
+  early workflow hostname guard and matching Terraform validation; and disabled
+  attached provenance/SBOM metadata for the two development Lambda images.
+  Standalone SBOM generation remains in the platform CI workflow. The patched
+  development Terraform root validates with Terraform 1.13.3, and affected
+  YAML/Markdown files pass Prettier. A new commit and deployment run are needed
+  to verify provisioning, secret injection, triggers, and HTTP smoke tests.
+
+- **2026-09-05 - Codex.** Added Terraform bootstrap validation for S3 state
+  bucket naming after AWS rejected the maintainer's underscore-containing
+  `vinylhound_tf` value. The bootstrap README now gives a valid hyphenated,
+  globally unique account-ID example, so future invalid names fail locally
+  before an AWS create request.
+
+- **2026-09-05 - Codex.** Diagnosed the maintainer's repeated Terraform 1.8.4
+  bootstrap error as WSL resolving `/usr/bin/terraform` while Windows had the
+  newly installed 1.13.3 package. Downloaded the official Linux 1.13.3 archive,
+  verified it against HashiCorp's published SHA-256 checksum, and installed it
+  at `/usr/local/bin/terraform`, ahead of `/usr/bin`. The maintainer's exact
+  bootstrap init now succeeds in WSL and `terraform validate` passes. Retained
+  the Linux AWS-provider package hash that WSL added to the bootstrap lock;
+  removing it correctly caused cached-package verification to fail. Windows
+  1.13.3 formatting/validation passes for all four roots, and the milestone's
+  GitHub Linux Terraform validation job also passed. Parallel extra-root WSL
+  initialization hit NTFS provider-cache I/O errors, so do not share a
+  `.terraform` provider directory between Windows and WSL when revalidating.
 
 - **2026-09-05 - Codex.** Built and locally smoke-tested all three runtime
   images. The first build exposed an invalid variable-based `COPY --from` in

@@ -124,8 +124,8 @@ data "aws_iam_policy_document" "plan_assume" {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repository}:pull_request",
-        "repo:${var.github_repository}:ref:refs/heads/main"
+        "${var.github_oidc_subject_prefix}:pull_request",
+        "${var.github_oidc_subject_prefix}:ref:refs/heads/main"
       ]
     }
   }
@@ -170,7 +170,7 @@ data "aws_iam_policy_document" "deploy_assume" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:environment:${each.key}"]
+      values   = ["${var.github_oidc_subject_prefix}:environment:${each.key}"]
     }
   }
 }
