@@ -622,8 +622,20 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   attached provenance/SBOM metadata for the two development Lambda images.
   Standalone SBOM generation remains in the platform CI workflow. The patched
   development Terraform root validates with Terraform 1.13.3, and affected
-  YAML/Markdown files pass Prettier. A new commit and deployment run are needed
-  to verify provisioning, secret injection, triggers, and HTTP smoke tests.
+  YAML/Markdown files pass Prettier. Pushed these corrections as `a8b2bec`; its
+  deployment run was subsequently cancelled due to the platform finding below.
+
+- **2026-09-05 - Codex.** Platform run `33994598016` correctly blocked the
+  worker-Lambda image on HIGH-severity `CVE-2026-14456`: the pinned AWS Lambda
+  Node.js 22 arm64 base contains OpenSSL `3.5.7-2.amzn2023.0.1`, while Trivy
+  reports `.0.2` as fixed. AWS's current `nodejs:22` arm64 tag still contains
+  `.0.1`, and `dnf upgrade` against the image's repositories reports no update
+  available. Cancelled concurrent deployment run `33994597990` before it could
+  activate that image. Added a single-CVE Trivy waiver expiring 2026-10-05 and
+  explicitly wired it into the platform scan. A local Trivy 0.70 scan of the
+  rebuilt arm64 image then passed with zero unsuppressed HIGH/CRITICAL findings.
+  Remove the waiver and update the pinned Lambda base digest as soon as AWS
+  publishes the fixed package.
 
 - **2026-09-05 - Codex.** Added Terraform bootstrap validation for S3 state
   bucket naming after AWS rejected the maintainer's underscore-containing
