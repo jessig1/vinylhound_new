@@ -1,0 +1,146 @@
+name: Deploy development
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: development-platform
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  deploy:
+    name: Deploy always-live serverless environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: development
+    steps:
+      - name: Load development configuration
+        id: configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          ECR_WEB_REPOSITORY: ${{ vars.ECR_WEB_REPOSITORY }}
+          ECR_WORKER_LAMBDA_REPOSITORY: ${{ vars.ECR_WORKER_LAMBDA_REPOSITORY }}
+          DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+          APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+          BUDGET_ALERT_EMAIL: ${{ vars.BUDGET_ALERT_EMAIL }}
+        run: |
+          missing=()
+          for name in AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET ECR_WEB_REPOSITORY ECR_WORKER_LAMBDA_REPOSITORY DOMAIN_NAME APP_HOSTNAME BUDGET_ALERT_EMAIL; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::notice title=Development deployment skipped::Configure: ${missing[*]}."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "TF_VAR_domain_name=$DOMAIN_NAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_hostname=$APP_HOSTNAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_budget_alert_email=$BUDGET_ALERT_EMAIL" >> "$GITHUB_ENV"
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 24, cache: npm }
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with: { terraform_version: 1.13.3, terraform_wrapper: false }
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build and push web
+        id: web
+        if: steps.configuration.outputs.configured == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.web
+          platforms: linux/arm64
+          push: true
+          tags: ${{ vars.ECR_WEB_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+      - name: Build and push Lambda worker
+        id: worker
+        if: steps.configuration.outputs.configured == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.worker-lambda
+          platforms: linux/arm64
+          push: true
+          tags: ${{ vars.ECR_WORKER_LAMBDA_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha,scope=worker-lambda
+          cache-to: type=gha,mode=max,scope=worker-lambda
+      - name: Initialize state
+        if: steps.configuration.outputs.configured == 'true'
+        run: >-
+          terraform -chdir=infra/terraform/development init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="region=${AWS_REGION}"
+          -backend-config="key=environments/development.tfstate"
+      - name: Provision functions without triggers
+        if: steps.configuration.outputs.configured == 'true'
+        env:
+          TF_VAR_web_image: ${{ vars.ECR_WEB_REPOSITORY }}@${{ steps.web.outputs.digest }}
+          TF_VAR_worker_lambda_image: ${{ vars.ECR_WORKER_LAMBDA_REPOSITORY }}@${{ steps.worker.outputs.digest }}
+          TF_VAR_deployment_version: ${{ github.sha }}
+          TF_VAR_runtime_configured: "false"
+        run: terraform -chdir=infra/terraform/development apply -auto-approve
+      - name: Inject secret-backed runtime configuration
+        if: steps.configuration.outputs.configured == 'true'
+        env:
+          DEPLOYMENT_VERSION: ${{ github.sha }}
+        run: |
+          set +x
+          trap 'rm -f web-env.json worker-env.json' EXIT
+          secrets="$(terraform -chdir=infra/terraform/development output -json runtime_secret_arns)"
+          secret_value() { aws secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text; }
+          database_url="$(secret_value "$(jq -r '."database-url"' <<<"$secrets")")"
+          clerk_secret="$(secret_value "$(jq -r '."clerk-secret-key"' <<<"$secrets")")"
+          clerk_public="$(secret_value "$(jq -r '."clerk-publishable-key"' <<<"$secrets")")"
+          openai_key="$(secret_value "$(jq -r '."openai-api-key"' <<<"$secrets")")"
+          for value in "$database_url" "$clerk_secret" "$clerk_public" "$openai_key"; do echo "::add-mask::$value"; done
+          app_url="$(terraform -chdir=infra/terraform/development output -raw application_url)"
+          bucket="$(terraform -chdir=infra/terraform/development output -raw image_bucket)"
+          queue="$(terraform -chdir=infra/terraform/development output -raw scan_queue_url)"
+          dlq="$(terraform -chdir=infra/terraform/development output -raw scan_dead_letter_queue_url)"
+          jq -n --arg app "$app_url" --arg db "$database_url" --arg clerk "$clerk_secret" --arg public "$clerk_public" --arg bucket "$bucket" --arg version "$DEPLOYMENT_VERSION" '{Variables:{NODE_ENV:"production",APP_URL:$app,DATABASE_URL:$db,DATABASE_MAX_CONNECTIONS:"2",DATABASE_CONNECT_TIMEOUT_MS:"30000",DATABASE_SSL_MODE:"require",S3_REGION:"us-east-1",S3_BUCKET:$bucket,S3_FORCE_PATH_STYLE:"false",DEPLOYMENT_VERSION:$version,AUTH_MODE:"production",NEXT_PUBLIC_AUTH_MODE:"production",CLERK_SECRET_KEY:$clerk,NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:$public,USER_DAILY_ANALYSIS_LIMIT:"25",USER_ACTIVE_SCAN_LIMIT:"5",USER_MONTHLY_SPEND_LIMIT_USD:"5",SCAN_COST_RESERVATION_USD:"0.25"}}' > web-env.json
+          jq -n --arg db "$database_url" --arg openai "$openai_key" --arg bucket "$bucket" --arg queue "$queue" --arg dlq "$dlq" --arg version "$DEPLOYMENT_VERSION" '{Variables:{NODE_ENV:"production",DATABASE_URL:$db,DATABASE_MAX_CONNECTIONS:"2",DATABASE_CONNECT_TIMEOUT_MS:"30000",DATABASE_SSL_MODE:"require",S3_REGION:"us-east-1",S3_BUCKET:$bucket,S3_FORCE_PATH_STYLE:"false",DEPLOYMENT_VERSION:$version,QUEUE_DRIVER:"sqs",SQS_QUEUE_URL:$queue,SQS_DEAD_LETTER_QUEUE_URL:$dlq,SQS_MAX_RECEIVE_COUNT:"5",SQS_VISIBILITY_TIMEOUT_SECONDS:"900",OPENAI_API_KEY:$openai,OPENAI_VISION_MODEL:"gpt-5.6-sol",OPENAI_IMAGE_DETAIL:"high",OPENAI_TIMEOUT_MS:"120000",SCAN_QUEUE_NAME:"unused",OUTBOX_POLL_INTERVAL_MS:"1000",ANALYSIS_CONCURRENCY:"1",CLOUDWATCH_METRICS_ENABLED:"false",ENVIRONMENT_NAME:"development"}}' > worker-env.json
+          aws lambda update-function-configuration --function-name "$(terraform -chdir=infra/terraform/development output -raw web_function_name)" --environment file://web-env.json >/dev/null
+          aws lambda update-function-configuration --function-name "$(terraform -chdir=infra/terraform/development output -raw worker_function_name)" --environment file://worker-env.json >/dev/null
+          aws lambda wait function-updated --function-name "$(terraform -chdir=infra/terraform/development output -raw web_function_name)"
+          aws lambda wait function-updated --function-name "$(terraform -chdir=infra/terraform/development output -raw worker_function_name)"
+          npm ci
+          DATABASE_URL="$database_url" npm run db:migrate
+      - name: Enable API and event triggers
+        if: steps.configuration.outputs.configured == 'true'
+        env:
+          TF_VAR_web_image: ${{ vars.ECR_WEB_REPOSITORY }}@${{ steps.web.outputs.digest }}
+          TF_VAR_worker_lambda_image: ${{ vars.ECR_WORKER_LAMBDA_REPOSITORY }}@${{ steps.worker.outputs.digest }}
+          TF_VAR_deployment_version: ${{ github.sha }}
+          TF_VAR_runtime_configured: "true"
+        run: terraform -chdir=infra/terraform/development apply -auto-approve
+      - name: Smoke test
+        if: steps.configuration.outputs.configured == 'true'
+        run: |
+          url="$(terraform -chdir=infra/terraform/development output -raw application_url)"
+          curl --fail --retry 12 --retry-delay 10 "$url/api/healthz"
+          curl --fail --retry 12 --retry-delay 10 "$url/api/readyz"

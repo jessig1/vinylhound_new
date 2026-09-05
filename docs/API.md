@@ -211,7 +211,8 @@ returns `202` for the first successful submission and `200` for a replay:
 
 Submission requires at least one image and requires every registered upload to
 be complete. The transaction changes the scan state and writes the outbox row;
-the web request does not depend on Redis being available.
+the web request does not depend on the configured queue transport being
+available.
 
 `GET /scans/{scanId}` is the polling endpoint. It returns the current scan state,
 latest delivery attempt, safe failure information, review reasons, token usage,
@@ -219,7 +220,7 @@ and ranked candidates. It never returns object keys, image bytes, the OpenAI key
 or the provider's raw response.
 
 Provider deliveries are append-only audit rows. Transient timeout, rate-limit,
-and provider-availability failures return the scan to `queued` for BullMQ retry.
+and provider-availability failures return the scan to `queued` for queue redelivery.
 Refusal, invalid-image, schema, and unknown failures become visible `failed`
 states. A succeeded logical attempt is skipped on redelivery before another
 provider call is made. If the scan was canceled before the worker picked up

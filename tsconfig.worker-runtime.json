@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "sourceMap": false,
+    "declaration": false,
+    "isolatedModules": false
+  },
+  "include": [
+    "packages/ai/src/**/*.ts",
+    "packages/config/src/**/*.ts",
+    "packages/contracts/src/**/*.ts",
+    "packages/database/src/**/*.ts",
+    "packages/domain/src/**/*.ts",
+    "packages/queue/src/**/*.ts",
+    "packages/storage/src/**/*.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.integration.ts",
+    "**/node_modules",
+    "**/dist"
+  ]
+}

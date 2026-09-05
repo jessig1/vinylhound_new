@@ -47,7 +47,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "terraform_state" {
 }
 
 resource "aws_ecr_repository" "application" {
-  for_each             = toset(["web", "worker"])
+  for_each             = toset(["web", "worker", "worker-lambda"])
   name                 = "vinylhound-${each.key}"
   image_tag_mutability = "IMMUTABLE"
   force_delete         = false
@@ -95,9 +95,11 @@ locals {
   github_oidc_arn = var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github[0].arn
   state_arn       = aws_s3_bucket.terraform_state.arn
   deploy_actions = [
-    "acm:*", "application-autoscaling:*", "budgets:*", "cloudwatch:*",
-    "ec2:*", "ecr:*", "ecs:*", "elasticache:*", "elasticloadbalancing:*",
-    "iam:CreatePolicy", "iam:CreateRole", "iam:DeletePolicy", "iam:DeleteRole",
+    "acm:*", "apigateway:*", "application-autoscaling:*", "autoscaling:*",
+    "budgets:*", "cloudfront:*", "cloudwatch:*", "ec2:*", "ecr:*", "ecs:*",
+    "eks:*", "elasticloadbalancing:*", "events:*", "lambda:*", "sqs:*", "wafv2:*",
+    "iam:AttachRolePolicy", "iam:CreatePolicy", "iam:CreateRole", "iam:CreateServiceLinkedRole",
+    "iam:DeletePolicy", "iam:DeleteRole", "iam:DetachRolePolicy",
     "iam:DeleteRolePolicy", "iam:GetPolicy", "iam:GetPolicyVersion", "iam:GetRole",
     "iam:GetRolePolicy", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole",
     "iam:ListPolicyVersions", "iam:ListRolePolicies", "iam:PassRole", "iam:PutRolePolicy",
@@ -153,7 +155,7 @@ resource "aws_iam_role_policy" "github_plan_state" {
 }
 
 data "aws_iam_policy_document" "deploy_assume" {
-  for_each = toset(["staging", "production"])
+  for_each = toset(["development", "staging", "production"])
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {

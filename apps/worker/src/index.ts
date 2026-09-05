@@ -11,6 +11,8 @@ import {
 import {
   createAnalyzeScanWorker,
   createBullMqScanQueue,
+  createSqsAnalyzeScanWorker,
+  createSqsScanQueue,
 } from "@vinylhound/queue";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 import { writeFile } from "node:fs/promises";
@@ -21,10 +23,16 @@ import { startQueueMetricsPublisher } from "./metrics.js";
 const shutdownSignals = ["SIGINT", "SIGTERM"] as const;
 const config = loadQueueWorkerConfig();
 const database = createDatabase(databaseOptionsFromConfig(config));
-const queue = createBullMqScanQueue({
-  redisUrl: config.REDIS_URL,
-  queueName: config.SCAN_QUEUE_NAME,
-});
+const queue =
+  config.QUEUE_DRIVER === "sqs"
+    ? createSqsScanQueue({
+        queueUrl: config.SQS_QUEUE_URL!,
+        deadLetterQueueUrl: config.SQS_DEAD_LETTER_QUEUE_URL,
+      })
+    : createBullMqScanQueue({
+        redisUrl: config.REDIS_URL!,
+        queueName: config.SCAN_QUEUE_NAME,
+      });
 const metricsPublisher = startQueueMetricsPublisher(queue, config);
 const storage = createS3ObjectStorage({
   endpoint: config.S3_ENDPOINT,
@@ -34,29 +42,42 @@ const storage = createS3ObjectStorage({
   secretAccessKey: config.S3_SECRET_ACCESS_KEY,
   forcePathStyle: config.S3_FORCE_PATH_STYLE,
 });
+const onAnalyzeScan = createScanAnalysisHandler({
+  database: database.db,
+  storage,
+  identifier: createOpenAIAlbumIdentifier({
+    apiKey: config.OPENAI_API_KEY ?? "disabled",
+    model: config.OPENAI_VISION_MODEL,
+    imageDetail: config.OPENAI_IMAGE_DETAIL,
+    timeoutMs: config.OPENAI_TIMEOUT_MS,
+  }),
+  configuredModel: config.OPENAI_VISION_MODEL,
+  promptVersion: ALBUM_IDENTIFICATION_PROMPT_VERSION,
+});
 const analysisWorker = config.OPENAI_API_KEY
-  ? createAnalyzeScanWorker({
-      redisUrl: config.REDIS_URL,
-      queueName: config.SCAN_QUEUE_NAME,
-      concurrency: config.ANALYSIS_CONCURRENCY,
-      onAnalyzeScan: createScanAnalysisHandler({
-        database: database.db,
-        storage,
-        identifier: createOpenAIAlbumIdentifier({
-          apiKey: config.OPENAI_API_KEY,
-          model: config.OPENAI_VISION_MODEL,
-          imageDetail: config.OPENAI_IMAGE_DETAIL,
-          timeoutMs: config.OPENAI_TIMEOUT_MS,
-        }),
-        configuredModel: config.OPENAI_VISION_MODEL,
-        promptVersion: ALBUM_IDENTIFICATION_PROMPT_VERSION,
-      }),
-      onError: (error) => {
-        console.error("[worker] scan consumer error", {
-          errorName: error.name,
-        });
-      },
-    })
+  ? config.QUEUE_DRIVER === "sqs"
+    ? createSqsAnalyzeScanWorker({
+        queueUrl: config.SQS_QUEUE_URL!,
+        maxAttempts: config.SQS_MAX_RECEIVE_COUNT,
+        visibilityTimeoutSeconds: config.SQS_VISIBILITY_TIMEOUT_SECONDS,
+        onAnalyzeScan,
+        onError: (error) => {
+          console.error("[worker] SQS scan consumer error", {
+            errorName: error.name,
+          });
+        },
+      })
+    : createAnalyzeScanWorker({
+        redisUrl: config.REDIS_URL!,
+        queueName: config.SCAN_QUEUE_NAME,
+        concurrency: config.ANALYSIS_CONCURRENCY,
+        onAnalyzeScan,
+        onError: (error) => {
+          console.error("[worker] BullMQ scan consumer error", {
+            errorName: error.name,
+          });
+        },
+      })
   : undefined;
 
 let stopping = false;
@@ -138,6 +159,7 @@ for (const signal of shutdownSignals) {
 
 console.info("[worker] started", {
   deploymentVersion: config.DEPLOYMENT_VERSION,
+  queueDriver: config.QUEUE_DRIVER,
   outboxPollIntervalMs: config.OUTBOX_POLL_INTERVAL_MS,
   analysisEnabled: Boolean(analysisWorker),
   analysisConcurrency: config.ANALYSIS_CONCURRENCY,

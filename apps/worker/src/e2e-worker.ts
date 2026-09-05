@@ -71,7 +71,7 @@ const syntheticIdentifier: AlbumIdentifier = {
 
 const database = createDatabase(databaseOptionsFromConfig(config));
 const queue = createBullMqScanQueue({
-  redisUrl: config.REDIS_URL,
+  redisUrl: config.REDIS_URL!,
   queueName: config.SCAN_QUEUE_NAME,
 });
 const storage = createS3ObjectStorage({
@@ -83,7 +83,7 @@ const storage = createS3ObjectStorage({
   forcePathStyle: config.S3_FORCE_PATH_STYLE,
 });
 const analysisWorker = createAnalyzeScanWorker({
-  redisUrl: config.REDIS_URL,
+  redisUrl: config.REDIS_URL!,
   queueName: config.SCAN_QUEUE_NAME,
   concurrency: config.ANALYSIS_CONCURRENCY,
   onAnalyzeScan: createScanAnalysisHandler({

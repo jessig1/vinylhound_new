@@ -1,8 +1,7 @@
 # AWS environment
 
-This Terraform root owns one isolated staging or production environment. Use a
-different backend key and tfvars file for each environment; do not use
-Terraform workspaces.
+This Terraform root owns the isolated ECS staging environment. Development and
+production have dedicated sibling roots; do not use Terraform workspaces.
 
 ```bash
 terraform init -backend-config=backend.hcl
@@ -10,13 +9,13 @@ terraform plan -var-file=environment.tfvars
 ```
 
 `environment_active=false` keeps the VPC, S3 data, Aurora Serverless cluster,
-secrets, logs, certificate, and ECS cluster while removing NAT, ALB, Valkey,
+secrets, logs, certificate, SQS queues, and ECS cluster while removing NAT, ALB,
 task definitions, and services. Aurora uses a zero-ACU minimum and auto-pauses
 after ten idle minutes. Both Aurora and the image bucket have Terraform
 `prevent_destroy`; decommissioning them requires a deliberate code change.
 
 Activation is deliberately two-step. Apply with `environment_active=true` and
-`deploy_services=false` to create the network, cache, load balancer, and task
+`deploy_services=false` to create the network, load balancer, and task
 definitions; run the migration task; then apply with `deploy_services=true`.
 This prevents a failed migration from rolling out application services.
 

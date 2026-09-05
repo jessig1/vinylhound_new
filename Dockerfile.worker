@@ -19,7 +19,11 @@ COPY packages/storage/package.json packages/storage/package.json
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY . .
+# Workspace packages export TypeScript source for local tooling. Emit their
+# JavaScript siblings so the compiled worker's `.js` specifiers resolve in the
+# production image without shipping a TypeScript loader.
 RUN npm run build --workspace @vinylhound/worker \
+  && node node_modules/typescript/bin/tsc --project tsconfig.worker-runtime.json \
   && npm prune --omit=dev
 
 FROM ${NODE_IMAGE} AS runtime

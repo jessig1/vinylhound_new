@@ -24,33 +24,34 @@ The script refuses to run while the repository is private because several
 security and branch-protection capabilities depend on public-repository
 availability on GitHub Free.
 
-Create GitHub environments named `staging` and `production`. Configure these
-non-secret variables in each environment:
+Create GitHub environments named `development`, `staging`, and `production`.
+Configure these non-secret variables in all three:
 
 - `AWS_DEPLOY_ROLE_ARN`
 - `TF_STATE_BUCKET`
 - `ECR_WEB_REPOSITORY`
-- `ECR_WORKER_REPOSITORY`
-- `VPC_CIDR`
 - `DOMAIN_NAME`
 - `APP_HOSTNAME`
 - `BUDGET_ALERT_EMAIL`
 
+Development also requires `ECR_WORKER_LAMBDA_REPOSITORY`. Staging and
+production require `ECR_WORKER_REPOSITORY` and `VPC_CIDR`.
+
 Configure the same state/network/domain values plus `AWS_PLAN_ROLE_ARN` as
-repository variables for the trusted pull-request Terraform plan. That plan is
+repository variables for the trusted staging Terraform plan. That plan is
 skipped for forks; fork jobs never request an OIDC token or target a GitHub
-environment. Keep each deployment role ARN in its matching environment.
+environment. Keep each deployment role ARN only in its matching environment.
 
 Protect production with required reviewers if the repository plan supports
 them. The production workflow remains manual even without that paid control.
 AWS and provider credentials never belong in GitHub; runtime values live in
 AWS Secrets Manager and deployments use GitHub OIDC.
 
-Until every required staging environment variable is configured, pushes to
-`main` record a successful staging-deployment skip and request no AWS
-credentials. Scheduled deactivation uses the same guard. Once configured,
-missing or invalid AWS setup remains a deployment failure rather than being
-silently ignored.
+Until their required variables are configured, development and staging
+workflows record successful skips and request no AWS credentials. Scheduled
+production deactivation uses the same guard. Once configured, missing or
+invalid AWS setup remains a deployment failure rather than being silently
+ignored.
 
 ## Visibility-change gate
 

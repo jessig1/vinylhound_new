@@ -7,8 +7,8 @@ variable "environment" {
   description = "Isolated VinylHound environment."
   type        = string
   validation {
-    condition     = contains(["staging", "production"], var.environment)
-    error_message = "environment must be staging or production."
+    condition     = var.environment == "staging"
+    error_message = "This ECS environment root is reserved for staging."
   }
 }
 

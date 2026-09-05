@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1.7
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+ARG LAMBDA_NODE_IMAGE=public.ecr.aws/lambda/nodejs:22@sha256:55578081d7ad85eb91bb8926c59774091eda6439820340ae58a7ae443e73d7a4
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /workspace
+
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY packages/ai/package.json packages/ai/package.json
+COPY packages/catalog/package.json packages/catalog/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/database/package.json packages/database/package.json
+COPY packages/domain/package.json packages/domain/package.json
+COPY packages/evals/package.json packages/evals/package.json
+COPY packages/queue/package.json packages/queue/package.json
+COPY packages/storage/package.json packages/storage/package.json
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY . .
+RUN npm run build --workspace @vinylhound/worker \
+  && node node_modules/typescript/bin/tsc --project tsconfig.worker-runtime.json \
+  && npm prune --omit=dev
+
+FROM ${LAMBDA_NODE_IMAGE} AS runtime
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+COPY --from=build /workspace/package.json ./package.json
+COPY --from=build /workspace/node_modules ./node_modules
+COPY --from=build /workspace/packages ./packages
+COPY --from=build /workspace/apps/worker/package.json ./apps/worker/package.json
+COPY --from=build /workspace/apps/worker/dist ./apps/worker/dist
+
+# Match the hardened long-running worker: the Lambda handler needs Node, not
+# package-manager tooling, and writes only to Lambda's world-writable /tmp.
+RUN rm -rf /var/lang/lib/node_modules/npm \
+    /var/lang/lib/node_modules/corepack \
+    /var/lang/bin/npm \
+    /var/lang/bin/npx \
+    /var/lang/bin/corepack
+
+USER 65534:65534
+
+CMD ["apps/worker/dist/lambda.handler"]

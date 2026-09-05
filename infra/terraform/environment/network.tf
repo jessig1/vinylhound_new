@@ -153,15 +153,3 @@ resource "aws_security_group" "database" {
     security_groups = [aws_security_group.web.id, aws_security_group.worker.id]
   }
 }
-
-resource "aws_security_group" "cache" {
-  name_prefix = "${local.name}-cache-"
-  description = "Valkey access from application tasks"
-  vpc_id      = aws_vpc.main.id
-  ingress {
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.web.id, aws_security_group.worker.id]
-  }
-}

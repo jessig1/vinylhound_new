@@ -136,27 +136,29 @@ accounts and therefore remain release gates.
 
 - [x] Add pinned, minimal, non-root web and worker images with ARM64 support,
       standalone Next.js output, health checks, and graceful shutdown.
-- [x] Remove build-time secret embedding; use ECS task-role credentials by
-      default and configurable bounded/TLS database connections.
+- [x] Remove build-time secret embedding; use Lambda/ECS/EKS role credentials
+      by default and configurable bounded/TLS database connections.
 - [x] Add PR image builds, SBOM generation, and vulnerability gates.
-- [ ] Complete the Fargate runtime/shutdown demonstration in the AWS account.
+- [ ] Complete Lambda, Fargate, and EKS runtime/shutdown demonstrations in the
+      AWS account.
 
 ### P2.3 — Terraform foundation and isolated environments
 
 - [x] Add the encrypted/versioned state and ECR bootstrap root with repository-
       scoped GitHub OIDC roles.
-- [x] Add independently keyed staging and production environment roots for VPC,
-      S3, Aurora Serverless v2, conditional Valkey/ALB/ECS/NAT, DNS/TLS,
-      secrets, telemetry, budgets, IAM, and autoscaling.
-- [x] Make runtime resources conditional through `environment_active` while
-      retaining production data and control-plane resources.
+- [x] Add independently keyed always-live serverless development, just-in-time
+      ECS staging, and just-in-time EKS production roots with isolated S3,
+      PostgreSQL, SQS, secrets, DNS/TLS, telemetry, budgets, and IAM.
+- [x] Make staging/production runtime resources conditional through
+      `environment_active` while retaining their data planes.
 - [ ] Bootstrap and apply the target account after account/domain inputs are set.
 
 ### P2.4 — GitHub Actions delivery and just-in-time lifecycle
 
-- [x] Add PR platform checks, immutable ARM image publishing, automatic staging,
-      one-off migrations, staged-image promotion, manual bounded production
-      activation, hourly expiry cleanup, and safe production drain.
+- [x] Add PR platform/Kubernetes checks, immutable ARM image publishing,
+      automatic development and staging delivery, one-off migrations,
+      staged-image promotion, manual bounded EKS production activation, hourly
+      expiry cleanup, and safe production drain.
 - [x] Add operational drain checking, idempotent queue reconciliation, and cost
       preflight commands.
 - [ ] Configure protected GitHub environments and OIDC variables, then complete
@@ -164,10 +166,11 @@ accounts and therefore remain release gates.
 
 ### P2.5 — Scaling, security, observability, and cost controls
 
-- [x] Encode task isolation, distinct least-privilege roles, worker-only OpenAI
-      access, web/worker scaling limits, Spot overflow, log retention, alarms,
-      dashboard, SNS, and $5/$10/$15/$20 budget thresholds.
-- [x] Refuse normal activation beyond $15 unless a break-glass input is supplied.
+- [x] Encode distinct Lambda/ECS/Pod Identity roles, worker-only OpenAI access,
+      web/worker scaling limits, log retention, SQS alarms, WAF, SNS, and
+      environment budgets.
+- [x] Refuse normal production activation beyond $20 unless a break-glass input
+      is supplied.
 - [x] Document the threat model, incident response, backup/restore, and inactive
       cost model.
 - [ ] Execute load, failure, authorization, restore, and teardown drills.

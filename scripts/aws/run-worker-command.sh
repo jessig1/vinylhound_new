@@ -4,7 +4,7 @@ set -euo pipefail
 operation="${1:-}"
 case "$operation" in
   migrate)
-    command_json='["npm","run","db:migrate","--workspace","@vinylhound/database"]'
+    command_json='["node","apps/worker/dist/migrate.js"]'
     ;;
   drain-check)
     command_json='["node","apps/worker/dist/ops.js","drain-check"]'

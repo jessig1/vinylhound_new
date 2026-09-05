@@ -53,8 +53,8 @@ resource "aws_cloudwatch_metric_alarm" "queue_age" {
 
   alarm_name          = "${local.name}-queue-age"
   alarm_description   = "Oldest waiting analysis job is over five minutes old."
-  namespace           = "VinylHound"
-  metric_name         = "QueueOldestAgeSeconds"
+  namespace           = "AWS/SQS"
+  metric_name         = "ApproximateAgeOfOldestMessage"
   statistic           = "Maximum"
   period              = 60
   evaluation_periods  = 5
@@ -62,7 +62,7 @@ resource "aws_cloudwatch_metric_alarm" "queue_age" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "breaching"
   dimensions = {
-    Environment = var.environment
+    QueueName = aws_sqs_queue.scan.name
   }
   alarm_actions = [aws_sns_topic.operations.arn]
   ok_actions    = [aws_sns_topic.operations.arn]
@@ -103,8 +103,8 @@ resource "aws_cloudwatch_dashboard" "operations" {
         properties = {
           title = "Queue", region = var.aws_region, view = "timeSeries"
           metrics = [
-            ["VinylHound", "QueuePendingJobs", "Environment", var.environment],
-            [".", "QueueOldestAgeSeconds", ".", "."]
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.scan.name],
+            [".", "ApproximateAgeOfOldestMessage", ".", "."]
           ]
         }
       },

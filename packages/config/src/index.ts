@@ -28,7 +28,6 @@ const InfrastructureConfigShape = {
     .enum(["disable", "require", "verify-full"])
     .default("disable"),
   DATABASE_SSL_CA_BASE64: OptionalNonEmptyStringSchema,
-  REDIS_URL: z.string().min(1),
   S3_ENDPOINT: z.url().optional(),
   S3_REGION: z.string().min(1),
   S3_BUCKET: z.string().min(1),
@@ -165,7 +164,17 @@ export const QueueWorkerConfigSchema = z
       .enum(["disable", "require", "verify-full"])
       .default("disable"),
     DATABASE_SSL_CA_BASE64: OptionalNonEmptyStringSchema,
-    REDIS_URL: z.string().min(1),
+    QUEUE_DRIVER: z.enum(["bullmq", "sqs"]).default("bullmq"),
+    REDIS_URL: OptionalNonEmptyStringSchema,
+    SQS_QUEUE_URL: z.url().optional(),
+    SQS_DEAD_LETTER_QUEUE_URL: z.url().optional(),
+    SQS_MAX_RECEIVE_COUNT: z.coerce.number().int().min(1).max(20).default(5),
+    SQS_VISIBILITY_TIMEOUT_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(30)
+      .max(900)
+      .default(180),
     S3_ENDPOINT: z.url().optional(),
     S3_REGION: z.string().min(1),
     S3_BUCKET: z.string().min(1),
@@ -195,7 +204,23 @@ export const QueueWorkerConfigSchema = z
       .default(60_000),
     ENVIRONMENT_NAME: z.string().min(1).default("development"),
   })
-  .superRefine(validateInfrastructureConfig);
+  .superRefine((value, ctx) => {
+    validateInfrastructureConfig(value, ctx);
+    if (value.QUEUE_DRIVER === "bullmq" && !value.REDIS_URL) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["REDIS_URL"],
+        message: "REDIS_URL is required when QUEUE_DRIVER is bullmq.",
+      });
+    }
+    if (value.QUEUE_DRIVER === "sqs" && !value.SQS_QUEUE_URL) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SQS_QUEUE_URL"],
+        message: "SQS_QUEUE_URL is required when QUEUE_DRIVER is sqs.",
+      });
+    }
+  });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type DevelopmentWebConfig = z.infer<typeof DevelopmentWebConfigSchema>;

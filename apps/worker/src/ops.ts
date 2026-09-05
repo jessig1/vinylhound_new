@@ -5,7 +5,7 @@ import {
   getOperationalDrainState,
   listRepublishableAnalysisJobs,
 } from "@vinylhound/database";
-import { createBullMqScanQueue } from "@vinylhound/queue";
+import { createBullMqScanQueue, createSqsScanQueue } from "@vinylhound/queue";
 
 const command = process.argv[2];
 if (command !== "drain-check" && command !== "reconcile-queue") {
@@ -14,10 +14,16 @@ if (command !== "drain-check" && command !== "reconcile-queue") {
 
 const config = loadQueueWorkerConfig();
 const database = createDatabase(databaseOptionsFromConfig(config));
-const queue = createBullMqScanQueue({
-  redisUrl: config.REDIS_URL,
-  queueName: config.SCAN_QUEUE_NAME,
-});
+const queue =
+  config.QUEUE_DRIVER === "sqs"
+    ? createSqsScanQueue({
+        queueUrl: config.SQS_QUEUE_URL!,
+        deadLetterQueueUrl: config.SQS_DEAD_LETTER_QUEUE_URL,
+      })
+    : createBullMqScanQueue({
+        redisUrl: config.REDIS_URL!,
+        queueName: config.SCAN_QUEUE_NAME,
+      });
 
 try {
   if (command === "drain-check") {
@@ -42,7 +48,6 @@ try {
     const candidates = await listRepublishableAnalysisJobs(database.db);
     let republished = 0;
     for (const candidate of candidates) {
-      if (await queue.hasJob(candidate.idempotencyKey)) continue;
       await queue.enqueueAnalyzeScan(candidate.job, candidate.idempotencyKey);
       republished += 1;
     }

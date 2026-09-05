@@ -13,20 +13,30 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-02
+## Current state — verified 2026-09-05
 
-- **Phase 2's repository implementation is complete and awaiting account-level
-  activation/rehearsal.** Public community-health files, GitHub templates and
-  settings automation, pinned CI/security/platform workflows, digest-pinned
-  non-root web/worker containers, runtime-safe configuration, operational
-  drain/reconciliation commands, and isolated Terraform bootstrap/environment
-  roots are present. Staging and production use GitHub OIDC, immutable ECR
-  digests, two-step runtime/migration/service deployment, bounded production
-  TTLs, shared deployment/cleanup concurrency locks, conditional costly
-  runtime resources, Aurora/S3 persistence, autoscaling, telemetry, alarms,
-  budgets, and a $15 activation guard. ADR-0015 records the platform decision.
-  The implementation was committed and pushed to `main` as `f29016e` on
-  2026-09-02; GitHub workflow results remain the next verification gate.
+- **The tiered AWS runtime redesign is implemented and verified for milestone
+  delivery.**
+  ADR-0016 supersedes ADR-0015: development is an always-live, scale-to-zero
+  API Gateway/Lambda environment backed by external PostgreSQL, staging keeps
+  the just-in-time ECS shape, and production is now a just-in-time EKS runtime
+  behind CloudFront, WAF, and an internal ALB. AWS environments use SQS FIFO
+  queues with DLQs while local development keeps BullMQ. Production teardown
+  drains workers before removing the namespace; application access uses EKS
+  Pod Identity, and container migration/runtime entrypoints no longer depend on
+  npm being present in the hardened images.
+- Verification through 2026-09-05: `npm run check` passes all 79 unit tests;
+  `npm run build` succeeds; actionlint 1.7.7 reports no workflow findings;
+  kubeconform 0.7.0 validates all 10 production Kubernetes resources; and
+  Terraform 1.13.3 formats and validates bootstrap, development, staging, and
+  production roots against committed provider locks. The worker shared-package
+  runtime compilation also succeeds. `npm run container:build` now builds all
+  three images. Local smoke tests prove web liveness/readiness/root responses
+  and Docker health, worker migrations/heartbeat/clean SIGTERM shutdown, and
+  Lambda cold start, EventBridge dispatch, and SQS partial-batch failure. All
+  runtimes are non-root and omit npm; tests made no OpenAI calls and removed
+  their disposable containers/databases. No real AWS plan/apply was attempted.
+
 - **Do not make the repository public yet.** The real Gemini credential found
   in historical `.env.example` was rotated, and its only containing branch,
   `experiment/gemini-vs-openai`, was deleted locally and on GitHub on
@@ -34,16 +44,6 @@ the log.
   GitHub `ls-remote` both confirm no remaining branch points to it. The next
   push must produce a clean full-history Gitleaks workflow run before the
   visibility-change gate can pass. Never add an allowlist for a real finding.
-- Verification on 2026-09-02: `npm run check` passes all 73 unit tests;
-  `npm run build` succeeds; actionlint 1.7.7 reports no workflow findings; and
-  Terraform 1.13.3 validates both roots against the committed provider locks
-  (AWS 6.62.0, HTTP 3.6.1, random 3.9.0). A historical filename audit found no
-  committed images, exports, dumps, keys, or private evaluation artifacts
-  beyond documented source/evaluation filenames and `.env.example`. Docker's
-  daemon became unresponsive during local image verification, so the image
-  build/health/shutdown gate still needs to pass in GitHub CI or after Docker
-  Desktop is repaired. The Docker context problem found during the attempt was
-  fixed by excluding `.terraform`; context size fell from over 1 GB to 1.06 MB.
 - **Initial GitHub workflow failures are resolved.** The follow-up commit
   `a8bdff5` passed CI, Security (including a clean full-history Gitleaks scan),
   staging's pre-activation guard, Terraform validation, and both container
@@ -57,7 +57,7 @@ the log.
   hard-coded demo dataset: its activity section shows the three most recent
   scans, and its collection/wishlist previews show the three most recently
   updated items and exact server-side counts. Empty states are explicit. This
-  change is uncommitted, alongside the pre-existing working-tree changes.
+  work is committed on `main`.
 
 - **Milestone 4's managed-infrastructure/operations task is complete at the
   repository level.** `docs/OPERATIONS.md` defines the managed PostgreSQL,
@@ -313,8 +313,7 @@ DELETE` intended only to inspect response headers while manually verifying
   Direct wishlist-to-owned conversion (ADR-0011) and library search/sort/
   export (ADR-0012) are committed as `b2d87d6`. Production authentication
   (ADR-0013) is committed as `9507cad`. All of the above are pushed to
-  `origin/main`. Account export/deletion (ADR-0014, this session) is
-  uncommitted; the maintainer should review before commit.
+  `origin/main`. Account export/deletion (ADR-0014) is committed as `6511205`.
 - The maintainer's private dataset folder contains 52 JPEG cover photos plus a
   draft `manifest.json` and `LABELING_PROMPT.md`. These files remain outside
   the repository and still need app-assisted labels and maintainer verification.
@@ -333,16 +332,16 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Complete Phase 2 activation in this order. First push the completed
-Phase 2 repository changes and verify a clean full-history Gitleaks workflow
-run. Then complete the documented visibility-change gate, make the repository
-public, and run `scripts/configure-github-repository.ps1`. The script
-intentionally requires a public repository because its GitHub Free security
-settings depend on public-repository availability. Next bootstrap AWS,
-configure repository/environment variables and protected environment rules,
-populate AWS Secrets Manager, and run the documented staging, production,
-restore, teardown, and fork-security rehearsals. Do not enable branch
-protection until its required workflow contexts have run on GitHub.
+**Task:** Verify clean CI, Security, and Platform runs for the infrastructure
+milestone commit. Then configure an external TLS PostgreSQL URL for development
+and run real Terraform plans for the development, staging, and production
+roots, paying particular attention to the production state-address preservation
+documented in ADR-0016.
+
+After that gate passes, continue the documented repository-visibility, AWS
+bootstrap, environment configuration, secret population, deployment, restore,
+teardown, and fork-security rehearsals. Do not apply infrastructure or enable
+branch protection until the corresponding review gates have passed.
 
 Phase 3 remains a placeholder only. Do not plan UI/UX polish or AI model
 training/optimization until Phase 2 has completed and been reviewed.
@@ -593,6 +592,39 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-05 - Codex.** Built and locally smoke-tested all three runtime
+  images. The first build exposed an invalid variable-based `COPY --from` in
+  `Dockerfile.web`; a named Lambda-adapter stage fixes it. The Lambda worker
+  also ran as root locally and retained npm, so its final stage now removes
+  package-manager tooling and selects UID/GID 65534. The final top-level
+  `npm run container:build` succeeds. Web returned 200 for liveness, readiness,
+  and `/`, reached Docker `healthy`, ran as UID 1000 without npm, and contained
+  an executable Lambda adapter. The worker applied all 11 migrations to an
+  isolated database, produced a fresh heartbeat, ran as UID 1000 without npm,
+  and completed SIGTERM shutdown with exit code 0. The Lambda image cold-started
+  locally as UID 65534 without npm, returned zero EventBridge publications from
+  an empty database, and returned the expected partial-batch failure for an
+  invalid SQS record. OpenAI was disabled or replaced by a non-real placeholder;
+  disposable databases/containers were removed and Compose dependencies were
+  returned to their initially stopped state. The maintainer authorized this
+  verified redesign for an infrastructure milestone commit and push before the
+  real AWS plan gate.
+
+- **2026-09-03 - Codex.** Resumed an interrupted, uncommitted AWS platform
+  redesign and completed its repository implementation. Added the development
+  Lambda/API Gateway/SQS root, production EKS/CloudFront/WAF/SQS root and
+  Kubernetes workloads, SQS queue adapter/tests, production expiry teardown,
+  worker migration and Lambda entrypoints, and worker shared-package runtime
+  compilation for hardened images. Corrected Terraform syntax/state-address
+  compatibility, Lambda visibility timeout, CloudFront-origin networking, EKS
+  Pod Identity/observability, and workflow manifest validation. Recorded the
+  design in ADR-0016 and synchronized operational, architecture, security,
+  testing, roadmap, API, and repository documentation. Checks, builds,
+  actionlint, kubeconform, and all four Terraform validations pass. A final
+  container build attempt reached Docker but its daemon reported that Docker
+  Desktop was unable to start, so Docker runtime verification and real AWS
+  plans remain the next gates.
 
 - **2026-09-02 - Codex.** Pushed `a8bdff5` (`fix pre-activation pipeline
 failures`) and verified the resulting GitHub Actions runs: CI, Security,

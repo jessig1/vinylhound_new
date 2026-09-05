@@ -33,3 +33,11 @@ idempotent and consult authoritative attempt state before calling a paid provide
   show lock duration is material.
 - PostgreSQL remains the source of truth, while Redis is a retryable delivery
   mechanism with at-least-once failure semantics.
+
+## Amendment (2026-09-03)
+
+ADR-0016 adds SQS as the AWS queue adapter while retaining BullMQ locally. The
+transactional outbox, deterministic idempotency key, schema validation, and
+database-authoritative consumer rules remain unchanged. SQS FIFO maps the key
+to `MessageDeduplicationId` and the scan ID to `MessageGroupId`; its retained
+DLQ replaces BullMQ's failed-job set in cloud environments.

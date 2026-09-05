@@ -2,14 +2,18 @@
 
 ## Decision summary
 
-VinylHound starts as a modular monolith with two processes: a Next.js web application and a Node.js background worker. PostgreSQL is the source of truth, Redis backs retryable jobs, and S3-compatible storage holds images. Shared TypeScript packages keep provider and domain boundaries explicit.
+VinylHound is a modular monolith with two processes: a Next.js web application
+and a Node.js background worker. PostgreSQL is the source of truth, a durable
+queue transports retryable jobs, and S3-compatible storage holds images.
+BullMQ/Redis is the local queue adapter; AWS environments use SQS. Shared
+TypeScript packages keep provider and domain boundaries explicit.
 
 ```mermaid
 flowchart LR
   Phone[Phone camera or uploads] --> Web[Next.js web app]
   Web -->|signed upload| Objects[(Object storage)]
   Web -->|scan + transactional outbox| DB[(PostgreSQL)]
-  DB -->|outbox publisher| Queue[(Redis queue)]
+  DB -->|outbox publisher| Queue[(BullMQ or SQS)]
   Queue --> Worker[Background worker]
   Worker -->|validated object read| Objects
   Worker -->|request-scoped image data + schema| OpenAI[OpenAI Responses API]
@@ -37,9 +41,11 @@ Camera uploads and batch analysis are slower and less reliable than normal HTTP 
    candidate, reviewed corrections, catalog provenance, and originating scan.
 
 Submission writes the `queued` scan state and a versioned outbox message in one
-PostgreSQL transaction. The worker publishes pending messages to BullMQ using a
-deterministic job ID and only then marks them published. A crash between those
-steps causes a safe duplicate publication attempt instead of a lost scan.
+PostgreSQL transaction. The worker publishes pending messages through the queue
+port using a deterministic idempotency key and only then marks them published.
+A crash between those steps causes a safe duplicate publication attempt instead
+of a lost scan. BullMQ uses that key as its job ID; SQS FIFO uses it as the
+deduplication ID and the scan ID as the message group.
 
 ## Boundaries
 
@@ -96,31 +102,31 @@ verification only, not the data model — every foreign key still points at
 
 ## Phase 2 AWS deployment
 
-ADR-0015 preserves the web/worker boundary on ECS Fargate rather than changing
-the application into deployment-driven microservices. GitHub Actions builds
-ARM64 web and worker images once, identifies them by ECR digest, validates them
-in staging, and promotes that same pair of digests to production.
+ADR-0016 preserves the web/worker boundary while deliberately exercising three
+runtime shapes. GitHub Actions uses environment-scoped OIDC roles and immutable
+ECR digests. Staging verifies the same web and long-running worker images that
+production promotes; development uses the web image plus a Lambda-specific
+worker entrypoint.
 
 ```mermaid
-flowchart LR
-  GitHub[GitHub Actions OIDC] --> ECR[(ECR)]
-  GitHub --> Terraform[Terraform]
-  Internet --> ALB[ALB + ACM]
-  ALB --> Web[ECS web]
-  Web --> S3[(Private S3)]
-  Web --> Aurora[(Aurora PostgreSQL)]
-  Web --> Valkey[(ElastiCache Valkey)]
-  Valkey --> Worker[ECS worker]
-  Worker --> S3
-  Worker --> Aurora
-  Worker --> OpenAI
+flowchart TB
+  GitHub[GitHub Actions OIDC] --> ECR[(Immutable ECR images)]
+  GitHub --> Terraform[Four Terraform roots]
+  ECR --> Dev[Development: API Gateway + Lambda]
+  ECR --> Stage[Staging: ALB + ECS Fargate]
+  ECR --> Prod[Production: CloudFront/WAF + private ALB + EKS]
+  Dev --> DevData[(External PostgreSQL + dev SQS/S3)]
+  Stage --> StageData[(Staging Aurora + SQS/S3)]
+  Prod --> ProdData[(Production Aurora + SQS/S3)]
 ```
 
-Web and worker tasks run in private subnets without public IPs. A single NAT
-gateway exists only while the environment is active because the application
-must reach Clerk, MusicBrainz, and OpenAI. An S3 gateway endpoint keeps object
-traffic off the NAT path. Security groups allow PostgreSQL and Valkey traffic
-only from the application task groups.
+Development has no VPC or idle worker: API Gateway and SQS invoke Lambdas, and
+EventBridge periodically publishes committed outbox rows. Staging web and
+worker tasks run in private subnets on Fargate. Production pods run on two ARM64
+managed EKS nodes with separate Pod Identity roles; CloudFront reaches the
+internal ALB through a VPC origin. Staging and production create a single NAT
+only while active for Clerk, MusicBrainz, and OpenAI egress, while an S3 gateway
+endpoint keeps object traffic private.
 
-The persistent/active resource split, scaling limits, and deactivation safety
-gate are defined in ADR-0015 and `docs/OPERATIONS.md`.
+The environment differences, persistent/active resource split, scaling limits,
+and deactivation gate are defined in ADR-0016 and `docs/OPERATIONS.md`.

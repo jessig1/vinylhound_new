@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { DevelopmentWebConfigSchema, ServerConfigSchema } from "./index.js";
+import {
+  DevelopmentWebConfigSchema,
+  QueueWorkerConfigSchema,
+  ServerConfigSchema,
+} from "./index.js";
 
 describe("ServerConfigSchema", () => {
   it("defaults album identification to Sol with high image detail", () => {
@@ -130,5 +134,46 @@ describe("DevelopmentWebConfigSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("QueueWorkerConfigSchema", () => {
+  const baseEnv = {
+    DATABASE_URL: "postgresql://vinylhound:password@localhost/vinylhound",
+    S3_REGION: "us-east-1",
+    S3_BUCKET: "vinylhound",
+  };
+
+  it("defaults to BullMQ and requires Redis", () => {
+    expect(QueueWorkerConfigSchema.safeParse(baseEnv).success).toBe(false);
+    expect(
+      QueueWorkerConfigSchema.parse({
+        ...baseEnv,
+        REDIS_URL: "redis://localhost:6379",
+      }).QUEUE_DRIVER,
+    ).toBe("bullmq");
+  });
+
+  it("accepts SQS without a Redis URL", () => {
+    const config = QueueWorkerConfigSchema.parse({
+      ...baseEnv,
+      QUEUE_DRIVER: "sqs",
+      SQS_QUEUE_URL: "https://sqs.us-east-1.amazonaws.com/123/scans.fifo",
+      SQS_DEAD_LETTER_QUEUE_URL:
+        "https://sqs.us-east-1.amazonaws.com/123/scans-dlq.fifo",
+    });
+
+    expect(config.REDIS_URL).toBeUndefined();
+    expect(config.SQS_MAX_RECEIVE_COUNT).toBe(5);
+    expect(config.SQS_VISIBILITY_TIMEOUT_SECONDS).toBe(180);
+  });
+
+  it("rejects SQS without a queue URL", () => {
+    expect(
+      QueueWorkerConfigSchema.safeParse({
+        ...baseEnv,
+        QUEUE_DRIVER: "sqs",
+      }).success,
+    ).toBe(false);
   });
 });

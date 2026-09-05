@@ -56,9 +56,10 @@ infra/
 ## Architecture
 
 The application is a modular monolith with independently deployable web and
-worker processes. PostgreSQL is authoritative, Redis/Valkey transports durable
-jobs, and S3-compatible storage holds images. The worker calls OpenAI only after
-the web process commits the scan and transactional outbox record.
+worker processes. PostgreSQL is authoritative, BullMQ/Redis transports local
+jobs, SQS transports AWS jobs, and S3-compatible storage holds images. The
+worker calls OpenAI only after the web process commits the scan and
+transactional outbox record.
 
 ```mermaid
 flowchart LR
@@ -66,7 +67,7 @@ flowchart LR
   Browser -->|signed upload| S3[(S3)]
   Web --> DB[(PostgreSQL)]
   DB -->|outbox| Worker[Node worker]
-  Worker --> Queue[(Redis / Valkey)]
+  Worker --> Queue[(BullMQ / SQS)]
   Queue --> Worker
   Worker --> S3
   Worker --> OpenAI
@@ -94,8 +95,9 @@ The web shell does not require an OpenAI key. Before wiring or running image ana
 
 Run `npm run dev:worker` in a second terminal to publish committed outbox rows to
 Redis. When `OPENAI_API_KEY` is non-empty, the same process starts the BullMQ
-analysis consumer. Without a key, publication still runs and analysis jobs remain
-waiting without making billable API calls.
+analysis consumer. Without a key, publication still runs and analysis jobs
+remain waiting without making billable API calls. AWS deployments select the
+SQS adapter instead; local setup remains unchanged.
 
 Album identification defaults to `gpt-5.6-sol` with `high` image detail and an
 artist/title-first prompt. To validate it locally, upload the same difficult

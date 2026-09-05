@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+ARG LAMBDA_ADAPTER_IMAGE=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.1@sha256:1e5ab4d9242167500ed8a7bed8a79b448228aaa51cf382fb51fe4bf8a5f9a811
+
+FROM ${LAMBDA_ADAPTER_IMAGE} AS lambda-adapter
 
 FROM ${NODE_IMAGE} AS build
 WORKDIR /workspace
@@ -29,7 +32,13 @@ FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
-    PORT=3000
+    PORT=3000 \
+    AWS_LWA_PORT=3000 \
+    AWS_LWA_READINESS_CHECK_PATH=/api/healthz
+
+# This extension is inert under ECS/Kubernetes and adapts the same standalone
+# Next.js image to Lambda HTTP events in the always-on development environment.
+COPY --from=lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
 
 # The runtime needs Node, not npm/corepack. Removing package-manager tooling
 # eliminates its transitive vulnerability surface from the shipped image.

@@ -1,4 +1,3 @@
-environment        = "production"
 environment_active = false
 vpc_cidr           = "10.50.0.0/16"
 domain_name        = "example.com"

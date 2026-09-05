@@ -94,8 +94,9 @@ visibility-change gate has completed and GitHub code scanning is enabled. This
 keeps security scanning enforced without failing solely because private-repo
 code-scanning uploads are unavailable.
 
-Container builds use a digest-pinned Node base, run as a non-root user with a
+Container builds use digest-pinned bases, run as a non-root user with a
 read-only root filesystem, produce SBOM/provenance attestations, and are scanned
-before deployment. ECS web and worker task roles are separate; only the worker
-receives the OpenAI key. S3 is private, encrypted, versioned, and accessed with
-short-lived task credentials.
+before deployment. Development Lambda roles, staging ECS task roles, and
+production EKS Pod Identity roles separate web from worker access; only worker
+runtimes receive the OpenAI key. S3 and SQS are private and encrypted, S3 is
+versioned, and AWS access uses short-lived role credentials.

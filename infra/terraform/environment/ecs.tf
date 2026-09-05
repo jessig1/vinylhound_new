@@ -111,6 +111,16 @@ resource "aws_iam_role_policy" "worker" {
       Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
       Resource = "${aws_s3_bucket.images.arn}/*"
       }, {
+      Effect = "Allow"
+      Action = [
+        "sqs:ChangeMessageVisibility",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:ReceiveMessage",
+        "sqs:SendMessage"
+      ]
+      Resource = [aws_sqs_queue.scan.arn, aws_sqs_queue.scan_dead_letter.arn]
+      }, {
       Effect   = "Allow"
       Action   = ["s3:ListBucket"]
       Resource = aws_s3_bucket.images.arn
@@ -135,7 +145,11 @@ locals {
   common_environment = [
     { name = "NODE_ENV", value = "production" },
     { name = "DEPLOYMENT_VERSION", value = var.deployment_version },
-    { name = "REDIS_URL", value = var.environment_active ? "rediss://${aws_elasticache_serverless_cache.main[0].endpoint[0].address}:${aws_elasticache_serverless_cache.main[0].endpoint[0].port}" : "rediss://inactive:6379" },
+    { name = "QUEUE_DRIVER", value = "sqs" },
+    { name = "SQS_QUEUE_URL", value = aws_sqs_queue.scan.url },
+    { name = "SQS_DEAD_LETTER_QUEUE_URL", value = aws_sqs_queue.scan_dead_letter.url },
+    { name = "SQS_MAX_RECEIVE_COUNT", value = "5" },
+    { name = "SQS_VISIBILITY_TIMEOUT_SECONDS", value = "180" },
     { name = "S3_REGION", value = var.aws_region },
     { name = "S3_BUCKET", value = aws_s3_bucket.images.id },
     { name = "S3_FORCE_PATH_STYLE", value = "false" }
@@ -232,13 +246,12 @@ resource "aws_ecs_task_definition" "worker" {
     stopTimeout            = 120
     mountPoints            = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
     environment = concat(local.database_environment, local.common_environment, [
-      { name = "SCAN_QUEUE_NAME", value = "vinylhound-scans-${var.environment}" },
       { name = "OUTBOX_POLL_INTERVAL_MS", value = "1000" },
       { name = "ANALYSIS_CONCURRENCY", value = "1" },
       { name = "OPENAI_VISION_MODEL", value = "gpt-5.6-sol" },
       { name = "OPENAI_IMAGE_DETAIL", value = "high" },
       { name = "OPENAI_TIMEOUT_MS", value = "120000" },
-      { name = "CLOUDWATCH_METRICS_ENABLED", value = "true" },
+      { name = "CLOUDWATCH_METRICS_ENABLED", value = "false" },
       { name = "CLOUDWATCH_METRIC_NAMESPACE", value = "VinylHound" },
       { name = "ENVIRONMENT_NAME", value = var.environment },
       { name = "WORKER_HEALTH_FILE", value = "/tmp/vinylhound-worker-health" }
@@ -387,13 +400,13 @@ resource "aws_appautoscaling_policy" "worker_queue" {
     scale_in_cooldown  = 300
     scale_out_cooldown = 60
     customized_metric_specification {
-      metric_name = "QueuePendingJobs"
-      namespace   = "VinylHound"
+      metric_name = "ApproximateNumberOfMessagesVisible"
+      namespace   = "AWS/SQS"
       statistic   = "Average"
       unit        = "Count"
       dimensions {
-        name  = "Environment"
-        value = var.environment
+        name  = "QueueName"
+        value = aws_sqs_queue.scan.name
       }
     }
   }

@@ -8,13 +8,13 @@ on:
         required: true
         type: string
       ttl_hours:
-        description: Active demo duration in hours (1-8)
+        description: Active demo duration in hours
         required: true
         default: "4"
         type: choice
         options: ["1", "2", "4", "8"]
       break_glass:
-        description: Allow activation after the $15 cost guard
+        description: Allow activation after the cost guard
         required: true
         default: false
         type: boolean
@@ -30,16 +30,15 @@ permissions:
 env:
   AWS_REGION: us-east-1
   TF_IN_AUTOMATION: "true"
-  TF_VAR_environment: production
 
 jobs:
   deploy:
-    name: Activate production demo
+    name: Activate EKS production demo
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     environment: production
     steps:
-      - name: Load production deployment configuration
+      - name: Load production configuration
         env:
           AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
@@ -55,7 +54,7 @@ jobs:
             [[ -n "${!name}" ]] || missing+=("$name")
           done
           if (( ${#missing[@]} > 0 )); then
-            echo "::error title=Production deployment is not configured::Set the production environment variables first: ${missing[*]}."
+            echo "::error title=Production deployment is not configured::Set: ${missing[*]}."
             exit 1
           fi
           echo "TF_VAR_vpc_cidr=$VPC_CIDR" >> "$GITHUB_ENV"
@@ -63,26 +62,24 @@ jobs:
           echo "TF_VAR_hostname=$APP_HOSTNAME" >> "$GITHUB_ENV"
           echo "TF_VAR_budget_alert_email=$BUDGET_ALERT_EMAIL" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ inputs.commit_sha }}
+        with: { ref: "${{ inputs.commit_sha }}" }
       - name: Validate commit input
-        env:
-          COMMIT_SHA: ${{ inputs.commit_sha }}
+        env: { COMMIT_SHA: "${{ inputs.commit_sha }}" }
         run: echo "$COMMIT_SHA" | grep -Eq '^[0-9a-f]{40}$'
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
-        with:
-          terraform_version: 1.13.3
-          terraform_wrapper: false
+        with: { terraform_version: 1.13.3, terraform_wrapper: false }
       - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-      - env:
-          BREAK_GLASS: ${{ inputs.break_glass }}
-        run: bash scripts/aws/check-monthly-cost.sh 15 "$BREAK_GLASS"
-      - name: Resolve staging-verified image digests
-        env:
-          COMMIT_SHA: ${{ inputs.commit_sha }}
+      - env: { BREAK_GLASS: "${{ inputs.break_glass }}" }
+        run: bash scripts/aws/check-monthly-cost.sh 20 "$BREAK_GLASS"
+      - name: Refuse overlapping activation
+        run: |
+          active="$(aws ssm get-parameter --name /vinylhound/production/active --query Parameter.Value --output text 2>/dev/null || echo false)"
+          [[ "$active" != "true" ]] || { echo "Production is already active." >&2; exit 1; }
+      - name: Resolve staging-verified images
+        env: { COMMIT_SHA: "${{ inputs.commit_sha }}" }
         run: |
           web_digest="$(aws ecr describe-images --repository-name vinylhound-web --image-ids imageTag="staging-passed-${COMMIT_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
           worker_digest="$(aws ecr describe-images --repository-name vinylhound-worker --image-ids imageTag="staging-passed-${COMMIT_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
@@ -90,46 +87,90 @@ jobs:
           echo "TF_VAR_worker_image=${{ vars.ECR_WORKER_REPOSITORY }}@${worker_digest}" >> "$GITHUB_ENV"
       - name: Set activation metadata
         env:
-          COMMIT_SHA: ${{ inputs.commit_sha }}
-          TTL_HOURS: ${{ inputs.ttl_hours }}
+          {
+            COMMIT_SHA: "${{ inputs.commit_sha }}",
+            TTL_HOURS: "${{ inputs.ttl_hours }}",
+          }
         run: |
-          echo "TF_VAR_deployment_version=${COMMIT_SHA}" >> "$GITHUB_ENV"
+          echo "TF_VAR_deployment_version=$COMMIT_SHA" >> "$GITHUB_ENV"
           echo "TF_VAR_expires_at=$(date -u -d "+${TTL_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
-          echo "TF_VAR_environment_active=true" >> "$GITHUB_ENV"
-          echo "TF_VAR_deploy_services=false" >> "$GITHUB_ENV"
-      - name: Initialize environment state
+      - name: Initialize state
+        id: state
         run: >-
-          terraform -chdir=infra/terraform/environment init
+          terraform -chdir=infra/terraform/production init
           -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
           -backend-config="region=${AWS_REGION}"
           -backend-config="key=environments/production.tfstate"
       - name: Create persistent foundation
-        run: terraform -chdir=infra/terraform/environment apply -auto-approve -var environment_active=false -var deploy_services=false
-      - name: Verify runtime secrets exist
+        env: { TF_VAR_environment_active: "false" }
+        run: terraform -chdir=infra/terraform/production apply -auto-approve
+      - name: Verify runtime secrets
         run: |
-          terraform -chdir=infra/terraform/environment output -json runtime_secret_arns |
-            jq -r '.[]' |
+          terraform -chdir=infra/terraform/production output -json runtime_secret_arns | jq -r '.[]' |
             while read -r secret; do aws secretsmanager get-secret-value --secret-id "$secret" >/dev/null; done
-      - name: Provision production runtime
-        run: terraform -chdir=infra/terraform/environment apply -auto-approve
-      - name: Run database migrations
+      - name: Provision EKS and production edge
+        id: provision
+        env: { TF_VAR_environment_active: "true" }
+        run: terraform -chdir=infra/terraform/production apply -auto-approve
+      - name: Configure Kubernetes runtime
+        env: { TF_VAR_environment_active: "true" }
+        run: |
+          set +x
+          cluster="$(terraform -chdir=infra/terraform/production output -raw eks_cluster_name)"
+          aws eks update-kubeconfig --name "$cluster" --region "$AWS_REGION"
+          kubectl apply -f infra/kubernetes/production/namespace.yaml
+          runtime="$(terraform -chdir=infra/terraform/production output -json kubernetes_runtime)"
+          secrets="$(terraform -chdir=infra/terraform/production output -json runtime_secret_arns)"
+          secret_value() { aws secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text; }
+          database_url="$(secret_value "$(jq -r .database_url <<<"$secrets")")"
+          clerk_secret="$(secret_value "$(jq -r .clerk_secret_key <<<"$secrets")")"
+          clerk_public="$(secret_value "$(jq -r .clerk_publishable_key <<<"$secrets")")"
+          openai_key="$(secret_value "$(jq -r .openai_api_key <<<"$secrets")")"
+          database_ca="$(terraform -chdir=infra/terraform/production output -raw database_ca_base64)"
+          for value in "$database_url" "$clerk_secret" "$clerk_public" "$openai_key"; do echo "::add-mask::$value"; done
+          kubectl -n vinylhound create configmap runtime \
+            --from-literal=NODE_ENV=production --from-literal=APP_URL="$(jq -r .app_url <<<"$runtime")" \
+            --from-literal=DATABASE_MAX_CONNECTIONS=5 --from-literal=DATABASE_CONNECT_TIMEOUT_MS=30000 \
+            --from-literal=DATABASE_SSL_MODE=verify-full --from-literal=DATABASE_SSL_CA_BASE64="$database_ca" \
+            --from-literal=S3_REGION="$AWS_REGION" --from-literal=S3_BUCKET="$(jq -r .image_bucket <<<"$runtime")" \
+            --from-literal=S3_FORCE_PATH_STYLE=false --from-literal=DEPLOYMENT_VERSION="$(jq -r .deployment_version <<<"$runtime")" \
+            --from-literal=AUTH_MODE=production --from-literal=NEXT_PUBLIC_AUTH_MODE=production \
+            --from-literal=QUEUE_DRIVER=sqs --from-literal=SQS_QUEUE_URL="$(jq -r .scan_queue_url <<<"$runtime")" \
+            --from-literal=SQS_DEAD_LETTER_QUEUE_URL="$(jq -r .scan_dlq_url <<<"$runtime")" \
+            --from-literal=SQS_MAX_RECEIVE_COUNT=5 --from-literal=SQS_VISIBILITY_TIMEOUT_SECONDS=180 \
+            --from-literal=OPENAI_VISION_MODEL=gpt-5.6-sol --from-literal=OPENAI_IMAGE_DETAIL=high --from-literal=OPENAI_TIMEOUT_MS=120000 \
+            --from-literal=OUTBOX_POLL_INTERVAL_MS=1000 --from-literal=ANALYSIS_CONCURRENCY=1 \
+            --from-literal=CLOUDWATCH_METRICS_ENABLED=false --from-literal=ENVIRONMENT_NAME=production \
+            --from-literal=USER_DAILY_ANALYSIS_LIMIT="$(jq -r .user_daily_analysis_limit <<<"$runtime")" \
+            --from-literal=USER_ACTIVE_SCAN_LIMIT="$(jq -r .user_active_scan_limit <<<"$runtime")" \
+            --from-literal=USER_MONTHLY_SPEND_LIMIT_USD="$(jq -r .user_monthly_spend_limit_usd <<<"$runtime")" \
+            --from-literal=SCAN_COST_RESERVATION_USD="$(jq -r .scan_cost_reservation_usd <<<"$runtime")" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n vinylhound create secret generic web-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=CLERK_SECRET_KEY="$clerk_secret" --from-literal=NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$clerk_public" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n vinylhound create secret generic worker-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=OPENAI_API_KEY="$openai_key" --dry-run=client -o yaml | kubectl apply -f -
+      - name: Migrate database
         id: migrate
-        run: bash scripts/aws/run-worker-command.sh migrate
-      - name: Deploy production services
         run: |
-          echo "TF_VAR_deploy_services=true" >> "$GITHUB_ENV"
-          TF_VAR_deploy_services=true terraform -chdir=infra/terraform/environment apply -auto-approve
-      - name: Wait and smoke test
+          kubectl -n vinylhound delete job migrate --ignore-not-found --wait
+          sed "s|vinylhound.invalid/worker:deployment-required|${TF_VAR_worker_image}|" infra/kubernetes/production/migration-job.yaml | kubectl apply -f -
+          if ! kubectl -n vinylhound wait --for=condition=complete job/migrate --timeout=10m; then
+            kubectl -n vinylhound logs job/migrate
+            exit 1
+          fi
+      - name: Deploy Kubernetes workloads
         run: |
-          cluster="$(terraform -chdir=infra/terraform/environment output -raw ecs_cluster_name)"
-          aws ecs wait services-stable --cluster "$cluster" --services web worker
-          url="$(terraform -chdir=infra/terraform/environment output -raw application_url)"
-          curl --fail --retry 12 --retry-delay 10 "$url/api/healthz"
-          curl --fail --retry 12 --retry-delay 10 "$url/api/readyz"
-      - name: Deactivate after a failed migration
-        if: failure() && steps.migrate.outcome == 'failure'
-        env:
-          TF_VAR_environment_active: "false"
-          TF_VAR_deploy_services: "false"
-          TF_VAR_expires_at: inactive
-        run: terraform -chdir=infra/terraform/environment apply -auto-approve
+          sed "s|vinylhound.invalid/web:deployment-required|${TF_VAR_web_image}|" infra/kubernetes/production/web.yaml | kubectl apply -f -
+          sed "s|vinylhound.invalid/worker:deployment-required|${TF_VAR_worker_image}|" infra/kubernetes/production/worker.yaml | kubectl apply -f -
+          kubectl -n vinylhound rollout status deployment/web --timeout=10m
+          kubectl -n vinylhound rollout status deployment/worker --timeout=10m
+      - name: Smoke test CloudFront path
+        run: |
+          url="$(terraform -chdir=infra/terraform/production output -raw application_url)"
+          curl --fail --retry 18 --retry-delay 10 "$url/api/healthz"
+          curl --fail --retry 18 --retry-delay 10 "$url/api/readyz"
+      - name: Deactivate after failed runtime deployment
+        if: failure() && steps.state.outcome == 'success'
+        env: { TF_VAR_environment_active: "false", TF_VAR_expires_at: inactive }
+        run: |
+          kubectl delete namespace vinylhound --ignore-not-found --wait=false || true
+          terraform -chdir=infra/terraform/production apply -auto-approve
