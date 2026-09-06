@@ -126,6 +126,18 @@ jobs:
           clerk_public="$(secret_value "$(jq -r '."clerk-publishable-key"' <<<"$secrets")")"
           openai_key="$(secret_value "$(jq -r '."openai-api-key"' <<<"$secrets")")"
           for value in "$database_url" "$clerk_secret" "$clerk_public" "$openai_key"; do echo "::add-mask::$value"; done
+          DATABASE_URL="$database_url" node -e '
+            const url = new URL(process.env.DATABASE_URL);
+            const hostname = url.hostname;
+            if (["localhost", "127.0.0.1", "::1", "host.docker.internal"].includes(hostname)) {
+              console.error("::error title=Invalid development database::DATABASE_URL must use an externally reachable TLS PostgreSQL host, not a local-only hostname.");
+              process.exit(1);
+            }
+            if (!["require", "verify-ca", "verify-full"].includes(url.searchParams.get("sslmode"))) {
+              console.error("::error title=Insecure development database::DATABASE_URL must explicitly require TLS with sslmode=require, verify-ca, or verify-full.");
+              process.exit(1);
+            }
+          '
           app_url="$(terraform -chdir=infra/terraform/development output -raw application_url)"
           bucket="$(terraform -chdir=infra/terraform/development output -raw image_bucket)"
           queue="$(terraform -chdir=infra/terraform/development output -raw scan_queue_url)"

@@ -338,10 +338,13 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Verify clean CI, Security, and Platform runs for the infrastructure
-milestone commit. Then configure an external TLS PostgreSQL URL for development
-and run real Terraform plans for the development, staging, and production
-roots, paying particular attention to the production state-address preservation
+**Task:** Rerun Deploy development with the now-verified Supabase session-pooler
+`DATABASE_URL`. Its IPv4 port 5432 endpoint is reachable and the client
+connection negotiates TLS with `sslmode=require`; `channel_binding=require` is
+not supported by this pooler and was removed. The first Terraform apply is
+successful, but API/event triggers remain disabled until migrations, the second
+apply, and HTTP smoke tests pass. Then run real plans for staging and production,
+paying particular attention to the production state-address preservation
 documented in ADR-0016.
 
 After that gate passes, continue the documented repository-visibility, AWS
@@ -598,6 +601,29 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-05 - Codex.** Replaced the local-only development database secret
+  with the maintainer-provided Supabase session-pooler endpoint on IPv4 port 5432. Repaired a malformed missing query delimiter without exposing the
+  credential, retained `sslmode=require`, removed unsupported
+  `channel_binding=require`, and verified both database reachability and
+  client-side TLS negotiation with `psql`. Extended the deployment workflow's
+  database guard to reject URLs that do not explicitly require TLS.
+
+- **2026-09-05 - Codex.** Platform run `33995480727` passed all Terraform,
+  Kubernetes, three-image build/scan, and SBOM jobs after the expiring Trivy
+  waiver. Development run `33995480784` then successfully created both Lambda
+  functions, the full `dev-vh.siliconforest.io` certificate/DNS resources, and
+  the rest of the first-apply stack, proving the hostname and image-manifest
+  fixes; it stopped safely before triggers because secret containers had no
+  values. With explicit maintainer authorization, copied the four existing
+  `.env` values directly to AWS Secrets Manager without logging them and
+  verified one `AWSCURRENT` version per secret. Redeploy commit `44c4ec3`
+  successfully loaded and injected all secrets, but migration failed because
+  the local `DATABASE_URL` resolves to `host.docker.internal`, which GitHub and
+  AWS cannot reach. Triggers remain disabled. Added a workflow guard that
+  rejects local-only database hosts with an actionable error. An external TLS
+  PostgreSQL URL is the sole blocker to completing migration, trigger enablement,
+  and live HTTP smoke tests.
 
 - **2026-09-05 - Codex.** Diagnosed development deployment run `33991720573`:
   GitHub obtained an OIDC token, but AWS rejected it before builds or Terraform.
