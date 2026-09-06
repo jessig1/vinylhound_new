@@ -338,14 +338,12 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Rerun Deploy development with the now-verified Supabase session-pooler
-`DATABASE_URL`. Its IPv4 port 5432 endpoint is reachable and the client
-connection negotiates TLS with `sslmode=require`; `channel_binding=require` is
-not supported by this pooler and was removed. The first Terraform apply is
-successful, but API/event triggers remain disabled until migrations, the second
-apply, and HTTP smoke tests pass. Then run real plans for staging and production,
-paying particular attention to the production state-address preservation
-documented in ADR-0016.
+**Task:** Rerun Deploy development with the now-migrated Supabase database. Its
+IPv4 session-pooler endpoint is reachable, client TLS is verified, and all 11
+migrations have completed. The first Terraform apply is successful, but
+API/event triggers remain disabled until the second apply and HTTP smoke tests
+pass. Then run real plans for staging and production, paying particular
+attention to the production state-address preservation documented in ADR-0016.
 
 After that gate passes, continue the documented repository-visibility, AWS
 bootstrap, environment configuration, secret population, deployment, restore,
@@ -607,7 +605,16 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   credential, retained `sslmode=require`, removed unsupported
   `channel_binding=require`, and verified both database reachability and
   client-side TLS negotiation with `psql`. Extended the deployment workflow's
-  database guard to reject URLs that do not explicitly require TLS.
+  database guard to reject URLs that do not explicitly require TLS. Deployment
+  run `34001697979` then failed because the web Lambda was accidentally deleted
+  between Terraform reconciliation and secret injection. Fresh-SHA run
+  `34002332466` recreated it and reached the migration, which exposed Node
+  `pg`'s temporary interpretation of `sslmode=require` as `verify-full` and its
+  rejection of the Supabase certificate chain. Added `uselibpqcompat=true` to
+  the stored URL so `require` retains standard libpq semantics (mandatory
+  encryption without certificate verification), then successfully applied all
+  11 repository migrations to Supabase. Triggers remain disabled pending one
+  final deployment and smoke test.
 
 - **2026-09-05 - Codex.** Platform run `33995480727` passed all Terraform,
   Kubernetes, three-image build/scan, and SBOM jobs after the expiring Trivy
