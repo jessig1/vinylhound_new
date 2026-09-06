@@ -13,7 +13,15 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-05
+## Current state — verified 2026-09-06
+
+- **Staging activation:** the first configured staging dispatch reached AWS but
+  failed before Terraform because development had already published the web
+  image under the immutable commit-SHA tag. The staging workflow now resolves
+  and reuses existing SHA-tagged web/worker images, builds only missing images,
+  promotes an already-verified identical digest idempotently, and only runs its
+  final deactivation after successful Terraform initialization. This makes
+  repeated staging lifecycles for one commit compatible with immutable ECR.
 
 - **GitHub configuration script:** the repository administration helper is now
   Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
@@ -632,6 +640,15 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-06 - Codex.** Dispatched the first fully configured staging workflow
+  for `c17a83e`; OIDC authentication and the cost preflight passed, but immutable
+  ECR correctly rejected overwriting the web image tag already published by the
+  development workflow. Updated staging delivery to reuse existing SHA-tagged
+  images, build missing images only, make `staging-passed-<sha>` promotion
+  idempotent with digest conflict detection, and avoid deactivation before state
+  initialization. Production was not dispatched because no commit has passed a
+  complete staging lifecycle yet.
 
 - **2026-09-05 - Codex.** Replaced
   `scripts/configure-github-repository.ps1` with an equivalent Bash
