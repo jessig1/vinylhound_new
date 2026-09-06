@@ -76,7 +76,7 @@ jobs:
           REPOSITORY_URL: ${{ vars.ECR_WEB_REPOSITORY }}
         run: |
           repository="${REPOSITORY_URL#*/}"
-          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
           if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -90,7 +90,7 @@ jobs:
           REPOSITORY_URL: ${{ vars.ECR_WORKER_REPOSITORY }}
         run: |
           repository="${REPOSITORY_URL#*/}"
-          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
           if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -108,7 +108,7 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
-          tags: ${{ vars.ECR_WEB_REPOSITORY }}:${{ github.sha }}
+          tags: ${{ vars.ECR_WEB_REPOSITORY }}:${{ github.sha }}-staging
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
       - name: Build and push worker
@@ -122,7 +122,7 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
-          tags: ${{ vars.ECR_WORKER_REPOSITORY }}:${{ github.sha }}
+          tags: ${{ vars.ECR_WORKER_REPOSITORY }}:${{ github.sha }}-staging
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
       - name: Initialize environment state
@@ -181,17 +181,17 @@ jobs:
         if: steps.configuration.outputs.configured == 'true'
         run: |
           for repository in vinylhound-web vinylhound-worker; do
-            source_digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
+            source_digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'imageDetails[0].imageDigest' --output text)"
             verified_digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="staging-passed-${GITHUB_SHA}" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
             if [[ "$verified_digest" == "$source_digest" ]]; then
-              echo "$repository:${GITHUB_SHA} is already marked as staging verified."
+              echo "$repository:${GITHUB_SHA}-staging is already marked as staging verified."
               continue
             fi
             if [[ "$verified_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "staging-passed-${GITHUB_SHA} already points at a different immutable $repository image." >&2
               exit 1
             fi
-            manifest="$(aws ecr batch-get-image --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}" --query 'images[0].imageManifest' --output text)"
+            manifest="$(aws ecr batch-get-image --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'images[0].imageManifest' --output text)"
             aws ecr put-image --repository-name "$repository" --image-tag "staging-passed-${GITHUB_SHA}" --image-manifest "$manifest"
           done
       - name: Deactivate staging

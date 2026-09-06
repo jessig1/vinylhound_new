@@ -17,11 +17,13 @@ the log.
 
 - **Staging activation:** the first configured staging dispatch reached AWS but
   failed before Terraform because development had already published the web
-  image under the immutable commit-SHA tag. The staging workflow now resolves
-  and reuses existing SHA-tagged web/worker images, builds only missing images,
-  promotes an already-verified identical digest idempotently, and only runs its
-  final deactivation after successful Terraform initialization. This makes
-  repeated staging lifecycles for one commit compatible with immutable ECR.
+  image under the immutable commit-SHA tag. A retry showed that preflight reuse
+  alone still races when development and staging start together. Staging now
+  publishes and reuses `<sha>-staging` tags, promotes verified digests to
+  `staging-passed-<sha>` idempotently, and only runs final deactivation after
+  successful Terraform initialization. This isolates concurrent workflows and
+  makes repeated staging lifecycles for one commit compatible with immutable
+  ECR.
 
 - **GitHub configuration script:** the repository administration helper is now
   Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
@@ -644,11 +646,13 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 - **2026-09-06 - Codex.** Dispatched the first fully configured staging workflow
   for `c17a83e`; OIDC authentication and the cost preflight passed, but immutable
   ECR correctly rejected overwriting the web image tag already published by the
-  development workflow. Updated staging delivery to reuse existing SHA-tagged
-  images, build missing images only, make `staging-passed-<sha>` promotion
-  idempotent with digest conflict detection, and avoid deactivation before state
-  initialization. Production was not dispatched because no commit has passed a
-  complete staging lifecycle yet.
+  development workflow. An initial reuse fix still raced when both workflows
+  preflighted a missing image concurrently, so that staging retry was cancelled
+  before Terraform. Updated staging delivery to publish and reuse isolated
+  `<sha>-staging` tags, build missing images only, make
+  `staging-passed-<sha>` promotion idempotent with digest conflict detection,
+  and avoid deactivation before state initialization. Production has not been
+  dispatched because no commit has passed a complete staging lifecycle yet.
 
 - **2026-09-05 - Codex.** Replaced
   `scripts/configure-github-repository.ps1` with an equivalent Bash
