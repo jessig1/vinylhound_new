@@ -15,12 +15,23 @@ the log.
 
 ## Current state — verified 2026-09-05
 
+- **GitHub configuration script:** the repository administration helper is now
+  Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
+  retains the public-visibility safety gate and the same repository, security,
+  workflow-permission, label, and branch-protection settings. Pass an optional
+  `OWNER/REPOSITORY` as its first argument; the VinylHound repository remains
+  the default. GitHub rejects attempts to explicitly enable Advanced Security
+  on a public repository because it is already available there, so the Bash
+  payload omits only that redundant API field.
+
 - **P2.1-P2.4 review:** repository implementation is complete; the remaining
   work is GitHub/AWS configuration and live rehearsal, summarized in
   `docs/PHASE_2_MILESTONE_REVIEW.md`. Live inspection confirmed the repository
-  is private, full-history Gitleaks passes, all three GitHub environments exist,
-  only development has deploy variables, staging/production variables are
-  absent, repository plan variables still contain invalid placeholders, only
+  is now public and full-history Gitleaks passes. General merge settings have
+  the documented values, but branch protection and the remaining security
+  endpoints are not yet enabled. All three GitHub environments exist, only
+  development has deploy variables, staging/production variables are absent,
+  repository plan variables still contain invalid placeholders, only
   development Terraform state exists, the development ARM64 Lambdas exist, and
   no ECS/EKS clusters exist. Successful staging runs are guard skips, not
   lifecycle passes. The review also removed the accidentally tracked local AWS
@@ -621,6 +632,23 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-05 - Codex.** Replaced
+  `scripts/configure-github-repository.ps1` with an equivalent Bash
+  script and updated both documented invocations. The Bash version uses strict
+  error handling, preserves the public-repository guard and all prior settings,
+  and accepts the repository as an optional first positional argument. A guard
+  validation discovered the repository had become public and that GitHub now
+  rejects the old script's redundant explicit Advanced Security field with
+  HTTP 422; removed that field while preserving secret scanning and push
+  protection. The failed first PATCH stopped the strict script before any later
+  security endpoint, label, workflow-permission, or branch-protection call.
+  Read-only follow-up confirmed branch protection and the remaining security
+  endpoints are still disabled. The conversion also adds the Lambda-worker
+  container job to required status checks; the older PowerShell script predated
+  that third Platform matrix job. `bash -n`, `npm run check` (79/79),
+  `npm run build`, and `git diff --check` pass. ShellCheck is not installed
+  locally.
 
 - **2026-09-05 - Codex.** Audited every outstanding P2.1-P2.4 roadmap item
   against committed implementation, GitHub configuration/runs, and read-only

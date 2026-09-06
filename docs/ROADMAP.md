@@ -129,8 +129,9 @@ accounts and therefore remain release gates.
 - [x] Rotate the credential found by the 2026-09-02 audit and delete its sole
       containing experimental branch; `main` was never affected.
 - [x] Push the workflows and obtain a clean full-history Gitleaks run.
-- [ ] Complete the remaining visibility/fork gate, make the repository public,
-      then apply its GitHub settings and branch protection.
+- [x] Make the repository public.
+- [ ] Complete the remaining fork gate, then apply and verify GitHub security
+      settings and branch protection.
 
 ### P2.2 — Production runtime and container readiness
 

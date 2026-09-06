@@ -10,8 +10,8 @@ First complete and record the visibility-change audit below. Change the
 repository to public, then immediately authenticate GitHub CLI as the
 repository administrator and run:
 
-```powershell
-./scripts/configure-github-repository.ps1
+```bash
+bash ./scripts/configure-github-repository.sh
 ```
 
 The script enables Issues and Discussions, disables the wiki and non-squash

@@ -7,14 +7,16 @@ for the repository hygiene correction recorded below.
 
 ## Status summary
 
-| Milestone | Repository work | Live evidence                                                                                                                                             | Outstanding                                                                                                                         |
-| --------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| P2.1      | Complete        | Repeated clean full-history Gitleaks runs; historical filename review found no committed raw images, database dumps, logs, or private evaluation manifest | Finish the visibility/fork audit, make the repository public, and apply/verify repository settings                                  |
-| P2.2      | Complete        | All three images build and pass local runtime checks; the development Lambda deployment passes live health/readiness checks                               | Exercise the asynchronous Lambda path and demonstrate Fargate and EKS runtime/drain/shutdown in AWS                                 |
-| P2.3      | Complete        | Bootstrap resources and OIDC roles exist; development state and ARM64 Lambdas exist                                                                       | Review staging/production plans, populate their configuration/secrets, and apply their inactive foundations                         |
-| P2.4      | Complete        | The three GitHub environments exist; development OIDC delivery has succeeded                                                                              | Replace invalid repository plan placeholders, configure/protect staging and production, and pass two consecutive staging lifecycles |
+| Milestone | Repository work | Live evidence                                                                                                                                                                   | Outstanding                                                                                                                         |
+| --------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| P2.1      | Complete        | Repository is public; repeated clean full-history Gitleaks runs; historical filename review found no committed raw images, database dumps, logs, or private evaluation manifest | Finish the fork audit and apply/verify security settings and branch protection                                                      |
+| P2.2      | Complete        | All three images build and pass local runtime checks; the development Lambda deployment passes live health/readiness checks                                                     | Exercise the asynchronous Lambda path and demonstrate Fargate and EKS runtime/drain/shutdown in AWS                                 |
+| P2.3      | Complete        | Bootstrap resources and OIDC roles exist; development state and ARM64 Lambdas exist                                                                                             | Review staging/production plans, populate their configuration/secrets, and apply their inactive foundations                         |
+| P2.4      | Complete        | The three GitHub environments exist; development OIDC delivery has succeeded                                                                                                    | Replace invalid repository plan placeholders, configure/protect staging and production, and pass two consecutive staging lifecycles |
 
-The repository is currently private. Only
+The repository is public. General repository/merge settings have the documented
+values, but branch protection, private vulnerability reporting, vulnerability
+alerts, and automated security fixes are not yet enabled. Only
 `environments/development.tfstate` exists in the remote state bucket; no ECS or
 EKS clusters exist. Successful staging workflow runs to date are configuration
 guard skips and do not count as lifecycle rehearsals.
@@ -35,11 +37,10 @@ any corrective commits in `docs/HANDOFF.md`.
 2. Rehearse an untrusted fork pull request. Verify a read-only token, no AWS
    OIDC role, no GitHub environment or provider secret, required checks on fork
    code, and no `pull_request_target` execution.
-3. Change repository visibility to public.
-4. Run `./scripts/configure-github-repository.ps1` with an administrator GitHub
-   CLI session. It enables Discussions/security controls, normalizes merge
-   policy and labels, and protects `main`.
-5. Verify CodeQL, dependency review, secret scanning/push protection, private
+3. Run `bash ./scripts/configure-github-repository.sh` with an administrator
+   GitHub CLI session. It enables Discussions/security controls, normalizes
+   merge policy and labels, and protects `main`.
+4. Verify CodeQL, dependency review, secret scanning/push protection, private
    vulnerability reporting, required checks, and the documented merge policy.
 
 ### P2.2: demonstrate the three AWS runtimes
