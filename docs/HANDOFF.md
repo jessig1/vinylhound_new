@@ -23,8 +23,17 @@ the log.
   and image promotion. Its final deactivation encountered a transient AWS
   eventual-consistency error while releasing a NAT EIP whose ENI had already
   disappeared. Teardown applies now retry up to three times with bounded delay
-  in staging and both production cleanup paths. Production remains gated until
-  the retry commit completes a full staging lifecycle.
+  in staging and both production cleanup paths. Run `34040437776` completed the
+  full lifecycle successfully for retry commit `fd99943`, including final
+  deactivation, and promoted its images for production.
+
+- **Production activation:** run `34041389496` created the persistent
+  production foundation for staging-verified commit `fd99943`, then stopped at
+  the intended provider-secret gate because the production Clerk and OpenAI
+  secret containers have no values. EKS provisioning was skipped and failure
+  cleanup completed successfully, leaving the production runtime inactive. Do
+  not copy the staging development/test provider values into production without
+  explicit maintainer approval.
 
 - **GitHub configuration script:** the repository administration helper is now
   Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
@@ -387,12 +396,14 @@ Review those local changes before committing. Real cover art, batch review
 navigation, and copy-editor mutation feedback remain separate tasks. This
 explicitly authorized UI pass does not change the infrastructure resume below.
 
-**Task:** Complete a staging lifecycle with the bounded teardown retry, then run
-production using that staging-verified commit. Development is live at
-`https://dev-vh.siliconforest.io`; staging provider secrets contain the
-maintainer-approved local development/test values. Do not copy those values to
-production without separate approval. Pay particular attention to the
-production state-address preservation documented in ADR-0016.
+**Task:** Decide whether production should use the same local development/test
+Clerk and OpenAI values as staging or receive separate values, populate the
+three production provider secret containers, and rerun production for
+staging-verified commit `fd99943`. Development is live at
+`https://dev-vh.siliconforest.io`; staging lifecycle run `34040437776` passed.
+Production foundation run `34041389496` stopped safely at the missing-secret
+gate and left the runtime inactive. Pay particular attention to the production
+state-address preservation documented in ADR-0016.
 
 Phase 3 remains a placeholder. Beyond the explicitly authorized UI pass, defer
 AI model training/optimization until Phase 2 has completed and been reviewed.
@@ -653,7 +664,13 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   eventual-consistency race releasing a NAT EIP after its ENI disappeared.
   Added one bounded three-attempt Terraform apply helper and used it for staging
   deactivation, production failure cleanup, and scheduled/manual production
-  deactivation. Production has not yet been dispatched.
+  deactivation. Retry commit `fd99943` reused the already tested image digests;
+  staging run `34040437776` passed the complete lifecycle, including teardown.
+  Production run `34041389496` then created the persistent production
+  foundation but stopped at the intended provider-secret gate. EKS provisioning
+  was skipped and cleanup succeeded, leaving production inactive. Separate
+  maintainer approval is required before reusing staging's development/test
+  provider values in production.
 
 - **2026-09-06 - Codex.** Dispatched the first fully configured staging workflow
   for `c17a83e`; OIDC authentication and the cost preflight passed, but immutable
