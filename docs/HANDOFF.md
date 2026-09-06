@@ -23,7 +23,11 @@ the log.
   `staging-passed-<sha>` idempotently, and only runs final deactivation after
   successful Terraform initialization. This isolates concurrent workflows and
   makes repeated staging lifecycles for one commit compatible with immutable
-  ECR.
+  ECR. Run `34037617340` confirmed the fix, created the persistent staging
+  foundation, and then stopped at the intended runtime-secret gate because the
+  three provider secret containers have no `AWSCURRENT` values. Its cleanup
+  successfully left staging inactive. Production remains gated on a complete
+  staging pass.
 
 - **GitHub configuration script:** the repository administration helper is now
   Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
@@ -653,6 +657,11 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   `staging-passed-<sha>` promotion idempotent with digest conflict detection,
   and avoid deactivation before state initialization. Production has not been
   dispatched because no commit has passed a complete staging lifecycle yet.
+  Run `34037617340` then proved the isolated tags work, initialized state, and
+  created the staging foundation before the expected missing-provider-secret
+  gate stopped activation. Deactivation succeeded. All three source values are
+  present in the ignored local `.env`, but copying those development/test
+  credentials to staging requires explicit maintainer approval.
 
 - **2026-09-05 - Codex.** Replaced
   `scripts/configure-github-repository.ps1` with an equivalent Bash
