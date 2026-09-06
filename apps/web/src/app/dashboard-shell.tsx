@@ -72,6 +72,7 @@ export function DashboardShell({
               <Link
                 className={active ? "is-active" : ""}
                 href={item.href}
+                aria-current={active ? "page" : undefined}
                 key={item.href}
               >
                 <Icon name={item.icon} size={20} />
@@ -120,6 +121,7 @@ export function DashboardShell({
         <Link
           className={pathname === "/dashboard" ? "is-active" : ""}
           href="/dashboard"
+          aria-current={pathname === "/dashboard" ? "page" : undefined}
         >
           <Icon name="home" />
           <span>Home</span>
@@ -127,6 +129,7 @@ export function DashboardShell({
         <Link
           className={pathname === "/collection" ? "is-active" : ""}
           href="/collection"
+          aria-current={pathname === "/collection" ? "page" : undefined}
         >
           <Icon name="collection" />
           <span>Collection</span>
@@ -135,6 +138,7 @@ export function DashboardShell({
           className="mobile-nav__scan"
           href="/scan"
           aria-label="Scan a record"
+          aria-current={pathname === "/scan" ? "page" : undefined}
         >
           <span>
             <Icon name="camera" size={23} />
@@ -144,6 +148,7 @@ export function DashboardShell({
         <Link
           className={pathname === "/wishlist" ? "is-active" : ""}
           href="/wishlist"
+          aria-current={pathname === "/wishlist" ? "page" : undefined}
         >
           <Icon name="heart" />
           <span>Wishlist</span>
@@ -151,6 +156,7 @@ export function DashboardShell({
         <Link
           className={pathname === "/account" ? "is-active" : ""}
           href="/account"
+          aria-current={pathname.startsWith("/account") ? "page" : undefined}
         >
           <Icon name="account" />
           <span>Account</span>

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { DevelopmentWebConfigSchema, ServerConfigSchema } from "./index.js";
+import {
+  DevelopmentWebConfigSchema,
+  QueueWorkerConfigSchema,
+  ServerConfigSchema,
+} from "./index.js";
 
 describe("ServerConfigSchema", () => {
   it("defaults album identification to Sol with high image detail", () => {
@@ -17,6 +21,48 @@ describe("ServerConfigSchema", () => {
 
     expect(config.OPENAI_VISION_MODEL).toBe("gpt-5.6-sol");
     expect(config.OPENAI_IMAGE_DETAIL).toBe("high");
+    expect(config.DATABASE_MAX_CONNECTIONS).toBe(5);
+    expect(config.DATABASE_CONNECT_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it("accepts task-role S3 credentials and verified database TLS", () => {
+    const config = ServerConfigSchema.parse({
+      APP_URL: "https://vinylhound.example",
+      DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      DATABASE_SSL_MODE: "verify-full",
+      DATABASE_SSL_CA_BASE64: Buffer.from("test-ca").toString("base64"),
+      REDIS_URL: "rediss://cache:6379",
+      S3_REGION: "us-east-1",
+      S3_BUCKET: "vinylhound",
+      OPENAI_API_KEY: "test-key",
+    });
+
+    expect(config.S3_ACCESS_KEY_ID).toBeUndefined();
+    expect(config.DATABASE_SSL_MODE).toBe("verify-full");
+  });
+
+  it("rejects partial S3 credentials and verify-full without a CA", () => {
+    const partialCredentials = ServerConfigSchema.safeParse({
+      APP_URL: "https://vinylhound.example",
+      DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      REDIS_URL: "rediss://cache:6379",
+      S3_REGION: "us-east-1",
+      S3_BUCKET: "vinylhound",
+      S3_ACCESS_KEY_ID: "only-half",
+      OPENAI_API_KEY: "test-key",
+    });
+    const missingCa = ServerConfigSchema.safeParse({
+      APP_URL: "https://vinylhound.example",
+      DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      DATABASE_SSL_MODE: "verify-full",
+      REDIS_URL: "rediss://cache:6379",
+      S3_REGION: "us-east-1",
+      S3_BUCKET: "vinylhound",
+      OPENAI_API_KEY: "test-key",
+    });
+
+    expect(partialCredentials.success).toBe(false);
+    expect(missingCa.success).toBe(false);
   });
 });
 
@@ -88,5 +134,46 @@ describe("DevelopmentWebConfigSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("QueueWorkerConfigSchema", () => {
+  const baseEnv = {
+    DATABASE_URL: "postgresql://vinylhound:password@localhost/vinylhound",
+    S3_REGION: "us-east-1",
+    S3_BUCKET: "vinylhound",
+  };
+
+  it("defaults to BullMQ and requires Redis", () => {
+    expect(QueueWorkerConfigSchema.safeParse(baseEnv).success).toBe(false);
+    expect(
+      QueueWorkerConfigSchema.parse({
+        ...baseEnv,
+        REDIS_URL: "redis://localhost:6379",
+      }).QUEUE_DRIVER,
+    ).toBe("bullmq");
+  });
+
+  it("accepts SQS without a Redis URL", () => {
+    const config = QueueWorkerConfigSchema.parse({
+      ...baseEnv,
+      QUEUE_DRIVER: "sqs",
+      SQS_QUEUE_URL: "https://sqs.us-east-1.amazonaws.com/123/scans.fifo",
+      SQS_DEAD_LETTER_QUEUE_URL:
+        "https://sqs.us-east-1.amazonaws.com/123/scans-dlq.fifo",
+    });
+
+    expect(config.REDIS_URL).toBeUndefined();
+    expect(config.SQS_MAX_RECEIVE_COUNT).toBe(5);
+    expect(config.SQS_VISIBILITY_TIMEOUT_SECONDS).toBe(180);
+  });
+
+  it("rejects SQS without a queue URL", () => {
+    expect(
+      QueueWorkerConfigSchema.safeParse({
+        ...baseEnv,
+        QUEUE_DRIVER: "sqs",
+      }).success,
+    ).toBe(false);
   });
 });

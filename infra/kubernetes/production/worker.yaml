@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: vinylhound
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: vinylhound-worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: vinylhound-worker }
+    spec:
+      serviceAccountName: worker
+      terminationGracePeriodSeconds: 150
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: worker
+          image: vinylhound.invalid/worker:deployment-required
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: runtime }
+            - secretRef: { name: worker-secrets }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "1", memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "const{mtimeMs}=require('node:fs').statSync(process.env.WORKER_HEALTH_FILE);if(Date.now()-mtimeMs>120000)process.exit(1)"
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker
+  namespace: vinylhound
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: worker }
+  minReplicas: 1
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 60 }

@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.7
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /workspace
+
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY packages/ai/package.json packages/ai/package.json
+COPY packages/catalog/package.json packages/catalog/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/database/package.json packages/database/package.json
+COPY packages/domain/package.json packages/domain/package.json
+COPY packages/evals/package.json packages/evals/package.json
+COPY packages/queue/package.json packages/queue/package.json
+COPY packages/storage/package.json packages/storage/package.json
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY . .
+# Workspace packages export TypeScript source for local tooling. Emit their
+# JavaScript siblings so the compiled worker's `.js` specifiers resolve in the
+# production image without shipping a TypeScript loader.
+RUN npm run build --workspace @vinylhound/worker \
+  && node node_modules/typescript/bin/tsc --project tsconfig.worker-runtime.json \
+  && npm prune --omit=dev
+
+FROM ${NODE_IMAGE} AS runtime
+WORKDIR /workspace
+ENV NODE_ENV=production \
+    WORKER_HEALTH_FILE=/tmp/vinylhound-worker-health
+
+# The runtime needs Node, not npm/corepack. Removing package-manager tooling
+# eliminates its transitive vulnerability surface from the shipped image.
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm \
+    /usr/local/bin/npx \
+    /usr/local/bin/corepack
+
+COPY --from=build --chown=node:node /workspace/package.json ./package.json
+COPY --from=build --chown=node:node /workspace/node_modules ./node_modules
+COPY --from=build --chown=node:node /workspace/packages ./packages
+COPY --from=build --chown=node:node /workspace/apps/worker/package.json ./apps/worker/package.json
+COPY --from=build --chown=node:node /workspace/apps/worker/dist ./apps/worker/dist
+
+USER node
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["node", "-e", "const{mtimeMs}=require('node:fs').statSync(process.env.WORKER_HEALTH_FILE);if(Date.now()-mtimeMs>120000)process.exit(1)"]
+
+CMD ["node", "apps/worker/dist/index.js"]

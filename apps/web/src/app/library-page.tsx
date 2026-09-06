@@ -122,7 +122,14 @@ export async function LibraryPage({
               ? "Try a different search, or clear it to see everything."
               : "Scan a cover, review the match, and save the record here."}
           </p>
-          {query ? null : (
+          {query ? (
+            <Link
+              className="secondary-button"
+              href={`/${list}${sort === "recent" ? "" : `?sort=${sort}`}`}
+            >
+              Clear search
+            </Link>
+          ) : (
             <Link className="primary-button" href="/scan">
               <Icon name="camera" size={18} /> Scan a record
             </Link>

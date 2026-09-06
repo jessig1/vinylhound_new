@@ -1,0 +1,6 @@
+environment        = "staging"
+environment_active = false
+vpc_cidr           = "10.40.0.0/16"
+domain_name        = "example.com"
+hostname           = "staging.vinylhound.example.com"
+budget_alert_email = "owner@example.com"

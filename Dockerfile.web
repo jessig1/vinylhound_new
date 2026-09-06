@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1.7
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+ARG LAMBDA_ADAPTER_IMAGE=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.1@sha256:1e5ab4d9242167500ed8a7bed8a79b448228aaa51cf382fb51fe4bf8a5f9a811
+
+FROM ${LAMBDA_ADAPTER_IMAGE} AS lambda-adapter
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /workspace
+
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY packages/ai/package.json packages/ai/package.json
+COPY packages/catalog/package.json packages/catalog/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/database/package.json packages/database/package.json
+COPY packages/domain/package.json packages/domain/package.json
+COPY packages/evals/package.json packages/evals/package.json
+COPY packages/queue/package.json packages/queue/package.json
+COPY packages/storage/package.json packages/storage/package.json
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY . .
+ARG AUTH_MODE=production
+ARG NEXT_PUBLIC_AUTH_MODE=production
+ENV AUTH_MODE=${AUTH_MODE} \
+    NEXT_PUBLIC_AUTH_MODE=${NEXT_PUBLIC_AUTH_MODE}
+RUN npm run build --workspace @vinylhound/web
+
+FROM ${NODE_IMAGE} AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000 \
+    AWS_LWA_PORT=3000 \
+    AWS_LWA_READINESS_CHECK_PATH=/api/healthz
+
+# This extension is inert under ECS/Kubernetes and adapts the same standalone
+# Next.js image to Lambda HTTP events in the always-on development environment.
+COPY --from=lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
+
+# The runtime needs Node, not npm/corepack. Removing package-manager tooling
+# eliminates its transitive vulnerability surface from the shipped image.
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm \
+    /usr/local/bin/npx \
+    /usr/local/bin/corepack
+
+COPY --from=build --chown=node:node /workspace/apps/web/.next/standalone ./
+COPY --from=build --chown=node:node /workspace/apps/web/.next/static ./apps/web/.next/static
+
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:3000/api/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+CMD ["node", "apps/web/server.js"]

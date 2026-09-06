@@ -16,7 +16,7 @@ The initial provider adapter lives in `packages/ai`. Neither the browser nor a r
 - Prompt: versioned in source. Persist prompt version and model with every attempt.
 - Input transport: the worker rereads validated objects and sends request-scoped Base64 data URLs. This works with local object storage without exposing MinIO publicly; data URLs and raw bytes are never persisted or logged.
 - Audit: persist the resolved response model, prompt version, response ID, token usage, duration, normalized error category, observations, review reasons, and ranked candidates.
-- Retry ownership: disable automatic SDK retries so every BullMQ delivery maps to one auditable provider request. BullMQ retries only normalized transient failures.
+- Retry ownership: disable automatic SDK retries so every queue delivery maps to one auditable provider request. BullMQ locally and SQS in AWS redeliver only normalized transient failures.
 
 Model confidence is not a calibrated probability. It is one signal for review routing and must be tested against labeled examples.
 

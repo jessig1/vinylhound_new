@@ -4,7 +4,10 @@ import { loadEnvConfig } from "@next/env";
 
 import { loadDevelopmentWebConfig } from "@vinylhound/config";
 import { createMusicBrainzCatalog } from "@vinylhound/catalog";
-import { createDatabase } from "@vinylhound/database";
+import {
+  createDatabase,
+  databaseOptionsFromConfig,
+} from "@vinylhound/database";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 
 // forceReload (4th arg) is required: Next.js's own internal loadEnvConfig
@@ -25,7 +28,7 @@ function createServerContext() {
 
   return {
     config,
-    database: createDatabase({ connectionString: config.DATABASE_URL }),
+    database: createDatabase(databaseOptionsFromConfig(config)),
     storage: createS3ObjectStorage({
       endpoint: config.S3_ENDPOINT,
       region: config.S3_REGION,

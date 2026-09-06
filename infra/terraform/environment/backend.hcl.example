@@ -1,0 +1,3 @@
+bucket = "replace-with-bootstrap-output"
+region = "us-east-1"
+key    = "environments/replace-with-staging-or-production.tfstate"

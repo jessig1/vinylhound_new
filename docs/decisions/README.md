@@ -16,3 +16,5 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0012: Library search/sort/export match the displayed release, not the stored album row](0012-library-search-filter-export.md)
 - [ADR-0013: Clerk provides production authentication](0013-clerk-authentication.md)
 - [ADR-0014: Account export is metadata-only JSON; account deletion is an ordered hard delete](0014-account-export-and-deletion.md)
+- [ADR-0015: Run production-shaped AWS environments just in time](0015-jit-aws-platform.md)
+- [ADR-0016: Use tiered AWS runtimes with SQS as the cloud queue](0016-tiered-aws-runtime-and-sqs.md)

@@ -1,0 +1,130 @@
+name: Deactivate expired production
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Tear down runtime even if the drain gate does not pass
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: production-platform
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  deactivate:
+    name: Deactivate production runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: production
+    steps:
+      - name: Load production configuration
+        id: configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          VPC_CIDR: ${{ vars.VPC_CIDR }}
+          DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+          APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+          BUDGET_ALERT_EMAIL: ${{ vars.BUDGET_ALERT_EMAIL }}
+        run: |
+          missing=()
+          for name in AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET VPC_CIDR DOMAIN_NAME APP_HOSTNAME BUDGET_ALERT_EMAIL; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::notice title=Production deactivation skipped::Configure: ${missing[*]}."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "TF_VAR_vpc_cidr=$VPC_CIDR" >> "$GITHUB_ENV"
+          echo "TF_VAR_domain_name=$DOMAIN_NAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_hostname=$APP_HOSTNAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_budget_alert_email=$BUDGET_ALERT_EMAIL" >> "$GITHUB_ENV"
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with: { terraform_version: 1.13.3, terraform_wrapper: false }
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Check activation and expiry
+        if: steps.configuration.outputs.configured == 'true'
+        id: expiry
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          active="$(aws ssm get-parameter --name /vinylhound/production/active --query Parameter.Value --output text 2>/dev/null || echo false)"
+          expires="$(aws ssm get-parameter --name /vinylhound/production/expires-at --query Parameter.Value --output text 2>/dev/null || echo inactive)"
+          deactivate=false
+          if [[ "$active" == "true" ]]; then
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+              deactivate=true
+            elif expiry_epoch="$(date -u -d "$expires" +%s 2>/dev/null)" && [[ "$expiry_epoch" -le "$(date -u +%s)" ]]; then
+              deactivate=true
+            fi
+          fi
+          echo "deactivate=$deactivate" >> "$GITHUB_OUTPUT"
+      - name: Initialize production state
+        if: steps.configuration.outputs.configured == 'true' && steps.expiry.outputs.deactivate == 'true'
+        run: >-
+          terraform -chdir=infra/terraform/production init
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="region=${AWS_REGION}"
+          -backend-config="key=environments/production.tfstate"
+      - name: Connect to production cluster
+        if: steps.configuration.outputs.configured == 'true' && steps.expiry.outputs.deactivate == 'true'
+        run: |
+          cluster="$(terraform -chdir=infra/terraform/production output -raw eks_cluster_name)"
+          aws eks update-kubeconfig --name "$cluster" --region "$AWS_REGION"
+      - name: Stop new submissions
+        if: steps.configuration.outputs.configured == 'true' && steps.expiry.outputs.deactivate == 'true'
+        run: |
+          kubectl -n vinylhound delete horizontalpodautoscaler web --ignore-not-found
+          kubectl -n vinylhound scale deployment/web --replicas=0
+          kubectl -n vinylhound wait --for=delete pod -l app.kubernetes.io/name=vinylhound-web --timeout=5m
+      - name: Drain durable work
+        if: steps.configuration.outputs.configured == 'true' && steps.expiry.outputs.deactivate == 'true'
+        env:
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          drained=false
+          for attempt in {1..10}; do
+            if kubectl -n vinylhound exec deployment/worker -- node apps/worker/dist/ops.js drain-check; then
+              drained=true
+              break
+            fi
+            sleep 60
+          done
+          if [[ "$drained" != "true" && "$FORCE" != "true" ]]; then
+            echo "Production did not drain within ten minutes; runtime remains active." >&2
+            exit 1
+          fi
+          if [[ "$drained" != "true" ]]; then
+            echo "::warning title=Forced production teardown::The drain gate did not pass; SQS and PostgreSQL remain persistent for reconciliation."
+          fi
+      - name: Remove Kubernetes workloads
+        if: steps.configuration.outputs.configured == 'true' && steps.expiry.outputs.deactivate == 'true'
+        run: kubectl delete namespace vinylhound --ignore-not-found --wait --timeout=10m
+      - name: Deactivate production runtime
+        if: steps.configuration.outputs.configured == 'true' && steps.expiry.outputs.deactivate == 'true'
+        env:
+          TF_VAR_environment_active: "false"
+          TF_VAR_expires_at: inactive
+        run: terraform -chdir=infra/terraform/production apply -auto-approve

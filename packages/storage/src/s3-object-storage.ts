@@ -19,8 +19,8 @@ export interface S3ObjectStorageOptions {
   endpoint?: string;
   region: string;
   bucket: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
   forcePathStyle?: boolean;
   uploadUrlTtlSeconds?: number;
 }
@@ -42,14 +42,18 @@ export class StoredObjectNotFoundError extends Error {
 export function createS3ObjectStorage(
   options: S3ObjectStorageOptions,
 ): ObjectStorage {
+  const credentials =
+    options.accessKeyId && options.secretAccessKey
+      ? {
+          accessKeyId: options.accessKeyId,
+          secretAccessKey: options.secretAccessKey,
+        }
+      : undefined;
   const client = new S3Client({
     endpoint: options.endpoint,
     region: options.region,
     forcePathStyle: options.forcePathStyle,
-    credentials: {
-      accessKeyId: options.accessKeyId,
-      secretAccessKey: options.secretAccessKey,
-    },
+    credentials,
   });
   const uploadUrlTtlSeconds = options.uploadUrlTtlSeconds ?? 300;
 

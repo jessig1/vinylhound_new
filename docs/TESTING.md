@@ -48,7 +48,36 @@ npm run test:integration
 npm run test:e2e
 npm run test:e2e:matrix
 npm run eval:ai -- --manifest <private-manifest-path> --dry-run
+npm run container:build
+terraform -chdir=infra/terraform/bootstrap validate
+terraform -chdir=infra/terraform/development validate
+terraform -chdir=infra/terraform/environment validate
+terraform -chdir=infra/terraform/production validate
 ```
+
+## Platform and public-repository gates
+
+Pull requests build the web, long-running worker, and Lambda-worker images
+without publishing them, create SBOMs, scan the images, validate all four
+Terraform roots, and schema-check the Kubernetes manifests with a digest-pinned
+kubeconform image. Images must build without application secrets, run as a
+non-root user, and support ARM64. Terraform formatting and validation are
+secret-free; AWS plans and deployments use repository-scoped GitHub OIDC roles.
+
+Before making the repository public, run Gitleaks against the complete Git
+history and manually inspect historical filenames for environment files,
+exports, logs, signed URLs, private evaluation artifacts, and user images.
+Fork pull requests must pass the ordinary CI and security jobs but cannot
+receive repository secrets, GitHub environment secrets, or an AWS role. The
+Phase 2 rehearsal records a fork-based run as evidence of this boundary.
+
+Development validation must prove Lambda cold start, EventBridge outbox
+publication, SQS partial-batch failure handling, and secret-free Terraform
+state. Staging lifecycle validation must prove activation, a forward-only
+migration, smoke checks, image promotion, and cleanup. Production rehearsal
+additionally proves bounded TTL cleanup, safe SQS drain/reconciliation,
+rollback, EKS Pod Identity and HPA behavior, CloudFront/WAF ingress, Aurora cold
+resume/restore, and persistence across deactivate/reactivate.
 
 The private live-model harness is documented in `docs/EVALUATION.md`. It validates
 consent and maintainer-verified labels before any request, compares configurable
@@ -64,6 +93,11 @@ uses a synthetic in-process identifier to verify success, review routing,
 transient retry, terminal failure, audit persistence, status projection, and
 succeeded redelivery without making OpenAI calls. Unit and CI checks remain
 secret-free and infrastructure-free.
+
+Unit coverage for the cloud queue adapter verifies strict job parsing, FIFO
+message-group/deduplication fields, and SQS source/dead-letter operational
+counts. Live SQS, Lambda, ECS, and EKS behavior remains an account-level
+rehearsal rather than a secret-bearing CI test.
 
 Unit coverage in `packages/storage` verifies `normalizeImage` bounds a large
 source image to the analysis/thumbnail dimension caps and re-encodes to JPEG,

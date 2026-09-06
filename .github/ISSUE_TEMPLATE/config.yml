@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and proposals
+    url: https://github.com/jessig1/vinylhound_new/discussions
+    about: Ask for help or discuss a substantial change before opening an issue.
+  - name: Private security report
+    url: https://github.com/jessig1/vinylhound_new/security/advisories/new
+    about: Report a suspected vulnerability privately.

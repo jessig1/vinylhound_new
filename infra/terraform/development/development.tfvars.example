@@ -1,0 +1,6 @@
+domain_name        = "example.com"
+hostname           = "dev.vinylhound.example.com"
+web_image           = "000000000000.dkr.ecr.us-east-1.amazonaws.com/vinylhound-web@sha256:replace"
+worker_lambda_image = "000000000000.dkr.ecr.us-east-1.amazonaws.com/vinylhound-worker-lambda@sha256:replace"
+deployment_version = "replace-with-commit-sha"
+budget_alert_email = "owner@example.com"

@@ -1,0 +1,11 @@
+# CODEOWNERS requests review but is not a required approval while the project
+# has one maintainer.
+* @jessig1
+
+/.github/ @jessig1
+/infra/ @jessig1
+/scripts/ @jessig1
+/packages/contracts/ @jessig1
+/packages/database/migrations/ @jessig1
+/docs/decisions/ @jessig1
+/SECURITY.md @jessig1

@@ -1,0 +1,4 @@
+# AWS's current public.ecr.aws/lambda/nodejs:22 arm64 image and repositories
+# still provide openssl 3.5.7-2.amzn2023.0.1, although Trivy marks .0.2 fixed.
+# Remove this waiver as soon as AWS publishes a consumable fixed base/package.
+CVE-2026-14456 exp:2026-10-05

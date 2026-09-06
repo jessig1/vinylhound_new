@@ -66,6 +66,8 @@ export default function ScanResultPage() {
   const { scanId } = useParams<{ scanId: string }>();
   const confirmationKey = useRef(`confirm-${crypto.randomUUID()}`);
   const draftInitialized = useRef(false);
+  const artistInput = useRef<HTMLInputElement>(null);
+  const successHeading = useRef<HTMLHeadingElement>(null);
   const [scan, setScan] = useState<GetScanResponse | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<
     string | null | undefined
@@ -83,6 +85,13 @@ export default function ScanResultPage() {
   >([]);
   const [catalogPending, setCatalogPending] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogSearched, setCatalogSearched] = useState(false);
+  const [pollVersion, setPollVersion] = useState(0);
+  const confirmedAt = scan?.confirmation?.confirmedAt;
+
+  useEffect(() => {
+    if (confirmedAt) successHeading.current?.focus();
+  }, [confirmedAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,7 +114,11 @@ export default function ScanResultPage() {
         if (cancelled) return;
         setScan(nextScan);
         setLoadingError(null);
-        if (!draftInitialized.current) {
+        if (
+          !draftInitialized.current &&
+          nextScan.status !== "queued" &&
+          nextScan.status !== "processing"
+        ) {
           const first = nextScan.candidates[0];
           setDraft(first ? draftFromCandidate(first) : emptyDraft);
           setSelectedCandidateId(first?.id ?? null);
@@ -130,7 +143,7 @@ export default function ScanResultPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [scanId]);
+  }, [scanId, pollVersion]);
 
   function selectCandidate(candidate: ScanCandidateResult) {
     setSelectedCandidateId(candidate.id);
@@ -142,6 +155,7 @@ export default function ScanResultPage() {
     setSubmitError(null);
     setCatalogReference(null);
     setCatalogResults([]);
+    setCatalogSearched(false);
   }
 
   function enterManually() {
@@ -154,6 +168,8 @@ export default function ScanResultPage() {
     setSubmitError(null);
     setCatalogReference(null);
     setCatalogResults([]);
+    setCatalogSearched(false);
+    artistInput.current?.focus();
   }
 
   function editDraft(patch: Partial<Draft>, preserveCatalog = false) {
@@ -164,6 +180,8 @@ export default function ScanResultPage() {
   async function searchCatalog() {
     if (!draft.artist.trim() || !draft.title.trim() || catalogPending) return;
     setCatalogPending(true);
+    setCatalogSearched(false);
+    setCatalogResults([]);
     setCatalogError(null);
     try {
       const query = new URLSearchParams({
@@ -180,6 +198,7 @@ export default function ScanResultPage() {
       setCatalogResults(
         SearchCatalogReleasesResponseSchema.parse(body).results,
       );
+      setCatalogSearched(true);
     } catch (caught) {
       setCatalogError(
         caught instanceof Error ? caught.message : "Catalog search failed.",
@@ -301,6 +320,7 @@ export default function ScanResultPage() {
       RetryScanResponseSchema.parse(body);
       draftInitialized.current = false;
       setScan({ ...scan, status: "queued", attempt: null, candidates: [] });
+      setPollVersion((current) => current + 1);
     } catch (caught) {
       setActionError(
         caught instanceof Error
@@ -363,15 +383,13 @@ export default function ScanResultPage() {
             <Icon name="check" size={28} />
           </span>
           <p className="section-kicker">Saved</p>
-          <h1>{confirmation.release.title}</h1>
+          <h1 ref={successHeading} tabIndex={-1}>
+            {confirmation.release.title}
+          </h1>
           <p className="result-artist">{confirmation.release.artist}</p>
           <p>
-            Added to your {confirmation.libraryItem.list}.
-            {confirmation.libraryItem.copy
-              ? " This physical copy is tracked separately from the release."
-              : ""}{" "}
-            The reviewed details, selected candidate, and model audit trail
-            remain linked to this scan.
+            Added to your {confirmation.libraryItem.list}. You can find it there
+            whenever you need it.
           </p>
           <div className="button-row">
             <Link
@@ -398,7 +416,7 @@ export default function ScanResultPage() {
             : "Reading the cover…"
         }
         message={`Analyzing ${scan.images.length} labeled ${scan.images.length === 1 ? "view" : "views"}. You can leave this page and return from the same link.`}
-        error={actionError}
+        error={actionError ?? loadingError}
         secondaryAction={{
           label: actionPending ? "Canceling…" : "Cancel scan",
           onClick: cancel,
@@ -529,6 +547,7 @@ export default function ScanResultPage() {
                     selectedCandidateId === candidate.id ? " is-selected" : ""
                   }`}
                   key={candidate.id}
+                  aria-pressed={selectedCandidateId === candidate.id}
                   onClick={() => selectCandidate(candidate)}
                   type="button"
                 >
@@ -543,6 +562,12 @@ export default function ScanResultPage() {
                     </small>
                   </span>
                   <span className="candidate-card__confidence">
+                    {selectedCandidateId === candidate.id ? (
+                      <span>
+                        Selected
+                        <br />
+                      </span>
+                    ) : null}
                     {Math.round(candidate.confidence * 100)}%
                   </span>
                 </button>
@@ -551,8 +576,7 @@ export default function ScanResultPage() {
           ) : (
             <p className="empty-candidate-copy">
               The image did not produce a reliable candidate. You can still
-              enter the album details yourself and keep the scan&apos;s audit
-              trail.
+              enter the artist and album title yourself below.
             </p>
           )}
 
@@ -577,9 +601,22 @@ export default function ScanResultPage() {
               onClick={searchCatalog}
               type="button"
             >
-              {catalogPending ? "Searchingâ€¦" : "Search MusicBrainz"}
+              {catalogPending ? "Searching…" : "Search MusicBrainz"}
             </button>
           </div>
+          <p className="field-help">
+            Check the artist and album title, then choose where to save. All
+            other details are optional.
+          </p>
+          <p className="field-help" role="status">
+            {catalogPending
+              ? "Searching the catalog…"
+              : catalogSearched
+                ? catalogResults.length
+                  ? `${catalogResults.length} catalog releases found. Check the edition before selecting one.`
+                  : "No catalog releases found. You can edit the artist or title and search again, or save the details below."
+                : ""}
+          </p>
           {catalogError ? (
             <p className="form-error" role="alert">
               {catalogError}
@@ -589,13 +626,17 @@ export default function ScanResultPage() {
             <div className="candidate-list" aria-label="Catalog releases">
               {catalogResults.map((candidate) => (
                 <button
-                  className={`candidate-card${
+                  className={`candidate-card candidate-card--catalog${
                     catalogReference?.releaseId ===
                     candidate.reference.releaseId
                       ? " is-selected"
                       : ""
                   }`}
                   key={candidate.reference.releaseId}
+                  aria-pressed={
+                    catalogReference?.releaseId ===
+                    candidate.reference.releaseId
+                  }
                   onClick={() => selectCatalogRelease(candidate)}
                   type="button"
                 >
@@ -608,7 +649,7 @@ export default function ScanResultPage() {
                         candidate.country,
                       ]
                         .filter(Boolean)
-                        .join(" Â· ")}
+                        .join(" · ")}
                     </small>
                   </span>
                   <span className="candidate-card__confidence">
@@ -622,6 +663,7 @@ export default function ScanResultPage() {
             <label className="field field--wide">
               <span>Artist</span>
               <input
+                ref={artistInput}
                 onChange={(event) => editDraft({ artist: event.target.value })}
                 required
                 value={draft.artist}
@@ -747,56 +789,59 @@ export default function ScanResultPage() {
           </fieldset>
 
           {draft.list === "collection" ? (
-            <div className="review-fields">
-              <label className="field">
-                <span>Media condition</span>
-                <ConditionSelect
-                  onChange={(value) =>
-                    editDraft({ mediaCondition: value }, true)
-                  }
-                  value={draft.mediaCondition}
-                />
-              </label>
-              <label className="field">
-                <span>Sleeve condition</span>
-                <ConditionSelect
-                  onChange={(value) =>
-                    editDraft({ sleeveCondition: value }, true)
-                  }
-                  value={draft.sleeveCondition}
-                />
-              </label>
-              <label className="field">
-                <span>Storage location</span>
-                <input
-                  onChange={(event) =>
-                    editDraft({ location: event.target.value }, true)
-                  }
-                  value={draft.location}
-                />
-              </label>
-              <label className="field">
-                <span>Acquired on</span>
-                <input
-                  onChange={(event) =>
-                    editDraft({ acquiredAt: event.target.value }, true)
-                  }
-                  type="date"
-                  value={draft.acquiredAt}
-                />
-              </label>
-              <label className="field field--wide">
-                <span>Copy notes</span>
-                <textarea
-                  maxLength={2_000}
-                  onChange={(event) =>
-                    editDraft({ copyNotes: event.target.value }, true)
-                  }
-                  rows={2}
-                  value={draft.copyNotes}
-                />
-              </label>
-            </div>
+            <details className="optional-details">
+              <summary>Copy details (optional)</summary>
+              <div className="review-fields">
+                <label className="field">
+                  <span>Media condition</span>
+                  <ConditionSelect
+                    onChange={(value) =>
+                      editDraft({ mediaCondition: value }, true)
+                    }
+                    value={draft.mediaCondition}
+                  />
+                </label>
+                <label className="field">
+                  <span>Sleeve condition</span>
+                  <ConditionSelect
+                    onChange={(value) =>
+                      editDraft({ sleeveCondition: value }, true)
+                    }
+                    value={draft.sleeveCondition}
+                  />
+                </label>
+                <label className="field">
+                  <span>Storage location</span>
+                  <input
+                    onChange={(event) =>
+                      editDraft({ location: event.target.value }, true)
+                    }
+                    value={draft.location}
+                  />
+                </label>
+                <label className="field">
+                  <span>Acquired on</span>
+                  <input
+                    onChange={(event) =>
+                      editDraft({ acquiredAt: event.target.value }, true)
+                    }
+                    type="date"
+                    value={draft.acquiredAt}
+                  />
+                </label>
+                <label className="field field--wide">
+                  <span>Copy notes</span>
+                  <textarea
+                    maxLength={2_000}
+                    onChange={(event) =>
+                      editDraft({ copyNotes: event.target.value }, true)
+                    }
+                    rows={2}
+                    value={draft.copyNotes}
+                  />
+                </label>
+              </div>
+            </details>
           ) : null}
 
           <label className="field field--wide">

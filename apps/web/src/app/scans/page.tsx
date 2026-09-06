@@ -38,7 +38,12 @@ export default async function ScansPage() {
               ? `/scans/batch/${scan.batchId}`
               : `/scans/${scan.scanId}`;
             return (
-              <article className="scan-row" id={scan.scanId} key={scan.scanId}>
+              <Link
+                className="scan-row"
+                href={href}
+                id={scan.scanId}
+                key={scan.scanId}
+              >
                 <Art title={title} tone={toneFor(scan.scanId)} />
                 <div className="scan-row__title">
                   <h2>{title}</h2>
@@ -50,10 +55,8 @@ export default async function ScansPage() {
                 <time dateTime={scan.createdAt}>
                   {new Date(scan.createdAt).toLocaleDateString()}
                 </time>
-                <Link aria-label={`Open ${title}`} href={href}>
-                  <Icon name="chevronRight" size={16} />
-                </Link>
-              </article>
+                <Icon name="chevronRight" size={16} />
+              </Link>
             );
           })}
         </section>

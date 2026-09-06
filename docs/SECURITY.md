@@ -75,3 +75,30 @@ the protected `main` branch to require `CI / validate`, `Security / CodeQL`,
 `Security / Secret scan`, and `Security / Dependency review` before merging.
 `dependabot.yml` checks npm dependencies weekly; review its pull requests with
 the same required checks.
+
+## Public repository and supply chain
+
+Root `SECURITY.md` is the contributor-facing disclosure policy; vulnerabilities
+go through GitHub private vulnerability reporting, never public issues.
+`CONTRIBUTING.md`, issue forms, the pull-request template, CODEOWNERS, and
+`docs/PUBLIC_REPOSITORY.md` define the issue-first workflow and visibility gate.
+
+GitHub workflow permissions are read-only by default. Third-party actions are
+pinned to commit SHAs. Pull-request workflows never use `pull_request_target`,
+AWS OIDC, deployment environments, OpenAI/Clerk keys, or AWS runtime secrets.
+Only an exact repository/environment OIDC subject can assume a deploy role.
+
+The private pre-release repository still runs the full-history Gitleaks check,
+but does not attempt to upload Gitleaks SARIF or CodeQL results until the
+visibility-change gate has completed and GitHub code scanning is enabled. This
+keeps security scanning enforced without failing solely because private-repo
+code-scanning uploads are unavailable.
+
+Container builds use digest-pinned bases, run as a non-root user with a
+read-only root filesystem, produce standalone CI SBOMs, and are scanned before
+deployment. Development deployment images omit attached SBOM/provenance
+attestations because Lambda requires a single supported image manifest.
+Development Lambda roles, staging ECS task roles, and
+production EKS Pod Identity roles separate web from worker access; only worker
+runtimes receive the OpenAI key. S3 and SQS are private and encrypted, S3 is
+versioned, and AWS access uses short-lived role credentials.

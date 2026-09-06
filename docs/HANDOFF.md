@@ -13,13 +13,79 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-08-31
+## Current state — verified 2026-09-05
+
+- **P2.1-P2.4 review:** repository implementation is complete; the remaining
+  work is GitHub/AWS configuration and live rehearsal, summarized in
+  `docs/PHASE_2_MILESTONE_REVIEW.md`. Live inspection confirmed the repository
+  is private, full-history Gitleaks passes, all three GitHub environments exist,
+  only development has deploy variables, staging/production variables are
+  absent, repository plan variables still contain invalid placeholders, only
+  development Terraform state exists, the development ARM64 Lambdas exist, and
+  no ECS/EKS clusters exist. Successful staging runs are guard skips, not
+  lifecycle passes. The review also removed the accidentally tracked local AWS
+  CLI installer bundle from Git and ignored `/aws/`; that bundle caused the
+  latest CI formatting failure.
+
+- **Incremental frontend usability pass:** the maintainer explicitly authorized
+  the ranked UI work in `docs/UI_UX_REVIEW.md`, superseding the older UI deferral
+  for this task. Changes cover mobile scan-row navigation, shared controls and
+  contrast, uncropped previews, optional copy fields, review/processing feedback,
+  and clear-search recovery. Backend contracts and architecture are unchanged.
+  Verified: 56/56 browser checks across all four profiles, 79/79 unit tests,
+  lint, typecheck, formatting, and production build pass. The subsequent Phase
+  2 review excluded local AWS CLI and Terraform state artifacts from repository
+  tooling, so the full `npm run check` now passes.
+
+- **The tiered AWS runtime redesign is implemented and verified for milestone
+  delivery.**
+  ADR-0016 supersedes ADR-0015: development is an always-live, scale-to-zero
+  API Gateway/Lambda environment backed by external PostgreSQL, staging keeps
+  the just-in-time ECS shape, and production is now a just-in-time EKS runtime
+  behind CloudFront, WAF, and an internal ALB. AWS environments use SQS FIFO
+  queues with DLQs while local development keeps BullMQ. Production teardown
+  drains workers before removing the namespace; application access uses EKS
+  Pod Identity, and container migration/runtime entrypoints no longer depend on
+  npm being present in the hardened images.
+- Verification through 2026-09-05: `npm run check` passes all 79 unit tests;
+  `npm run build` succeeds; actionlint 1.7.7 reports no workflow findings;
+  kubeconform 0.7.0 validates all 10 production Kubernetes resources; and
+  Terraform 1.13.3 formats and validates bootstrap, development, staging, and
+  production roots against committed provider locks. The worker shared-package
+  runtime compilation also succeeds. `npm run container:build` now builds all
+  three images. Local smoke tests prove web liveness/readiness/root responses
+  and Docker health, worker migrations/heartbeat/clean SIGTERM shutdown, and
+  Lambda cold start, EventBridge dispatch, and SQS partial-batch failure. All
+  runtimes are non-root and omit npm; tests made no OpenAI calls and removed
+  their disposable containers/databases. No real AWS plan/apply was attempted.
+- Terraform 1.13.3 is installed for both Windows and WSL. The exact WSL
+  `terraform -chdir=infra/terraform/bootstrap init` command succeeds and the
+  bootstrap root validates with AWS provider 6.62.0. Its lock now includes the
+  Linux package hash alongside the Windows hash. All four roots also pass
+  formatting and Windows validation; GitHub's Linux Terraform validation job
+  passed for milestone commit `fdece7b`.
+
+- **Do not make the repository public yet.** The real Gemini credential found
+  in historical `.env.example` was rotated, and its only containing branch,
+  `experiment/gemini-vs-openai`, was deleted locally and on GitHub on
+  2026-09-02. `main` never contained the exposing commit; a local ref audit and
+  GitHub `ls-remote` both confirm no remaining branch points to it. The next
+  push must produce a clean full-history Gitleaks workflow run before the
+  visibility-change gate can pass. Never add an allowlist for a real finding.
+- **Initial GitHub workflow failures are resolved.** The follow-up commit
+  `a8bdff5` passed CI, Security (including a clean full-history Gitleaks scan),
+  staging's pre-activation guard, Terraform validation, and both container
+  build/Trivy/SBOM jobs on 2026-09-02. Private-repository SARIF/CodeQL uploads
+  now wait for the public visibility gate; staging and scheduled deactivation
+  skip safely until configured, while manual production activation validates
+  and fails clearly when configuration is missing. Runtime images remove unused
+  npm/corepack package-manager tooling, eliminating its inherited Trivy findings.
 
 - The dashboard now reads authenticated, persisted data rather than the old
   hard-coded demo dataset: its activity section shows the three most recent
   scans, and its collection/wishlist previews show the three most recently
   updated items and exact server-side counts. Empty states are explicit. This
-  change is uncommitted, alongside the pre-existing working-tree changes.
+  work is committed on `main`.
 
 - **Milestone 4's managed-infrastructure/operations task is complete at the
   repository level.** `docs/OPERATIONS.md` defines the managed PostgreSQL,
@@ -275,8 +341,7 @@ DELETE` intended only to inspect response headers while manually verifying
   Direct wishlist-to-owned conversion (ADR-0011) and library search/sort/
   export (ADR-0012) are committed as `b2d87d6`. Production authentication
   (ADR-0013) is committed as `9507cad`. All of the above are pushed to
-  `origin/main`. Account export/deletion (ADR-0014, this session) is
-  uncommitted; the maintainer should review before commit.
+  `origin/main`. Account export/deletion (ADR-0014) is committed as `6511205`.
 - The maintainer's private dataset folder contains 52 JPEG cover photos plus a
   draft `manifest.json` and `LABELING_PROMPT.md`. These files remain outside
   the repository and still need app-assisted labels and maintainer verification.
@@ -295,24 +360,20 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Milestone 4 is complete except a published user-facing privacy
-notice. The next session should check with the maintainer for the next priority
-rather than assuming. Candidates are the privacy notice or Milestone 3's
-deferred per-copy condition/location/notes/acquisition-date edit and delete
-flow. Keep the private AI matrix deferred until public rollout or model/cost
-optimization.
+The requested incremental frontend pass is documented in `docs/UI_UX_REVIEW.md`.
+Review those local changes before committing. Real cover art, batch review
+navigation, and copy-editor mutation feedback remain separate tasks. This
+explicitly authorized UI pass does not change the infrastructure resume below.
 
-The delivery roadmap cannot truthfully be called fully complete until those
-three explicitly deferred items (privacy notice, per-copy editing/deletion,
-and the private AI evaluation before public rollout) are completed or formally
-removed from it.
+**Task:** Follow `docs/PHASE_2_MILESTONE_REVIEW.md`'s ordered manual checklist.
+Correct the repository plan placeholders and configure staging/production before
+running real plans or lifecycle workflows. Pay particular attention to the
+production state-address preservation documented in ADR-0016. Development is
+live at `https://dev-vh.siliconforest.io`: its Supabase database is migrated,
+API/event triggers are enabled, and both health endpoints pass.
 
-GitHub security automation is now configured but GitHub repository settings
-still need the maintainer: enable Code scanning, Secret scanning, Dependabot
-alerts/security updates, and branch protection requiring the CI and Security
-checks listed in `docs/SECURITY.md`. The workflow publishes CodeQL and
-redacted Gitleaks SARIF results to the Security tab for trusted repository
-runs; fork PRs still fail their scan but cannot upload SARIF by design.
+Phase 3 remains a placeholder. Beyond the explicitly authorized UI pass, defer
+AI model training/optimization until Phase 2 has completed and been reviewed.
 
 Things worth knowing before extending this further:
 
@@ -326,10 +387,11 @@ Things worth knowing before extending this further:
   request time despite being set correctly in `.env` — `/dashboard`
   returned `200` unauthenticated instead of redirecting. Fixed by passing
   `forceReload: true` to both `loadEnvConfig` call sites
-  (`next.config.ts`, `apps/web/src/server/context.ts`) and adding a
-  `next.config.ts` `env` block so Edge middleware's separately-compiled
-  bundle gets `AUTH_MODE`/Clerk's keys statically inlined (it never
-  executes `next.config.ts`'s `loadEnvConfig()` call itself).
+  (`next.config.ts`, `apps/web/src/server/context.ts`). Phase 2 removed the
+  `next.config.ts` `env` block because it embedded the Clerk secret at build
+  time. The container build sets only the non-secret auth mode, the root layout
+  is forced dynamic, and ECS injects Clerk values when the standalone server
+  starts.
   `apps/web/e2e/env.ts` now explicitly forces `AUTH_MODE=development` for
   the same reason: without that, a local `.env` with
   `AUTH_MODE=production` silently broke the entire e2e suite. Verified: a
@@ -545,13 +607,12 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   owning row is deleted via the database's cascading foreign key (ADR-0007
   widened this from one orphaned object to three; it did not introduce the
   gap).
-- Production authentication (ADR-0013) is implemented but not yet exercised
-  against a real Clerk account/keys — see the Resume point above.
-  `clerk_user_id` is nullable with a placeholder backfill, not yet tightened
-  to `not null`. No Clerk webhook exists; a Clerk-side account deletion does
-  not currently propagate to the local `users` row. Account deletion/export
-  and a privacy/retention policy are separate, not yet started.
-- Local-only infrastructure; backups and observability are Milestone 4.
+- Production authentication (ADR-0013) has passed route-protection checks with
+  real Clerk test-mode keys, but the Phase 2 production rehearsal still needs
+  an end-to-end sign-up/JIT-provisioning run. `clerk_user_id` remains nullable
+  with a placeholder backfill; no Clerk deletion webhook exists.
+- AWS infrastructure, backups, observability, and delivery are implemented as
+  code but have not yet been applied or rehearsed in the target account.
 - `GET /usage` and `/account/usage` report a fixed rolling 30-day window
   with no pagination, custom range, or historical trend (ADR-0008,
   deliberate scope cut). `estimatedCostUsd` is `null` whenever no attempt
@@ -560,6 +621,222 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-05 - Codex.** Audited every outstanding P2.1-P2.4 roadmap item
+  against committed implementation, GitHub configuration/runs, and read-only
+  AWS inventory. Split the stale aggregate checklist entries to record clean
+  Gitleaks, the live development Lambda deployment, target-account bootstrap,
+  development state, and GitHub environment creation accurately. Added
+  `docs/PHASE_2_MILESTONE_REVIEW.md` with the ordered manual visibility/fork,
+  runtime, foundation-apply, and two-lifecycle staging checklist. Found that
+  staging/production variables are absent, repository plan values contain
+  invalid placeholders, only development remote state/Lambdas exist, no
+  ECS/EKS clusters exist, and staging's successful runs are configuration
+  skips. Also corrected the previous UI commit's accidental inclusion of a
+  downloaded AWS CLI bundle: removed its three files from Git while preserving
+  the local bundle, ignored `/aws/` in Git/Docker, and ignored local Terraform
+  state in Prettier. `npm run check` passes all 79 tests plus formatting, lint,
+  and typecheck; `npm run build` and `git diff --check` pass. No infrastructure
+  was changed and no live AI call was made.
+
+- **2026-09-05 - Codex.** Reviewed the frontend, ranked ten improvements before
+  editing, and completed the first eight low-risk items in `docs/UI_UX_REVIEW.md`.
+  Fixed the hidden mobile scan links with whole-row links; improved shared
+  control sizes, contrast, focus, wrapping, and safe-area spacing; kept full
+  photo edges in previews; collapsed optional copy details; clarified candidate,
+  upload, catalog-empty, and save feedback; added clear-search recovery. Fixed
+  queued scans initializing empty review drafts and retry not restarting polling.
+  Preserved Next.js, global CSS, API payloads, backend behavior, and dependencies.
+  Browser coverage now exercises queued-to-result form initialization, retry
+  polling (stubbed retry, no extra analysis), empty catalog feedback and review
+  accessibility, collapsed values, mobile scan navigation, clear-search sorting,
+  upload focus, and 360px layout. Windows WebKit skips links in its default Tab
+  order (reproduced on a minimal page), so the shared keyboard smoke test uses
+  collection, which includes a search input. All 56 matrix checks and 79 unit
+  tests pass, as do lint/typecheck/build and changed-file formatting. Full
+  `npm run check` still stops at the same three unrelated formatting failures
+  found before edits: `aws/README.md`, `infra/terraform/bootstrap/terraform.tfstate`,
+  and its `.backup`. These files were untouched. Inspected local phone scan,
+  full-image preview, review, and desktop dashboard screenshots. Compose services
+  were started for the isolated e2e database/queue and remain running; the test
+  server/worker stopped normally. No live AI calls, deployment, commit, or push.
+  Real cover thumbnails, batch navigation, and copy-editor error handling are
+  separate follow-ups. The generated Next type imports were restored by the
+  final normal build.
+
+- **2026-09-05 - Codex.** Replaced the local-only development database secret
+  with the maintainer-provided Supabase session-pooler endpoint on IPv4 port 5432. Repaired a malformed missing query delimiter without exposing the
+  credential, retained `sslmode=require`, removed unsupported
+  `channel_binding=require`, and verified both database reachability and
+  client-side TLS negotiation with `psql`. Extended the deployment workflow's
+  database guard to reject URLs that do not explicitly require TLS. Deployment
+  run `34001697979` then failed because the web Lambda was accidentally deleted
+  between Terraform reconciliation and secret injection. Fresh-SHA run
+  `34002332466` recreated it and reached the migration, which exposed Node
+  `pg`'s temporary interpretation of `sslmode=require` as `verify-full` and its
+  rejection of the Supabase certificate chain. Added `uselibpqcompat=true` to
+  the stored URL so `require` retains standard libpq semantics (mandatory
+  encryption without certificate verification), then successfully applied all
+  11 repository migrations to Supabase. Final deployment run `34002645203`
+  passed image builds, both Terraform applies, secret injection, idempotent
+  migration confirmation, API/event trigger activation, and its HTTP smoke
+  test. Independently verified `/api/healthz` returns `status: ok` and
+  `/api/readyz` returns `status: ready` at
+  `https://dev-vh.siliconforest.io`.
+
+- **2026-09-05 - Codex.** Platform run `33995480727` passed all Terraform,
+  Kubernetes, three-image build/scan, and SBOM jobs after the expiring Trivy
+  waiver. Development run `33995480784` then successfully created both Lambda
+  functions, the full `dev-vh.siliconforest.io` certificate/DNS resources, and
+  the rest of the first-apply stack, proving the hostname and image-manifest
+  fixes; it stopped safely before triggers because secret containers had no
+  values. With explicit maintainer authorization, copied the four existing
+  `.env` values directly to AWS Secrets Manager without logging them and
+  verified one `AWSCURRENT` version per secret. Redeploy commit `44c4ec3`
+  successfully loaded and injected all secrets, but migration failed because
+  the local `DATABASE_URL` resolves to `host.docker.internal`, which GitHub and
+  AWS cannot reach. Triggers remain disabled. Added a workflow guard that
+  rejects local-only database hosts with an actionable error. An external TLS
+  PostgreSQL URL is the sole blocker to completing migration, trigger enablement,
+  and live HTTP smoke tests.
+
+- **2026-09-05 - Codex.** Diagnosed development deployment run `33991720573`:
+  GitHub obtained an OIDC token, but AWS rejected it before builds or Terraform.
+  CloudTrail showed the actual subject as the stable-ID form
+  `repo:jessig1@13804284/vinylhound_new@1345526931:environment:development`,
+  while bootstrap trusted the legacy name-only prefix. GitHub's OIDC
+  customization API confirmed that stable prefix. Updated bootstrap plan and
+  environment trust policies to use the exact prefix and documented how forks
+  retrieve and override it. Applied the bootstrap update to the existing
+  `vinylhound-tf` state: all four GitHub IAM roles changed in place with no
+  resources created or destroyed, and the next deployment authenticated
+  successfully.
+
+- **2026-09-05 - Codex.** Continued development deployment run `33991720573`
+  through three attempts. Corrected the development ECR variables from bare
+  names to full account/region repository URLs, after which both runtime images
+  built and pushed successfully. The first Terraform apply then exposed two
+  configuration defects: `APP_HOSTNAME=dev-vh` was not an ACM-compatible FQDN,
+  and Buildx's attached attestations produced image indexes unsupported by
+  Lambda. Corrected the live hostname to `dev-vh.siliconforest.io`; added an
+  early workflow hostname guard and matching Terraform validation; and disabled
+  attached provenance/SBOM metadata for the two development Lambda images.
+  Standalone SBOM generation remains in the platform CI workflow. The patched
+  development Terraform root validates with Terraform 1.13.3, and affected
+  YAML/Markdown files pass Prettier. Pushed these corrections as `a8b2bec`; its
+  deployment run was subsequently cancelled due to the platform finding below.
+
+- **2026-09-05 - Codex.** Platform run `33994598016` correctly blocked the
+  worker-Lambda image on HIGH-severity `CVE-2026-14456`: the pinned AWS Lambda
+  Node.js 22 arm64 base contains OpenSSL `3.5.7-2.amzn2023.0.1`, while Trivy
+  reports `.0.2` as fixed. AWS's current `nodejs:22` arm64 tag still contains
+  `.0.1`, and `dnf upgrade` against the image's repositories reports no update
+  available. Cancelled concurrent deployment run `33994597990` before it could
+  activate that image. Added a single-CVE Trivy waiver expiring 2026-10-05 and
+  explicitly wired it into the platform scan. A local Trivy 0.70 scan of the
+  rebuilt arm64 image then passed with zero unsuppressed HIGH/CRITICAL findings.
+  Remove the waiver and update the pinned Lambda base digest as soon as AWS
+  publishes the fixed package.
+
+- **2026-09-05 - Codex.** Added Terraform bootstrap validation for S3 state
+  bucket naming after AWS rejected the maintainer's underscore-containing
+  `vinylhound_tf` value. The bootstrap README now gives a valid hyphenated,
+  globally unique account-ID example, so future invalid names fail locally
+  before an AWS create request.
+
+- **2026-09-05 - Codex.** Diagnosed the maintainer's repeated Terraform 1.8.4
+  bootstrap error as WSL resolving `/usr/bin/terraform` while Windows had the
+  newly installed 1.13.3 package. Downloaded the official Linux 1.13.3 archive,
+  verified it against HashiCorp's published SHA-256 checksum, and installed it
+  at `/usr/local/bin/terraform`, ahead of `/usr/bin`. The maintainer's exact
+  bootstrap init now succeeds in WSL and `terraform validate` passes. Retained
+  the Linux AWS-provider package hash that WSL added to the bootstrap lock;
+  removing it correctly caused cached-package verification to fail. Windows
+  1.13.3 formatting/validation passes for all four roots, and the milestone's
+  GitHub Linux Terraform validation job also passed. Parallel extra-root WSL
+  initialization hit NTFS provider-cache I/O errors, so do not share a
+  `.terraform` provider directory between Windows and WSL when revalidating.
+
+- **2026-09-05 - Codex.** Built and locally smoke-tested all three runtime
+  images. The first build exposed an invalid variable-based `COPY --from` in
+  `Dockerfile.web`; a named Lambda-adapter stage fixes it. The Lambda worker
+  also ran as root locally and retained npm, so its final stage now removes
+  package-manager tooling and selects UID/GID 65534. The final top-level
+  `npm run container:build` succeeds. Web returned 200 for liveness, readiness,
+  and `/`, reached Docker `healthy`, ran as UID 1000 without npm, and contained
+  an executable Lambda adapter. The worker applied all 11 migrations to an
+  isolated database, produced a fresh heartbeat, ran as UID 1000 without npm,
+  and completed SIGTERM shutdown with exit code 0. The Lambda image cold-started
+  locally as UID 65534 without npm, returned zero EventBridge publications from
+  an empty database, and returned the expected partial-batch failure for an
+  invalid SQS record. OpenAI was disabled or replaced by a non-real placeholder;
+  disposable databases/containers were removed and Compose dependencies were
+  returned to their initially stopped state. The maintainer authorized this
+  verified redesign for an infrastructure milestone commit and push before the
+  real AWS plan gate.
+
+- **2026-09-03 - Codex.** Resumed an interrupted, uncommitted AWS platform
+  redesign and completed its repository implementation. Added the development
+  Lambda/API Gateway/SQS root, production EKS/CloudFront/WAF/SQS root and
+  Kubernetes workloads, SQS queue adapter/tests, production expiry teardown,
+  worker migration and Lambda entrypoints, and worker shared-package runtime
+  compilation for hardened images. Corrected Terraform syntax/state-address
+  compatibility, Lambda visibility timeout, CloudFront-origin networking, EKS
+  Pod Identity/observability, and workflow manifest validation. Recorded the
+  design in ADR-0016 and synchronized operational, architecture, security,
+  testing, roadmap, API, and repository documentation. Checks, builds,
+  actionlint, kubeconform, and all four Terraform validations pass. A final
+  container build attempt reached Docker but its daemon reported that Docker
+  Desktop was unable to start, so Docker runtime verification and real AWS
+  plans remain the next gates.
+
+- **2026-09-02 - Codex.** Pushed `a8bdff5` (`fix pre-activation pipeline
+failures`) and verified the resulting GitHub Actions runs: CI, Security,
+  staging, Terraform validation, and both container build/Trivy/SBOM jobs all
+  completed successfully. The only intentionally skipped jobs were CodeQL and
+  SARIF publication until the repository becomes public, the AWS plan absent a
+  trusted pull request, and deployment work absent environment configuration.
+
+- **2026-09-02 - Codex.** Diagnosed the first GitHub Actions runs after Phase 2
+  delivery using authenticated read-only API/log access. CI and Terraform
+  validation passed; Gitleaks itself was clean. Corrected private-repository
+  CodeQL/SARIF upload handling, activation guards and environment-variable
+  loading for staging/deactivation/production, and removed unused npm/corepack
+  from final runtime images to eliminate Trivy's inherited critical findings.
+  Local workflow formatting, `npm run check` (73 tests), and `npm run build`
+  pass. Push the follow-up and require clean CI, Security, and Platform runs.
+
+- **2026-09-02 - Codex.** Ran `npm run check` (73 tests) and `npm run build`
+  successfully, then committed and pushed the complete Phase 2 implementation
+  to `main` as `f29016e` (`add Phase 2 public deployment platform`). The next
+  maintainer action is to review the resulting GitHub CI, Security, and
+  Platform workflow results before the visibility-change gate.
+
+- **2026-09-02 - Codex.** The maintainer rotated the historical Gemini key and
+  deleted its sole containing branch, `experiment/gemini-vs-openai`. A local
+  ref audit and GitHub `ls-remote` verification confirmed that neither local
+  nor remote branches contain the exposing commit; `main` was never affected.
+  Updated the Phase 2 activation sequence to require a clean Gitleaks workflow
+  run, then public visibility and repository-settings automation (the script
+  itself refuses private repositories).
+
+- **2026-09-02 - Codex.** Implemented VinylHound Phase 2 at repository level:
+  public-repository governance, runtime/container hardening, task-role/default
+  AWS credentials, TLS/pool configuration, worker drain/reconciliation and
+  metrics, Terraform bootstrap plus isolated JIT environments, GitHub OIDC
+  delivery/cleanup workflows, cost/security/scaling/observability controls,
+  ADR-0015, and synchronized platform documentation. Hardened the result during
+  verification by splitting web/worker execution-secret roles, adding a real
+  worker heartbeat and shutdown ordering, excluding Terraform providers from
+  container contexts, adding trusted internal-PR plans, serializing deployment
+  and expiry workflows, and provisioning runtime/migrating before ECS service
+  rollout. `npm run check` (73/73), `npm run build`, actionlint, and both
+  Terraform validates pass. Local Docker image verification is outstanding
+  because Docker Desktop's daemon became unresponsive. The required redacted
+  full-history audit found a real historical Gemini credential matching the
+  ignored local `.env`; public visibility is explicitly blocked pending
+  rotation and an approved coordinated history rewrite. Nothing was applied to
+  GitHub or AWS, committed, pushed, or made public.
 
 - **2026-08-31 - Codex.** Replaced the dashboard shell's fixed Collection
   (`48`) and Wishlist (`12`) navigation badges with per-user database counts
