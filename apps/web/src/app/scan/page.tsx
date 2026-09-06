@@ -328,12 +328,22 @@ export default function ScanPage() {
         </button>
       </div>
 
+      {images.length ? (
+        <p className="field-help">
+          Switching scan mode clears the selected photos.
+        </p>
+      ) : null}
+      <p className="scan-progress-message" role="status">
+        {busy ? phaseLabel(phase, activeImage, images.length) : ""}
+      </p>
       <section className="upload-card" aria-busy={busy}>
         {images.length ? (
           <div className="multi-view-upload">
             <div className="multi-view-upload__heading">
-              <span className="status status--success">
-                <Icon name="check" size={14} />
+              <span
+                className={`status ${busy ? "status--review" : "status--success"}`}
+              >
+                <Icon name={busy ? "clock" : "check"} size={14} />
                 {phaseLabel(phase, activeImage, images.length)}
               </span>
               <h2>
@@ -344,7 +354,7 @@ export default function ScanPage() {
               <p>
                 {mode === "batch"
                   ? "Each photo becomes its own scan. Track and retry them independently from the batch page."
-                  : "Label each photo so the model can combine cover and edition evidence correctly."}
+                  : "Check the photo types below. Add extra views only if you need help identifying the edition."}
               </p>
             </div>
 
@@ -383,6 +393,10 @@ export default function ScanPage() {
                     {uploadProgress[image.clientId] !== undefined ? (
                       <div
                         className="upload-progress"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={uploadProgress[image.clientId]}
                         aria-label={`Upload progress for ${image.file.name}`}
                       >
                         <span
@@ -394,6 +408,7 @@ export default function ScanPage() {
                     ) : null}
                     <button
                       className="text-button view-card__remove"
+                      aria-label={`Remove ${image.file.name || "record photo"}`}
                       disabled={busy}
                       onClick={() => removeImage(image.clientId)}
                       type="button"

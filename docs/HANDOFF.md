@@ -15,6 +15,16 @@ the log.
 
 ## Current state — verified 2026-09-05
 
+- **Incremental frontend usability pass:** the maintainer explicitly authorized
+  the ranked UI work in `docs/UI_UX_REVIEW.md`, superseding the older UI deferral
+  for this task. Changes cover mobile scan-row navigation, shared controls and
+  contrast, uncropped previews, optional copy fields, review/processing feedback,
+  and clear-search recovery. Backend contracts and architecture are unchanged.
+  Verified: 56/56 browser checks across all four profiles, 79/79 unit tests,
+  lint, typecheck, changed-file formatting, and production build pass. The full
+  `npm run check` is blocked only by pre-existing formatting failures in the
+  untracked `aws/README.md` and local bootstrap Terraform state/backup files.
+
 - **The tiered AWS runtime redesign is implemented and verified for milestone
   delivery.**
   ADR-0016 supersedes ADR-0015: development is an always-live, scale-to-zero
@@ -338,6 +348,11 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
+The requested incremental frontend pass is documented in `docs/UI_UX_REVIEW.md`.
+Review those local changes before committing. Real cover art, batch review
+navigation, and copy-editor mutation feedback remain separate tasks. This
+explicitly authorized UI pass does not change the infrastructure resume below.
+
 **Task:** Run real Terraform plans for staging and production, paying particular
 attention to the production state-address preservation documented in ADR-0016.
 Development is live at `https://dev-vh.siliconforest.io`: its Supabase database
@@ -348,8 +363,8 @@ bootstrap, environment configuration, secret population, deployment, restore,
 teardown, and fork-security rehearsals. Do not apply infrastructure or enable
 branch protection until the corresponding review gates have passed.
 
-Phase 3 remains a placeholder only. Do not plan UI/UX polish or AI model
-training/optimization until Phase 2 has completed and been reviewed.
+Phase 3 remains a placeholder. Beyond the explicitly authorized UI pass, defer
+AI model training/optimization until Phase 2 has completed and been reviewed.
 
 Things worth knowing before extending this further:
 
@@ -597,6 +612,31 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-05 - Codex.** Reviewed the frontend, ranked ten improvements before
+  editing, and completed the first eight low-risk items in `docs/UI_UX_REVIEW.md`.
+  Fixed the hidden mobile scan links with whole-row links; improved shared
+  control sizes, contrast, focus, wrapping, and safe-area spacing; kept full
+  photo edges in previews; collapsed optional copy details; clarified candidate,
+  upload, catalog-empty, and save feedback; added clear-search recovery. Fixed
+  queued scans initializing empty review drafts and retry not restarting polling.
+  Preserved Next.js, global CSS, API payloads, backend behavior, and dependencies.
+  Browser coverage now exercises queued-to-result form initialization, retry
+  polling (stubbed retry, no extra analysis), empty catalog feedback and review
+  accessibility, collapsed values, mobile scan navigation, clear-search sorting,
+  upload focus, and 360px layout. Windows WebKit skips links in its default Tab
+  order (reproduced on a minimal page), so the shared keyboard smoke test uses
+  collection, which includes a search input. All 56 matrix checks and 79 unit
+  tests pass, as do lint/typecheck/build and changed-file formatting. Full
+  `npm run check` still stops at the same three unrelated formatting failures
+  found before edits: `aws/README.md`, `infra/terraform/bootstrap/terraform.tfstate`,
+  and its `.backup`. These files were untouched. Inspected local phone scan,
+  full-image preview, review, and desktop dashboard screenshots. Compose services
+  were started for the isolated e2e database/queue and remain running; the test
+  server/worker stopped normally. No live AI calls, deployment, commit, or push.
+  Real cover thumbnails, batch navigation, and copy-editor error handling are
+  separate follow-ups. The generated Next type imports were restored by the
+  final normal build.
 
 - **2026-09-05 - Codex.** Replaced the local-only development database secret
   with the maintainer-provided Supabase session-pooler endpoint on IPv4 port 5432. Repaired a malformed missing query delimiter without exposing the

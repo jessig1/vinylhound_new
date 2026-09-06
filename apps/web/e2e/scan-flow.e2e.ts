@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import sharp from "sharp";
 
 // The upload input without the capture attribute is the "Upload image" path;
@@ -52,6 +53,72 @@ test("groups front, back, and spine photos into one labeled multi-view scan", as
     page.getByRole("heading", { name: "Check the match." }),
   ).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("combined 3 labeled views")).toBeVisible();
+  // Results that arrive through polling must populate the form without a reload.
+  await expect(page.getByLabel("Artist")).toHaveValue("The Vinyl Hounds");
+  await expect(page.getByLabel("Album title")).toHaveValue(
+    "Automated Test Pressing",
+  );
+
+  // Force a queued response before the real result to exercise asynchronous
+  // draft initialization even when the synthetic worker finishes quickly.
+  let firstPoll = true;
+  await page.route(/\/api\/v1\/scans\/[0-9a-f-]{36}$/, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    if (firstPoll) {
+      firstPoll = false;
+      await route.fulfill({
+        json: { ...body, status: "queued", candidates: [], attempt: null },
+      });
+    } else {
+      await route.fulfill({ response });
+    }
+  });
+  await page.reload();
+  await expect(page.getByLabel("Artist")).toHaveValue("The Vinyl Hounds");
+  await expect(page.getByLabel("Album title")).toHaveValue(
+    "Automated Test Pressing",
+  );
+
+  await page.route("**/api/v1/catalog/releases?**", (route) =>
+    route.fulfill({ json: { results: [] } }),
+  );
+  await page.getByRole("button", { name: "Search MusicBrainz" }).click();
+  await expect(page.getByRole("status")).toContainText(
+    "No catalog releases found",
+  );
+  const accessibility = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  // A retry must resume GET polling after a terminal result. Stub the retry
+  // boundary so this regression does not submit another analysis job.
+  await page.unroute(/\/api\/v1\/scans\/[0-9a-f-]{36}$/);
+  let retryRequested = false;
+  await page.route(/\/api\/v1\/scans\/[0-9a-f-]{36}$/, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({
+      json: retryRequested ? body : { ...body, status: "unresolved" },
+    });
+  });
+  await page.route("**/retry", async (route) => {
+    retryRequested = true;
+    const scanId = new URL(page.url()).pathname.split("/").at(-1);
+    await route.fulfill({
+      json: {
+        scanId,
+        status: "queued",
+        attemptNumber: 2,
+        jobId: "ui-retry-check",
+      },
+    });
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "retry this scan" }).click();
+  await expect(page.getByLabel("Artist")).toHaveValue("The Vinyl Hounds");
+  await expect(page.getByText("High confidence")).toBeVisible();
 });
 
 test("groups two front-cover photos into an independently trackable batch", async ({
@@ -117,6 +184,14 @@ test("identifies a misnamed cover photo and confirms it into the collection", as
   await expect(
     page.getByRole("button", { name: /Alternate Take/ }),
   ).toBeVisible();
+  await expect(page.getByLabel("Artist")).toHaveValue("The Vinyl Hounds");
+  await expect(page.getByLabel("Storage location")).toBeHidden();
+  await page.getByText("Copy details (optional)", { exact: true }).click();
+  await page.getByLabel("Storage location").fill("Listening room");
+  await page.getByText("Copy details (optional)", { exact: true }).click();
+  await expect(page.getByLabel("Storage location")).toHaveValue(
+    "Listening room",
+  );
 
   // The scan is refresh-safe: reloading recovers the same reviewable state.
   await page.reload();
@@ -142,6 +217,30 @@ test("identifies a misnamed cover photo and confirms it into the collection", as
     page.getByRole("heading", { name: "Automated Test Pressing" }),
   ).toBeVisible();
   await expect(page.getByText("The Vinyl Hounds")).toBeVisible();
+
+  // Scan rows remain navigable at phone widths, including after confirmation.
+  await page.goto("/dashboard");
+  await page.locator("a.scan-row").first().click();
+  await expect(page.getByText("Added to your collection")).toBeVisible();
+  await page.goto("/scans");
+  await page.locator("a.scan-row").first().click();
+  await expect(page.getByText("Added to your collection")).toBeVisible();
+});
+
+test("empty library search can be cleared without changing sort", async ({
+  page,
+}) => {
+  await page.goto("/collection?q=no-such-record-ui-check&sort=artist");
+  await expect(
+    page.getByRole("heading", { name: "No matching records." }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Clear search" }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Search your collection" }),
+  ).toHaveValue("");
+  await expect(page.getByRole("combobox", { name: "Sort" })).toHaveValue(
+    "artist",
+  );
 });
 
 test("rejects a file whose bytes are not an image before uploading", async ({

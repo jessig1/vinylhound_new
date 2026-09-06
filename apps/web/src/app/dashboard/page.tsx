@@ -99,7 +99,7 @@ export default async function DashboardPage() {
                 ? `/scans/batch/${scan.batchId}`
                 : `/scans/${scan.scanId}`;
               return (
-                <article className="scan-row" key={scan.scanId}>
+                <Link className="scan-row" href={href} key={scan.scanId}>
                   <Art title={title} tone={toneFor(scan.scanId)} />
                   <div className="scan-row__title">
                     <h3>{title}</h3>
@@ -116,10 +116,8 @@ export default async function DashboardPage() {
                   <time dateTime={scan.createdAt}>
                     {new Date(scan.createdAt).toLocaleDateString()}
                   </time>
-                  <Link aria-label={`Open ${title}`} href={href}>
-                    <Icon name="chevronRight" size={18} />
-                  </Link>
-                </article>
+                  <Icon name="chevronRight" size={18} />
+                </Link>
               );
             })}
           </div>
