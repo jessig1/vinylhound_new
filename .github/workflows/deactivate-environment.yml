@@ -127,4 +127,4 @@ jobs:
         env:
           TF_VAR_environment_active: "false"
           TF_VAR_expires_at: inactive
-        run: terraform -chdir=infra/terraform/production apply -auto-approve
+        run: bash scripts/aws/terraform-apply-with-retry.sh infra/terraform/production

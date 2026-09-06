@@ -15,19 +15,16 @@ the log.
 
 ## Current state — verified 2026-09-06
 
-- **Staging activation:** the first configured staging dispatch reached AWS but
-  failed before Terraform because development had already published the web
-  image under the immutable commit-SHA tag. A retry showed that preflight reuse
-  alone still races when development and staging start together. Staging now
-  publishes and reuses `<sha>-staging` tags, promotes verified digests to
-  `staging-passed-<sha>` idempotently, and only runs final deactivation after
-  successful Terraform initialization. This isolates concurrent workflows and
-  makes repeated staging lifecycles for one commit compatible with immutable
-  ECR. Run `34037617340` confirmed the fix, created the persistent staging
-  foundation, and then stopped at the intended runtime-secret gate because the
-  three provider secret containers have no `AWSCURRENT` values. Its cleanup
-  successfully left staging inactive. Production remains gated on a complete
-  staging pass.
+- **Staging activation:** staging publishes and reuses isolated
+  `<sha>-staging` image tags and promotes verified digests to
+  `staging-passed-<sha>` idempotently. After the maintainer approved copying the
+  ignored local development/test Clerk and OpenAI values into staging Secrets
+  Manager, run `34038709907` passed migrations, service readiness, smoke tests,
+  and image promotion. Its final deactivation encountered a transient AWS
+  eventual-consistency error while releasing a NAT EIP whose ENI had already
+  disappeared. Teardown applies now retry up to three times with bounded delay
+  in staging and both production cleanup paths. Production remains gated until
+  the retry commit completes a full staging lifecycle.
 
 - **GitHub configuration script:** the repository administration helper is now
   Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
@@ -390,12 +387,12 @@ Review those local changes before committing. Real cover art, batch review
 navigation, and copy-editor mutation feedback remain separate tasks. This
 explicitly authorized UI pass does not change the infrastructure resume below.
 
-**Task:** Follow `docs/PHASE_2_MILESTONE_REVIEW.md`'s ordered manual checklist.
-Correct the repository plan placeholders and configure staging/production before
-running real plans or lifecycle workflows. Pay particular attention to the
-production state-address preservation documented in ADR-0016. Development is
-live at `https://dev-vh.siliconforest.io`: its Supabase database is migrated,
-API/event triggers are enabled, and both health endpoints pass.
+**Task:** Complete a staging lifecycle with the bounded teardown retry, then run
+production using that staging-verified commit. Development is live at
+`https://dev-vh.siliconforest.io`; staging provider secrets contain the
+maintainer-approved local development/test values. Do not copy those values to
+production without separate approval. Pay particular attention to the
+production state-address preservation documented in ADR-0016.
 
 Phase 3 remains a placeholder. Beyond the explicitly authorized UI pass, defer
 AI model training/optimization until Phase 2 has completed and been reviewed.
@@ -646,6 +643,17 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-06 - Codex.** With explicit maintainer approval, copied the ignored
+  local development/test Clerk secret, Clerk publishable key, and OpenAI key to
+  the corresponding staging Secrets Manager containers without printing their
+  values. Staging run `34038709907` then passed foundation reconciliation,
+  migrations, both ECS service stability gates, both smoke endpoints, and
+  immutable image promotion. The final teardown failed on an AWS
+  eventual-consistency race releasing a NAT EIP after its ENI disappeared.
+  Added one bounded three-attempt Terraform apply helper and used it for staging
+  deactivation, production failure cleanup, and scheduled/manual production
+  deactivation. Production has not yet been dispatched.
 
 - **2026-09-06 - Codex.** Dispatched the first fully configured staging workflow
   for `c17a83e`; OIDC authentication and the cost preflight passed, but immutable
