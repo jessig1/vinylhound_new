@@ -338,12 +338,10 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Task:** Rerun Deploy development with the now-migrated Supabase database. Its
-IPv4 session-pooler endpoint is reachable, client TLS is verified, and all 11
-migrations have completed. The first Terraform apply is successful, but
-API/event triggers remain disabled until the second apply and HTTP smoke tests
-pass. Then run real plans for staging and production, paying particular
+**Task:** Run real Terraform plans for staging and production, paying particular
 attention to the production state-address preservation documented in ADR-0016.
+Development is live at `https://dev-vh.siliconforest.io`: its Supabase database
+is migrated, API/event triggers are enabled, and both health endpoints pass.
 
 After that gate passes, continue the documented repository-visibility, AWS
 bootstrap, environment configuration, secret population, deployment, restore,
@@ -613,8 +611,12 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   rejection of the Supabase certificate chain. Added `uselibpqcompat=true` to
   the stored URL so `require` retains standard libpq semantics (mandatory
   encryption without certificate verification), then successfully applied all
-  11 repository migrations to Supabase. Triggers remain disabled pending one
-  final deployment and smoke test.
+  11 repository migrations to Supabase. Final deployment run `34002645203`
+  passed image builds, both Terraform applies, secret injection, idempotent
+  migration confirmation, API/event trigger activation, and its HTTP smoke
+  test. Independently verified `/api/healthz` returns `status: ok` and
+  `/api/readyz` returns `status: ready` at
+  `https://dev-vh.siliconforest.io`.
 
 - **2026-09-05 - Codex.** Platform run `33995480727` passed all Terraform,
   Kubernetes, three-image build/scan, and SBOM jobs after the expiring Trivy
