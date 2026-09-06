@@ -15,15 +15,27 @@ the log.
 
 ## Current state — verified 2026-09-05
 
+- **P2.1-P2.4 review:** repository implementation is complete; the remaining
+  work is GitHub/AWS configuration and live rehearsal, summarized in
+  `docs/PHASE_2_MILESTONE_REVIEW.md`. Live inspection confirmed the repository
+  is private, full-history Gitleaks passes, all three GitHub environments exist,
+  only development has deploy variables, staging/production variables are
+  absent, repository plan variables still contain invalid placeholders, only
+  development Terraform state exists, the development ARM64 Lambdas exist, and
+  no ECS/EKS clusters exist. Successful staging runs are guard skips, not
+  lifecycle passes. The review also removed the accidentally tracked local AWS
+  CLI installer bundle from Git and ignored `/aws/`; that bundle caused the
+  latest CI formatting failure.
+
 - **Incremental frontend usability pass:** the maintainer explicitly authorized
   the ranked UI work in `docs/UI_UX_REVIEW.md`, superseding the older UI deferral
   for this task. Changes cover mobile scan-row navigation, shared controls and
   contrast, uncropped previews, optional copy fields, review/processing feedback,
   and clear-search recovery. Backend contracts and architecture are unchanged.
   Verified: 56/56 browser checks across all four profiles, 79/79 unit tests,
-  lint, typecheck, changed-file formatting, and production build pass. The full
-  `npm run check` is blocked only by pre-existing formatting failures in the
-  untracked `aws/README.md` and local bootstrap Terraform state/backup files.
+  lint, typecheck, formatting, and production build pass. The subsequent Phase
+  2 review excluded local AWS CLI and Terraform state artifacts from repository
+  tooling, so the full `npm run check` now passes.
 
 - **The tiered AWS runtime redesign is implemented and verified for milestone
   delivery.**
@@ -353,15 +365,12 @@ Review those local changes before committing. Real cover art, batch review
 navigation, and copy-editor mutation feedback remain separate tasks. This
 explicitly authorized UI pass does not change the infrastructure resume below.
 
-**Task:** Run real Terraform plans for staging and production, paying particular
-attention to the production state-address preservation documented in ADR-0016.
-Development is live at `https://dev-vh.siliconforest.io`: its Supabase database
-is migrated, API/event triggers are enabled, and both health endpoints pass.
-
-After that gate passes, continue the documented repository-visibility, AWS
-bootstrap, environment configuration, secret population, deployment, restore,
-teardown, and fork-security rehearsals. Do not apply infrastructure or enable
-branch protection until the corresponding review gates have passed.
+**Task:** Follow `docs/PHASE_2_MILESTONE_REVIEW.md`'s ordered manual checklist.
+Correct the repository plan placeholders and configure staging/production before
+running real plans or lifecycle workflows. Pay particular attention to the
+production state-address preservation documented in ADR-0016. Development is
+live at `https://dev-vh.siliconforest.io`: its Supabase database is migrated,
+API/event triggers are enabled, and both health endpoints pass.
 
 Phase 3 remains a placeholder. Beyond the explicitly authorized UI pass, defer
 AI model training/optimization until Phase 2 has completed and been reviewed.
@@ -612,6 +621,23 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-05 - Codex.** Audited every outstanding P2.1-P2.4 roadmap item
+  against committed implementation, GitHub configuration/runs, and read-only
+  AWS inventory. Split the stale aggregate checklist entries to record clean
+  Gitleaks, the live development Lambda deployment, target-account bootstrap,
+  development state, and GitHub environment creation accurately. Added
+  `docs/PHASE_2_MILESTONE_REVIEW.md` with the ordered manual visibility/fork,
+  runtime, foundation-apply, and two-lifecycle staging checklist. Found that
+  staging/production variables are absent, repository plan values contain
+  invalid placeholders, only development remote state/Lambdas exist, no
+  ECS/EKS clusters exist, and staging's successful runs are configuration
+  skips. Also corrected the previous UI commit's accidental inclusion of a
+  downloaded AWS CLI bundle: removed its three files from Git while preserving
+  the local bundle, ignored `/aws/` in Git/Docker, and ignored local Terraform
+  state in Prettier. `npm run check` passes all 79 tests plus formatting, lint,
+  and typecheck; `npm run build` and `git diff --check` pass. No infrastructure
+  was changed and no live AI call was made.
 
 - **2026-09-05 - Codex.** Reviewed the frontend, ranked ten improvements before
   editing, and completed the first eight low-risk items in `docs/UI_UX_REVIEW.md`.

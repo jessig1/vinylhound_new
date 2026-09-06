@@ -3,6 +3,7 @@
 .claude
 .agents
 .codex
+aws
 .env
 .env.*
 !.env.example

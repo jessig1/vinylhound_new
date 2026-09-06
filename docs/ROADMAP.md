@@ -128,9 +128,9 @@ accounts and therefore remain release gates.
       security features, branch protection, merge policy, and labels.
 - [x] Rotate the credential found by the 2026-09-02 audit and delete its sole
       containing experimental branch; `main` was never affected.
-- [ ] Push the workflows and obtain a clean full-history Gitleaks run, complete
-      the visibility-change gate, make the repository public, then apply its
-      GitHub settings and branch protection.
+- [x] Push the workflows and obtain a clean full-history Gitleaks run.
+- [ ] Complete the remaining visibility/fork gate, make the repository public,
+      then apply its GitHub settings and branch protection.
 
 ### P2.2 — Production runtime and container readiness
 
@@ -139,8 +139,10 @@ accounts and therefore remain release gates.
 - [x] Remove build-time secret embedding; use Lambda/ECS/EKS role credentials
       by default and configurable bounded/TLS database connections.
 - [x] Add PR image builds, SBOM generation, and vulnerability gates.
-- [ ] Complete Lambda, Fargate, and EKS runtime/shutdown demonstrations in the
-      AWS account.
+- [x] Deploy the development Lambda runtime in AWS and pass its live HTTP health
+      and readiness checks.
+- [ ] Complete the remaining Lambda asynchronous-path, Fargate, and EKS
+      runtime/shutdown demonstrations in the AWS account.
 
 ### P2.3 — Terraform foundation and isolated environments
 
@@ -151,7 +153,9 @@ accounts and therefore remain release gates.
       PostgreSQL, SQS, secrets, DNS/TLS, telemetry, budgets, and IAM.
 - [x] Make staging/production runtime resources conditional through
       `environment_active` while retaining their data planes.
-- [ ] Bootstrap and apply the target account after account/domain inputs are set.
+- [x] Bootstrap the target account and apply the development environment.
+- [ ] Review real staging/production plans and apply their inactive foundations
+      after the remaining account/domain inputs are set.
 
 ### P2.4 — GitHub Actions delivery and just-in-time lifecycle
 
@@ -161,8 +165,11 @@ accounts and therefore remain release gates.
       expiry cleanup, and safe production drain.
 - [x] Add operational drain checking, idempotent queue reconciliation, and cost
       preflight commands.
-- [ ] Configure protected GitHub environments and OIDC variables, then complete
-      two consecutive staging lifecycle runs.
+- [x] Create all three GitHub environments and configure development OIDC
+      variables.
+- [ ] Correct the repository plan variables, configure staging/production OIDC
+      variables and protection, then complete two consecutive staging lifecycle
+      runs.
 
 ### P2.5 — Scaling, security, observability, and cost controls
 
