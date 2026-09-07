@@ -45,7 +45,7 @@ COPY --from=build --chown=node:node /workspace/packages ./packages
 COPY --from=build --chown=node:node /workspace/apps/worker/package.json ./apps/worker/package.json
 COPY --from=build --chown=node:node /workspace/apps/worker/dist ./apps/worker/dist
 
-USER node
+USER 1000:1000
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["node", "-e", "const{mtimeMs}=require('node:fs').statSync(process.env.WORKER_HEALTH_FILE);if(Date.now()-mtimeMs>120000)process.exit(1)"]

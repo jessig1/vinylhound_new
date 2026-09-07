@@ -13,7 +13,7 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-06
+## Current state — verified 2026-09-07
 
 - **Staging activation:** staging publishes and reuses isolated
   `<sha>-staging` image tags and promotes verified digests to
@@ -27,24 +27,54 @@ the log.
   full lifecycle successfully for retry commit `fd99943`, including final
   deactivation, and promoted its images for production.
 
-- **Production activation:** production Clerk/OpenAI secret values were
-  populated after the prior session's gate stop, so run `34041389496` got
-  past secret creation but failed at "Verify runtime secrets" (exit 254);
-  cleanup completed successfully. A second run, `34042087635`, got much
-  further: it created the EKS cluster, ALB, CloudFront distribution/VPC
-  origin, and Route 53 record, then failed provisioning the EKS node group
-  with `InvalidParameterException: [t4g.medium] is not a valid instance type
-for requested amiType AL2023_x86_64_STANDARD` — the node group
-  (`infra/terraform/production/eks.tf`) requested an ARM64 Graviton instance
-  type but let `ami_type` default to x86, an architecture mismatch. Failure
-  cleanup tore the runtime back down; a live check found no leftover EKS
-  cluster, load balancer, or CloudFront distribution, only the persistent
-  foundation (VPC, ACM validation CNAME) that `environment_active` is
-  designed to retain. Fixed by pinning `ami_type = "AL2023_ARM_64_STANDARD"`
-  on `aws_eks_node_group.main`, matching the ARM64 architecture already used
-  everywhere else (container images, development Lambdas, `docs/ARCHITECTURE.md`).
-  Terraform fmt/validate pass for all four roots; the fix has not yet been
-  exercised by a live production activation run.
+- **Production activation: three attempts, two real bugs found and fixed, a
+  third fix uncommitted.** Run `34041389496` got past secret creation but
+  failed at "Verify runtime secrets" (exit 254); this self-resolved on retry
+  once secrets were consistently readable. Run `34042087635` progressed
+  through cluster/ALB/CloudFront/DNS creation and failed provisioning the EKS
+  node group with `InvalidParameterException: [t4g.medium] is not a valid
+instance type for requested amiType AL2023_x86_64_STANDARD` — an ARM64
+  Graviton instance type paired with a defaulted x86 AMI type. Fixed in
+  commit `506767e` by pinning `ami_type = "AL2023_ARM_64_STANDARD"` on
+  `aws_eks_node_group.main` (`infra/terraform/production/eks.tf`), matching
+  the ARM64 architecture used everywhere else. Run `34145509904` (commit
+  `413fc5f`) then cleared EKS/Kubernetes-runtime provisioning entirely —
+  confirming that fix — but failed "Migrate database" with
+  `CreateContainerConfigError`: the migrate Job's `envFrom` referenced the
+  `worker-secrets` Secret only 6ms after it was created, before the EKS API
+  server had propagated it consistently, and `kubectl wait
+--for=condition=complete` then burned the full 10-minute timeout waiting on
+  a pod that never started. Fixed in commit `5c098b6` by polling
+  `kubectl get configmap/secret` until readable before creating the Job, and
+  by upgrading the failure path to `describe job`/`describe pods`/`logs
+--all-containers` (plain `logs` is empty when the container never starts).
+  Staging re-verified clean on this commit. Run `34153511737` (commit
+  `5c098b6`) then cleared EKS provisioning **and** the secret-propagation
+  race — the readiness poll found the ConfigMap/Secret immediately, no
+  retries needed — but failed "Migrate database" again with a **third,
+  distinct** root cause, this time captured in full by the new diagnostics:
+  `Error: container has runAsNonRoot and image has non-numeric user (node),
+cannot verify user is non-root`. All three production Kubernetes pod specs
+  (`infra/kubernetes/production/{migration-job,web,worker}.yaml`) set
+  `runAsNonRoot: true`, which Kubernetes can only verify statically against a
+  numeric UID — both `Dockerfile.web` and `Dockerfile.worker` set `USER node`
+  by name. Staging never hit any of these three bugs because it deploys via
+  ECS (`scripts/aws/run-worker-command.sh`), not Kubernetes; this is the
+  first time this production code path has ever executed end to end.
+  **Fix drafted but UNCOMMITTED**: `Dockerfile.web` and `Dockerfile.worker`
+  both changed `USER node` → `USER 1000:1000` (the same user, referenced by
+  numeric UID:GID instead of name; `--chown=node:node` at COPY time is
+  unaffected since it resolves at that layer regardless of the later `USER`
+  directive). `Dockerfile.worker-lambda` already used a numeric user
+  (`65534:65534`) and did not have this bug. Not yet run through
+  `npm run check`, not committed, not pushed — a fresh session must build and
+  push new images through staging again (production only ever deploys
+  `staging-passed-<sha>` digests) before retrying production a fourth time.
+  Each of the three failed production runs left no dangling EKS
+  cluster/ALB/CloudFront (failure cleanup tore the runtime back down each
+  time), only the persistent foundation (VPC, ACM validation CNAME) that
+  `environment_active` is designed to retain — worth a quick live check
+  again after the next attempt, but not expected to differ.
 
 - **GitHub configuration script:** the repository administration helper is now
   Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
@@ -407,20 +437,80 @@ Review those local changes before committing. Real cover art, batch review
 navigation, and copy-editor mutation feedback remain separate tasks. This
 explicitly authorized UI pass does not change the infrastructure resume below.
 
-**Task:** Production secret containers are now populated and the missing-secret
-gate has been cleared (run `34041389496` failed past it at "Verify runtime
-secrets"; see Current state for the exit-254 detail, which self-resolved on the
-next attempt once secrets were readable). The next production run,
-`34042087635`, progressed through cluster/ALB/CloudFront/DNS creation and
-failed only on the EKS node group's AMI/architecture mismatch, now fixed in
-`infra/terraform/production/eks.tf` (`ami_type = "AL2023_ARM_64_STANDARD"`,
-uncommitted — review and commit before rerunning). Rerun the "Deploy production
-demo" workflow for staging-verified commit `fd99943` and confirm it completes
-Kubernetes workload deployment and the CloudFront smoke test. Development is
-live at `https://dev-vh.siliconforest.io`; staging lifecycle run `34040437776`
-passed in full including teardown. Pay particular attention to the production
-state-address preservation documented in ADR-0016, and re-check for leftover
-EKS/ALB/CloudFront resources if this run also fails partway through.
+**Task:** the user asked to close out all of Phase 2 (P2.1–P2.6) in
+`docs/ROADMAP.md` — finish any remaining coding/infrastructure work, check off
+completed items, summarize the genuinely manual-only tasks, then push and tag.
+Production has now failed three times for three different, real, sequentially-
+discovered bugs (see Current state); the first two are fixed and verified
+(commits `506767e`, `5c098b6`), the third has an uncommitted fix sitting in the
+working tree right now.
+
+**Immediate next steps, in order:**
+
+1. `git diff Dockerfile.web Dockerfile.worker` to confirm the working tree
+   still has `USER node` → `USER 1000:1000` in both files (uncommitted as of
+   this handoff). Run `npm run check` — it has not been run against this
+   change yet, and a Prettier formatting slip already caused one CI failure
+   earlier this session, so don't skip it.
+2. Commit and push. Suggested message: something like "run production
+   containers as a numeric UID so Kubernetes can verify runAsNonRoot" with the
+   `CreateContainerConfigError` context from Current state in the body.
+3. This is a Dockerfile change, so both images must rebuild: let CI trigger
+   normally, then let staging run and pass (it will build new `<sha>-staging`
+   images since the digests changed). Two consecutive clean staging passes
+   were already independently confirmed this session for the _previous_
+   commit (`506767e`, `413fc5f`) — P2.4's roadmap checkbox for that is already
+   marked done and does not need repeating, but this new commit still needs
+   at least one clean staging pass before production can target it (production
+   only deploys `staging-passed-<sha>` digests).
+4. Dispatch "Deploy production demo" for the new commit
+   (`gh workflow run deploy-production.yml -f commit_sha=<full 40-char sha>
+-f ttl_hours=2 -f break_glass=false`) — **ask the user to confirm first**;
+   this would be the fourth production AWS activation this session and each
+   one has real cost and takes 10+ minutes just for EKS provisioning. The
+   Claude Code auto-mode classifier has already blocked one unconfirmed
+   `gh workflow run deploy-production.yml` dispatch this session and will
+   likely block another.
+5. If it fails again: get the real log
+   (`gh run view <id> --log-failed` once `status` is `completed`, or
+   `gh api repos/jessig1/vinylhound_new/actions/jobs/<job-id>/logs`) and read
+   the actual `describe job`/`describe pods`/`logs` output the improved
+   diagnostics now capture — do not guess or assume it's a repeat of a
+   previous bug. Each of the three failures so far has been genuinely
+   distinct.
+6. Only once "Migrate database", "Deploy Kubernetes workloads", and "Smoke
+   test CloudFront path" all pass in one run: mark P2.2's EKS runtime
+   demonstration checkbox and P2.3's "review real plans and apply inactive
+   foundations" checkbox complete in `docs/ROADMAP.md`, citing that run ID.
+   Do **not** mark P2.6 complete from this alone — a single automated run
+   does not cover Spot replacement, rollback, reconciliation, cold
+   resume/PITR, a deliberate deactivate/reactivate cycle, or an untrusted
+   fork PR; note precisely what was verified vs. still open.
+7. Regardless of outcome, do not create a git tag without first showing the
+   user a complete summary and getting explicit confirmation on tag
+   name/message — Phase 2 is not fully rehearsed (P2.5's load/failure/
+   restore/teardown drills and P2.6's full rehearsal checklist plus evidence
+   publication are genuinely manual and untouched), and a tag is a durable
+   "Phase 2 milestone" marker the user should approve deliberately.
+
+**Separately, not blocking the above:** the user's local AWS CLI session
+(`aws sts get-caller-identity`) is expired and authenticates via a custom
+`login_session`-based credential process (`~/.aws/config` has
+`login_session = arn:aws:iam::138010381178:root`, not standard AWS SSO) that
+cannot be reauthenticated non-interactively — flag it, don't attempt it. It
+does not block GitHub Actions, which authenticate via OIDC independently.
+
+**Still genuinely manual, not something a future session should attempt to
+automate:** an untrusted fork pull request rehearsal (P2.1/P2.6 — needs a real
+external contribution), P2.5's load/failure/authorization/restore/teardown
+drills, and P2.6's full production rehearsal checklist (sign-in, signed
+upload, AI review, collection/export/deletion, scaling, Spot replacement,
+rollback, reconciliation, cold resume/PITR, deactivate/reactivate, expiry
+cleanup) plus sanitized evidence publication.
+
+Development is live at `https://dev-vh.siliconforest.io`. Pay particular
+attention to the production state-address preservation documented in
+ADR-0016 on any future production apply.
 
 Phase 3 remains a placeholder. Beyond the explicitly authorized UI pass, defer
 AI model training/optimization until Phase 2 has completed and been reviewed.
@@ -671,6 +761,51 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-07 - Claude.** Continued from the prior session's AMI-fix
+  handoff, with the user's goal of closing out Phase 2 (P2.1–P2.6) in
+  `docs/ROADMAP.md`. Fixed a Prettier formatting break in `docs/HANDOFF.md`
+  (commit `413fc5f`) that failed CI on the AMI-fix push. With the user's
+  explicit approval, ran `scripts/configure-github-repository.sh` against the
+  live repository — applied branch protection and security settings
+  (secret scanning/push protection, vulnerability alerts, automated security
+  fixes, private vulnerability reporting, read-only default workflow
+  permissions, labels), verified live via the GitHub API. Confirmed two
+  consecutive staging lifecycle runs passed in full (`34080493765` for
+  `506767e`, `34081530170` for `413fc5f`), checked off the corresponding
+  `docs/ROADMAP.md` items for P2.1 and P2.4. Split P2.1's fork-gate item into
+  its own still-open checkbox (an untrusted fork PR rehearsal, distinct from
+  the config script).
+
+  Dispatched production activation three times to verify the AMI fix and
+  demonstrate the EKS runtime end to end (P2.2). Each attempt failed on a
+  different, genuine bug, in order: (1) `34041389496` failed at "Verify
+  runtime secrets" — self-resolved on the next attempt once secrets were
+  consistently readable, not a real bug; (2) `34145509904` cleared EKS
+  provisioning (confirming the AMI fix works) but failed "Migrate database"
+  with `CreateContainerConfigError` — root-caused to a Kubernetes Secret
+  being read by a migrate Job 6ms after creation, before EKS API-server
+  propagation; fixed in commit `5c098b6` (poll for readability before
+  creating the Job; upgraded failure diagnostics from bare `kubectl logs`,
+  which is empty when a container never starts, to `describe job`/
+  `describe pods`/`logs --all-containers`); staging re-verified clean on this
+  commit before redispatching; (3) `34153511737`, with both fixes in place,
+  cleared EKS provisioning _and_ the secret-propagation race (the readiness
+  poll found the ConfigMap/Secret immediately) but failed "Migrate database"
+  again on a third, distinct cause, this time fully captured by the new
+  diagnostics: `runAsNonRoot: true` in all three production pod specs
+  requires a numeric UID to verify statically, but both `Dockerfile.web` and
+  `Dockerfile.worker` set `USER node` by name. Staging never exercised any of
+  these three bugs because it deploys via ECS, not Kubernetes — this was the
+  first true end-to-end run of the production EKS code path. Drafted the fix
+  (`USER node` → `USER 1000:1000` in both Dockerfiles) but ran out of runway
+  to build/check/commit/push/re-verify-through-staging/redispatch within this
+  session; **left uncommitted in the working tree** along with the already-
+  correct P2.1/P2.4 `docs/ROADMAP.md` edits from earlier in the session. Full
+  detail and exact next steps are in Current state and Resume point above.
+  Did not touch `docs/ROADMAP.md`'s P2.2/P2.3 checkboxes (production has not
+  yet succeeded end to end) and created no git tag, per the user's explicit
+  requirement to confirm before tagging.
 
 - **2026-09-06 - Claude.** Reviewed GitHub Actions run history and live AWS
   state (via `gh`/`aws` CLI in WSL) to reconcile the maintainer's report of a

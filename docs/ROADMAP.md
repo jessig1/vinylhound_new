@@ -130,8 +130,16 @@ accounts and therefore remain release gates.
       containing experimental branch; `main` was never affected.
 - [x] Push the workflows and obtain a clean full-history Gitleaks run.
 - [x] Make the repository public.
-- [ ] Complete the remaining fork gate, then apply and verify GitHub security
-      settings and branch protection.
+- [x] Apply and verify GitHub security settings and branch protection:
+      `scripts/configure-github-repository.sh` enables secret scanning/push
+      protection, vulnerability alerts, automated security fixes, private
+      vulnerability reporting, read-only default workflow permissions, labels,
+      and `main` branch protection (required status checks, linear history, no
+      force-push/deletion, required conversation resolution). Verified live via
+      the GitHub API on 2026-09-07.
+- [ ] Rehearse an untrusted fork pull request: confirm a read-only token, no
+      AWS OIDC role, no GitHub environment/provider secret exposure, required
+      checks still run on fork code, and no `pull_request_target` execution.
 
 ### P2.2 — Production runtime and container readiness
 
@@ -168,9 +176,13 @@ accounts and therefore remain release gates.
       preflight commands.
 - [x] Create all three GitHub environments and configure development OIDC
       variables.
-- [ ] Correct the repository plan variables, configure staging/production OIDC
-      variables and protection, then complete two consecutive staging lifecycle
-      runs.
+- [x] Correct the repository plan variables (`AWS_PLAN_ROLE_ARN` is a real IAM
+      role ARN; `APP_HOSTNAME` is a real FQDN) and configure staging/production
+      OIDC variables.
+- [x] Complete two consecutive staging lifecycle runs: `34080493765` (commit
+      `506767e`) and `34081530170` (commit `413fc5f`) both activated
+      infrastructure, migrated, deployed, passed HTTP smoke checks, tagged
+      `staging-passed-<sha>`, and deactivated cleanly on 2026-09-07.
 
 ### P2.5 — Scaling, security, observability, and cost controls
 
