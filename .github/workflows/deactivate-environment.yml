@@ -70,8 +70,26 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          active="$(aws ssm get-parameter --name /vinylhound/production/active --query Parameter.Value --output text 2>/dev/null || echo false)"
-          expires="$(aws ssm get-parameter --name /vinylhound/production/expires-at --query Parameter.Value --output text 2>/dev/null || echo inactive)"
+          active_stderr="$(mktemp)"
+          if ! active="$(aws ssm get-parameter --name /vinylhound/production/active --query Parameter.Value --output text 2>"$active_stderr")"; then
+            if grep -q ParameterNotFound "$active_stderr"; then
+              active="false"
+            else
+              echo "::error title=Cannot determine production activation state::aws ssm get-parameter failed for /vinylhound/production/active: $(cat "$active_stderr")" >&2
+              exit 1
+            fi
+          fi
+
+          expires_stderr="$(mktemp)"
+          if ! expires="$(aws ssm get-parameter --name /vinylhound/production/expires-at --query Parameter.Value --output text 2>"$expires_stderr")"; then
+            if grep -q ParameterNotFound "$expires_stderr"; then
+              expires="inactive"
+            else
+              echo "::error title=Cannot determine production expiry::aws ssm get-parameter failed for /vinylhound/production/expires-at: $(cat "$expires_stderr")" >&2
+              exit 1
+            fi
+          fi
+
           deactivate=false
           if [[ "$active" == "true" ]]; then
             if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
