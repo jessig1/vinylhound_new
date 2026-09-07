@@ -10,6 +10,17 @@ on:
         required: true
         default: false
         type: boolean
+      skip_activation_check:
+        description: >-
+          Run terraform apply -var environment_active=false unconditionally,
+          bypassing the SSM active-flag gate and the Kubernetes drain/cleanup
+          steps. Use only when Terraform state and the SSM flag have drifted
+          out of sync with real AWS state (e.g. a prior destroy died mid-poll
+          after its credentials expired) and the normal gate is wrongly
+          reporting the environment as already inactive.
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: production-platform
@@ -99,6 +110,22 @@ jobs:
             fi
           fi
           echo "deactivate=$deactivate" >> "$GITHUB_OUTPUT"
+      - name: Force apply without the activation gate
+        if: steps.configuration.outputs.configured == 'true' && inputs.skip_activation_check == true
+        run: |
+          terraform -chdir=infra/terraform/production init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="key=environments/production.tfstate"
+        env:
+          TF_VAR_environment_active: "false"
+          TF_VAR_expires_at: inactive
+      - name: Apply teardown without the activation gate
+        if: steps.configuration.outputs.configured == 'true' && inputs.skip_activation_check == true
+        env:
+          TF_VAR_environment_active: "false"
+          TF_VAR_expires_at: inactive
+        run: bash scripts/aws/terraform-apply-with-retry.sh infra/terraform/production
       - name: Initialize production state
         if: steps.configuration.outputs.configured == 'true' && steps.expiry.outputs.deactivate == 'true'
         run: >-
