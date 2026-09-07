@@ -151,10 +151,19 @@ jobs:
       - name: Migrate database
         id: migrate
         run: |
+          for attempt in {1..10}; do
+            kubectl -n vinylhound get configmap runtime >/dev/null 2>&1 &&
+              kubectl -n vinylhound get secret worker-secrets >/dev/null 2>&1 &&
+              break
+            echo "Waiting for the runtime configmap/secret to become readable (attempt ${attempt}/10)..."
+            sleep 3
+          done
           kubectl -n vinylhound delete job migrate --ignore-not-found --wait
           sed "s|vinylhound.invalid/worker:deployment-required|${TF_VAR_worker_image}|" infra/kubernetes/production/migration-job.yaml | kubectl apply -f -
           if ! kubectl -n vinylhound wait --for=condition=complete job/migrate --timeout=10m; then
-            kubectl -n vinylhound logs job/migrate
+            kubectl -n vinylhound describe job migrate
+            kubectl -n vinylhound describe pods -l job-name=migrate
+            kubectl -n vinylhound logs job/migrate --all-containers --ignore-errors || true
             exit 1
           fi
       - name: Deploy Kubernetes workloads
