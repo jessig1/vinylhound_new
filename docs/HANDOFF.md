@@ -27,13 +27,24 @@ the log.
   full lifecycle successfully for retry commit `fd99943`, including final
   deactivation, and promoted its images for production.
 
-- **Production activation:** run `34041389496` created the persistent
-  production foundation for staging-verified commit `fd99943`, then stopped at
-  the intended provider-secret gate because the production Clerk and OpenAI
-  secret containers have no values. EKS provisioning was skipped and failure
-  cleanup completed successfully, leaving the production runtime inactive. Do
-  not copy the staging development/test provider values into production without
-  explicit maintainer approval.
+- **Production activation:** production Clerk/OpenAI secret values were
+  populated after the prior session's gate stop, so run `34041389496` got
+  past secret creation but failed at "Verify runtime secrets" (exit 254);
+  cleanup completed successfully. A second run, `34042087635`, got much
+  further: it created the EKS cluster, ALB, CloudFront distribution/VPC
+  origin, and Route 53 record, then failed provisioning the EKS node group
+  with `InvalidParameterException: [t4g.medium] is not a valid instance type
+  for requested amiType AL2023_x86_64_STANDARD` — the node group
+  (`infra/terraform/production/eks.tf`) requested an ARM64 Graviton instance
+  type but let `ami_type` default to x86, an architecture mismatch. Failure
+  cleanup tore the runtime back down; a live check found no leftover EKS
+  cluster, load balancer, or CloudFront distribution, only the persistent
+  foundation (VPC, ACM validation CNAME) that `environment_active` is
+  designed to retain. Fixed by pinning `ami_type = "AL2023_ARM_64_STANDARD"`
+  on `aws_eks_node_group.main`, matching the ARM64 architecture already used
+  everywhere else (container images, development Lambdas, `docs/ARCHITECTURE.md`).
+  Terraform fmt/validate pass for all four roots; the fix has not yet been
+  exercised by a live production activation run.
 
 - **GitHub configuration script:** the repository administration helper is now
   Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
@@ -396,14 +407,20 @@ Review those local changes before committing. Real cover art, batch review
 navigation, and copy-editor mutation feedback remain separate tasks. This
 explicitly authorized UI pass does not change the infrastructure resume below.
 
-**Task:** Decide whether production should use the same local development/test
-Clerk and OpenAI values as staging or receive separate values, populate the
-three production provider secret containers, and rerun production for
-staging-verified commit `fd99943`. Development is live at
-`https://dev-vh.siliconforest.io`; staging lifecycle run `34040437776` passed.
-Production foundation run `34041389496` stopped safely at the missing-secret
-gate and left the runtime inactive. Pay particular attention to the production
-state-address preservation documented in ADR-0016.
+**Task:** Production secret containers are now populated and the missing-secret
+gate has been cleared (run `34041389496` failed past it at "Verify runtime
+secrets"; see Current state for the exit-254 detail, which self-resolved on the
+next attempt once secrets were readable). The next production run,
+`34042087635`, progressed through cluster/ALB/CloudFront/DNS creation and
+failed only on the EKS node group's AMI/architecture mismatch, now fixed in
+`infra/terraform/production/eks.tf` (`ami_type = "AL2023_ARM_64_STANDARD"`,
+uncommitted — review and commit before rerunning). Rerun the "Deploy production
+demo" workflow for staging-verified commit `fd99943` and confirm it completes
+Kubernetes workload deployment and the CloudFront smoke test. Development is
+live at `https://dev-vh.siliconforest.io`; staging lifecycle run `34040437776`
+passed in full including teardown. Pay particular attention to the production
+state-address preservation documented in ADR-0016, and re-check for leftover
+EKS/ALB/CloudFront resources if this run also fails partway through.
 
 Phase 3 remains a placeholder. Beyond the explicitly authorized UI pass, defer
 AI model training/optimization until Phase 2 has completed and been reviewed.
@@ -654,6 +671,32 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-06 - Claude.** Reviewed GitHub Actions run history and live AWS
+  state (via `gh`/`aws` CLI in WSL) to reconcile the maintainer's report of a
+  failed staging pipeline against the documented state. Found that the staging
+  failure they saw, run `34038709907`, predates commit `fd99943`'s teardown
+  retry fix by 32 minutes and is already resolved: the very next staging run
+  after that fix, `34040437776`, hit the same transient EIP/ENI race but
+  retried automatically and passed the full lifecycle, matching what
+  `docs/HANDOFF.md` already recorded. The real open failure was newer than the
+  existing handoff entry: two "Deploy production demo" runs
+  (`34041389496`, `34042087635`) ran after production secrets were populated.
+  The first failed at "Verify runtime secrets"; the second got through
+  cluster/ALB/CloudFront/Route 53 creation and failed provisioning the EKS
+  node group on an ARM64/x86 AMI-type mismatch (`t4g.medium` instance type
+  with a defaulted `AL2023_x86_64_STANDARD` AMI). Confirmed both runs' failure
+  cleanup left no dangling EKS cluster, load balancer, or CloudFront
+  distribution in the account, only the persistent foundation
+  (`environment_active` is designed to retain that). Fixed by pinning
+  `ami_type = "AL2023_ARM_64_STANDARD"` on `aws_eks_node_group.main`
+  (`infra/terraform/production/eks.tf`), matching the ARM64 architecture used
+  everywhere else in the platform. Verified: `terraform fmt`/`validate` pass
+  for all four roots (reinitialized the local production provider cache,
+  which had gone stale), and `npm run check` passes (79/79 tests, lint,
+  typecheck, formatting). Did not commit or dispatch a new production run;
+  left both for the maintainer's review per session norms around
+  outward-facing/hard-to-reverse actions.
 
 - **2026-09-06 - Codex.** With explicit maintainer approval, copied the ignored
   local development/test Clerk secret, Clerk publishable key, and OpenAI key to

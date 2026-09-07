@@ -72,6 +72,7 @@ resource "aws_eks_node_group" "main" {
   node_role_arn   = aws_iam_role.node.arn
   subnet_ids      = values(aws_subnet.private)[*].id
   instance_types  = ["t4g.medium"]
+  ami_type        = "AL2023_ARM_64_STANDARD"
   capacity_type   = "ON_DEMAND"
   disk_size       = 30
   scaling_config {
