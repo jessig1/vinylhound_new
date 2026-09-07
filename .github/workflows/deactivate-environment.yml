@@ -21,6 +21,14 @@ on:
         required: true
         default: false
         type: boolean
+      stale_lock_id:
+        description: >-
+          Terraform state lock ID to force-unlock before applying (from a
+          previous "Error acquiring the state lock" message's "ID:" field).
+          Leave blank if there is no orphaned lock to clear.
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: production-platform
@@ -120,6 +128,9 @@ jobs:
         env:
           TF_VAR_environment_active: "false"
           TF_VAR_expires_at: inactive
+      - name: Release an orphaned state lock from a crashed apply
+        if: steps.configuration.outputs.configured == 'true' && inputs.skip_activation_check == true && inputs.stale_lock_id != ''
+        run: terraform -chdir=infra/terraform/production force-unlock -force "${{ inputs.stale_lock_id }}"
       - name: Apply teardown without the activation gate
         if: steps.configuration.outputs.configured == 'true' && inputs.skip_activation_check == true
         env:
