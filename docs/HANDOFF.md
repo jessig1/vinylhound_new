@@ -34,7 +34,7 @@ the log.
   further: it created the EKS cluster, ALB, CloudFront distribution/VPC
   origin, and Route 53 record, then failed provisioning the EKS node group
   with `InvalidParameterException: [t4g.medium] is not a valid instance type
-  for requested amiType AL2023_x86_64_STANDARD` — the node group
+for requested amiType AL2023_x86_64_STANDARD` — the node group
   (`infra/terraform/production/eks.tf`) requested an ARM64 Graviton instance
   type but let `ami_type` default to x86, an architecture mismatch. Failure
   cleanup tore the runtime back down; a live check found no leftover EKS
