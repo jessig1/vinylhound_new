@@ -27,54 +27,68 @@ the log.
   full lifecycle successfully for retry commit `fd99943`, including final
   deactivation, and promoted its images for production.
 
-- **Production activation: three attempts, two real bugs found and fixed, a
-  third fix uncommitted.** Run `34041389496` got past secret creation but
-  failed at "Verify runtime secrets" (exit 254); this self-resolved on retry
-  once secrets were consistently readable. Run `34042087635` progressed
-  through cluster/ALB/CloudFront/DNS creation and failed provisioning the EKS
-  node group with `InvalidParameterException: [t4g.medium] is not a valid
-instance type for requested amiType AL2023_x86_64_STANDARD` — an ARM64
-  Graviton instance type paired with a defaulted x86 AMI type. Fixed in
-  commit `506767e` by pinning `ami_type = "AL2023_ARM_64_STANDARD"` on
-  `aws_eks_node_group.main` (`infra/terraform/production/eks.tf`), matching
-  the ARM64 architecture used everywhere else. Run `34145509904` (commit
-  `413fc5f`) then cleared EKS/Kubernetes-runtime provisioning entirely —
-  confirming that fix — but failed "Migrate database" with
-  `CreateContainerConfigError`: the migrate Job's `envFrom` referenced the
-  `worker-secrets` Secret only 6ms after it was created, before the EKS API
-  server had propagated it consistently, and `kubectl wait
---for=condition=complete` then burned the full 10-minute timeout waiting on
-  a pod that never started. Fixed in commit `5c098b6` by polling
-  `kubectl get configmap/secret` until readable before creating the Job, and
-  by upgrading the failure path to `describe job`/`describe pods`/`logs
---all-containers` (plain `logs` is empty when the container never starts).
-  Staging re-verified clean on this commit. Run `34153511737` (commit
-  `5c098b6`) then cleared EKS provisioning **and** the secret-propagation
-  race — the readiness poll found the ConfigMap/Secret immediately, no
-  retries needed — but failed "Migrate database" again with a **third,
-  distinct** root cause, this time captured in full by the new diagnostics:
-  `Error: container has runAsNonRoot and image has non-numeric user (node),
-cannot verify user is non-root`. All three production Kubernetes pod specs
-  (`infra/kubernetes/production/{migration-job,web,worker}.yaml`) set
-  `runAsNonRoot: true`, which Kubernetes can only verify statically against a
-  numeric UID — both `Dockerfile.web` and `Dockerfile.worker` set `USER node`
-  by name. Staging never hit any of these three bugs because it deploys via
-  ECS (`scripts/aws/run-worker-command.sh`), not Kubernetes; this is the
-  first time this production code path has ever executed end to end.
-  **Fix drafted but UNCOMMITTED**: `Dockerfile.web` and `Dockerfile.worker`
-  both changed `USER node` → `USER 1000:1000` (the same user, referenced by
-  numeric UID:GID instead of name; `--chown=node:node` at COPY time is
-  unaffected since it resolves at that layer regardless of the later `USER`
-  directive). `Dockerfile.worker-lambda` already used a numeric user
-  (`65534:65534`) and did not have this bug. Not yet run through
-  `npm run check`, not committed, not pushed — a fresh session must build and
-  push new images through staging again (production only ever deploys
-  `staging-passed-<sha>` digests) before retrying production a fourth time.
-  Each of the three failed production runs left no dangling EKS
-  cluster/ALB/CloudFront (failure cleanup tore the runtime back down each
-  time), only the persistent foundation (VPC, ACM validation CNAME) that
-  `environment_active` is designed to retain — worth a quick live check
-  again after the next attempt, but not expected to differ.
+- **Production activation: six attempts across two sessions, five distinct
+  real bugs found, four fixed and verified; one (#8) still open and is the
+  current blocker.** Run `34041389496` got past secret creation but failed at
+  "Verify runtime secrets" (exit 254); self-resolved on retry once secrets
+  were consistently readable. Run `34042087635` failed provisioning the EKS
+  node group with an ARM64/x86 AMI-type mismatch; fixed in commit `506767e`.
+  Run `34145509904` cleared EKS provisioning but failed "Migrate database"
+  with `CreateContainerConfigError` (Secret read 6ms after creation, before
+  EKS API-server propagation); fixed in commit `5c098b6` (poll for
+  readability; upgraded diagnostics to `describe job`/`describe pods`/`logs
+--all-containers`). Run `34153511737` cleared EKS provisioning and the
+  secret-propagation race but failed "Migrate database" again with
+  `runAsNonRoot: true` unable to verify a non-numeric `USER node`; fixed in
+  commit `beeb98a` (`USER node` → `USER 1000:1000` in both `Dockerfile.web`
+  and `Dockerfile.worker`).
+  **This session (continuing the same day): run `34160436572`** (commit
+  `beeb98a`, after staging passed clean on it) cleared EKS provisioning,
+  Kubernetes Secret propagation, `runAsNonRoot`, **and** "Migrate database"
+  and "Deploy Kubernetes workloads" for the first time ever — but failed
+  "Smoke test CloudFront path" with a persistent `504` on every one of 19
+  retry attempts across ~13 minutes, despite `kubectl rollout status`
+  reporting both `web` and `worker` successfully rolled out. Root cause not
+  yet found; narrowed to somewhere between the ALB target group and the pod
+  (candidates: target-group health-check timing, a security-group mismatch,
+  NodePort/kube-proxy routing, or the CloudFront VPC origin itself) —
+  tracked as **issue #8**, now the sole blocker for P2.2/P2.6.
+  **A serious secondary incident followed**: this run's own 61m19s runtime
+  exceeded the GitHub OIDC role's default 1-hour AWS session, so its
+  automatic post-failure cleanup ("Deactivate after failed runtime
+  deployment") died mid-destroy with `ExpiredToken` while EKS node group and
+  CloudFront distribution deletes were still polling, and could not persist
+  Terraform's state to S3. This left (a) a live, undestroyed production
+  runtime — EKS, ALB, CloudFront, WAF, NAT gateway all still running, though
+  the SSM `/vinylhound/production/active` flag had already flipped to
+  `false` earlier in the same apply, before the token died; and (b) an
+  orphaned Terraform state lock. Because `deactivate-environment.yml`
+  (both its hourly schedule and a manual `workflow_dispatch`) trusts that
+  SSM flag as its sole signal, it silently no-op'd twice in a row — a
+  `workflow_dispatch` run completed "successfully" in 11 seconds having
+  skipped every teardown step, while the maintainer independently confirmed
+  via the AWS Console that EKS/ALB/CloudFront/NAT/WAF were all still live.
+  Root-caused and resolved live: added `skip_activation_check` (commit
+  `69854cb`) and `stale_lock_id` (commit `57e6a3e`) emergency
+  `workflow_dispatch` inputs to bypass the SSM gate and force-unlock the
+  orphaned lock respectively; also hardened the SSM read itself (commit
+  `b2e0d5f`) so a real AWS API failure now fails loudly instead of being
+  silently treated as "already inactive." Run `34165576307` then
+  successfully destroyed the remaining 5 resources (ALB, target group,
+  listener, WAF, CloudFront VPC origin — EKS/CloudFront distribution/NAT had
+  apparently already finished deleting asynchronously before the original
+  run's token died, Terraform just hadn't recorded it) and the maintainer
+  independently reconfirmed via the Console that everything is gone. Aurora
+  (serverless, `min_capacity = 0`) and the VPC/subnets/foundation remain, by
+  design (ADR-0016's persistent data plane) — this is expected residual cost,
+  not a leftover bug. Filed as **issues #9** (the session-duration root
+  cause — needs `max_session_duration` raised on `aws_iam_role.github_deploy`
+  in the bootstrap root) **and #10** (review/harden the emergency bypass
+  inputs, which were written fast under pressure and should not be
+  considered a permanent, fully-reviewed part of the normal flow).
+  Staging was never affected by any of this — it deploys via ECS, not EKS,
+  and its own deactivation for this same commit completed cleanly with no
+  errors.
 
 - **GitHub configuration script:** the repository administration helper is now
   Bash (`scripts/configure-github-repository.sh`) rather than PowerShell. It
@@ -434,86 +448,85 @@ DELETE` intended only to inspect response headers while manually verifying
 
 The requested incremental frontend pass is documented in `docs/UI_UX_REVIEW.md`.
 Review those local changes before committing. Real cover art, batch review
-navigation, and copy-editor mutation feedback remain separate tasks. This
-explicitly authorized UI pass does not change the infrastructure resume below.
+navigation, and copy-editor mutation feedback remain separate tasks.
 
-**Task:** the user asked to close out all of Phase 2 (P2.1–P2.6) in
-`docs/ROADMAP.md` — finish any remaining coding/infrastructure work, check off
-completed items, summarize the genuinely manual-only tasks, then push and tag.
-Production has now failed three times for three different, real, sequentially-
-discovered bugs (see Current state); the first two are fixed and verified
-(commits `506767e`, `5c098b6`), the third has an uncommitted fix sitting in the
-working tree right now.
+**Task, as of 2026-09-07 (second session of the day):** the maintainer decided
+to stop pursuing a fully-passing production activation in-session — five real,
+distinct bugs were found and four fixed across two sessions (see Current
+state), the fifth (#8, the ALB/CloudFront 504) needs its own focused
+investigation rather than more blind retries. Both staging and production were
+deliberately torn down and confirmed inactive (staging via its own clean
+pipeline deactivation; production via the emergency `skip_activation_check`
+path after an incident — see Current state and issues #9/#10). All outstanding
+Phase 2 work was converted into GitHub issues (**#8–#15**) rather than staying
+implicit in this file, and the maintainer wants to move toward Phase 3 given
+development is stable — Phase 2 is **not** being marked complete or tagged;
+it's being left in a clean, fully-tracked, non-costing state while priorities
+shift.
 
-**Immediate next steps, in order:**
+**Current infrastructure state (verified 2026-09-07):**
 
-1. `git diff Dockerfile.web Dockerfile.worker` to confirm the working tree
-   still has `USER node` → `USER 1000:1000` in both files (uncommitted as of
-   this handoff). Run `npm run check` — it has not been run against this
-   change yet, and a Prettier formatting slip already caused one CI failure
-   earlier this session, so don't skip it.
-2. Commit and push. Suggested message: something like "run production
-   containers as a numeric UID so Kubernetes can verify runAsNonRoot" with the
-   `CreateContainerConfigError` context from Current state in the body.
-3. This is a Dockerfile change, so both images must rebuild: let CI trigger
-   normally, then let staging run and pass (it will build new `<sha>-staging`
-   images since the digests changed). Two consecutive clean staging passes
-   were already independently confirmed this session for the _previous_
-   commit (`506767e`, `413fc5f`) — P2.4's roadmap checkbox for that is already
-   marked done and does not need repeating, but this new commit still needs
-   at least one clean staging pass before production can target it (production
-   only deploys `staging-passed-<sha>` digests).
-4. Dispatch "Deploy production demo" for the new commit
-   (`gh workflow run deploy-production.yml -f commit_sha=<full 40-char sha>
--f ttl_hours=2 -f break_glass=false`) — **ask the user to confirm first**;
-   this would be the fourth production AWS activation this session and each
-   one has real cost and takes 10+ minutes just for EKS provisioning. The
-   Claude Code auto-mode classifier has already blocked one unconfirmed
-   `gh workflow run deploy-production.yml` dispatch this session and will
-   likely block another.
-5. If it fails again: get the real log
-   (`gh run view <id> --log-failed` once `status` is `completed`, or
-   `gh api repos/jessig1/vinylhound_new/actions/jobs/<job-id>/logs`) and read
-   the actual `describe job`/`describe pods`/`logs` output the improved
-   diagnostics now capture — do not guess or assume it's a repeat of a
-   previous bug. Each of the three failures so far has been genuinely
-   distinct.
-6. Only once "Migrate database", "Deploy Kubernetes workloads", and "Smoke
-   test CloudFront path" all pass in one run: mark P2.2's EKS runtime
-   demonstration checkbox and P2.3's "review real plans and apply inactive
-   foundations" checkbox complete in `docs/ROADMAP.md`, citing that run ID.
-   Do **not** mark P2.6 complete from this alone — a single automated run
-   does not cover Spot replacement, rollback, reconciliation, cold
-   resume/PITR, a deliberate deactivate/reactivate cycle, or an untrusted
-   fork PR; note precisely what was verified vs. still open.
-7. Regardless of outcome, do not create a git tag without first showing the
-   user a complete summary and getting explicit confirmation on tag
-   name/message — Phase 2 is not fully rehearsed (P2.5's load/failure/
-   restore/teardown drills and P2.6's full rehearsal checklist plus evidence
-   publication are genuinely manual and untouched), and a tag is a durable
-   "Phase 2 milestone" marker the user should approve deliberately.
+- **Development**: live, always-on, unaffected by anything in this session.
+  `https://dev-vh.siliconforest.io`.
+- **Staging**: inactive. Last full lifecycle run (`34158399023`, commit
+  `beeb98a`) passed completely — build, migrate, deploy, smoke test, image
+  promotion (`staging-passed-beeb98aa4cc5eb071c9b158426ef182f8e792f68`), clean
+  deactivation. No known issues.
+- **Production**: inactive, confirmed via both Terraform apply output
+  (`environment_active = false`, no errors) and the maintainer's direct AWS
+  Console check. EKS, ALB, CloudFront distribution, WAF, and NAT gateway are
+  all destroyed. Aurora (serverless, scaled to zero compute) and the VPC/
+  subnet/foundation layer remain, by design (ADR-0016's persistent data
+  plane) — this is expected residual cost, not a leftover bug; the maintainer
+  asked about this specifically and was walked through why.
 
-**Separately, not blocking the above:** the user's local AWS CLI session
-(`aws sts get-caller-identity`) is expired and authenticates via a custom
-`login_session`-based credential process (`~/.aws/config` has
+**Open issues tracking all remaining Phase 2 work** (filed this session,
+replacing the old "Immediate next steps" list that used to live here):
+
+- **#8** — the actual blocker: production's ALB/CloudFront returns a
+  persistent 504 even though Kubernetes reports both deployments successfully
+  rolled out. Root cause not yet found; needs its own investigation session
+  with real `aws elbv2 describe-target-health` / `kubectl get endpoints`
+  output, not another blind retry.
+- **#9** — the GitHub OIDC session (1hr default) is too short for slow
+  EKS/CloudFront destroy operations; this caused a real incident this session
+  (a live, briefly-unaccounted-for production runtime). Fix: raise
+  `max_session_duration` on `aws_iam_role.github_deploy`
+  (`infra/terraform/bootstrap/main.tf`) — needs a bootstrap-root apply with an
+  AWS administrator identity, not GitHub OIDC.
+- **#10** — review/harden the emergency `skip_activation_check`/
+  `stale_lock_id` workflow_dispatch inputs added live during #9's recovery
+  (commits `69854cb`, `57e6a3e`); they worked but were written fast under
+  pressure and deserve real review before being trusted as a standing
+  capability.
+- **#11** — standardize and audit AWS resource tagging (explicitly requested
+  by the maintainer); `docs/OPERATIONS.md` now documents the existing
+  convention and its gaps (commit `47c3123`).
+- **#12, #13, #14, #15** — the remaining P2.1/P2.2/P2.5/P2.6 roadmap items
+  (fork PR rehearsal, Lambda/Fargate demonstrations, load/failure/restore
+  drills, full rehearsal + evidence publication), each already flagged in
+  this file historically as genuinely manual or blocked on #8.
+
+**Whoever picks this up next should NOT default to resuming Phase 2
+production work** unless the maintainer asks for it again — the explicit
+instruction this session was to move toward Phase 3 now that development is
+stable. Read whatever the maintainer's next request actually is; if it's
+Phase 3 scoping, start there fresh rather than assuming Phase 2 continuation.
+If a future session does return to Phase 2, the issues above are the
+authoritative task list — this file's old inline "Immediate next steps" is
+gone because it went stale within the same day it was written and the issues
+are now the better-maintained source.
+
+**Separately, not blocking anything above:** the maintainer's local AWS CLI
+session (`aws sts get-caller-identity`) is expired and authenticates via a
+custom `login_session`-based credential process (`~/.aws/config` has
 `login_session = arn:aws:iam::138010381178:root`, not standard AWS SSO) that
 cannot be reauthenticated non-interactively — flag it, don't attempt it. It
-does not block GitHub Actions, which authenticate via OIDC independently.
+does not block GitHub Actions, which authenticate via OIDC independently
+(this is exactly the credential path that produced the #9 incident, so bear
+that in mind if debugging anything OIDC/session-related).
 
-**Still genuinely manual, not something a future session should attempt to
-automate:** an untrusted fork pull request rehearsal (P2.1/P2.6 — needs a real
-external contribution), P2.5's load/failure/authorization/restore/teardown
-drills, and P2.6's full production rehearsal checklist (sign-in, signed
-upload, AI review, collection/export/deletion, scaling, Spot replacement,
-rollback, reconciliation, cold resume/PITR, deactivate/reactivate, expiry
-cleanup) plus sanitized evidence publication.
-
-Development is live at `https://dev-vh.siliconforest.io`. Pay particular
-attention to the production state-address preservation documented in
-ADR-0016 on any future production apply.
-
-Phase 3 remains a placeholder. Beyond the explicitly authorized UI pass, defer
-AI model training/optimization until Phase 2 has completed and been reviewed.
+Phase 3 remains a placeholder pending the maintainer's actual scoping request.
 
 Things worth knowing before extending this further:
 
@@ -761,6 +774,50 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-07 - Claude (second session).** Picked up the prior session's
+  uncommitted `USER node` → `USER 1000:1000` Dockerfile fix (for the
+  `runAsNonRoot` numeric-UID bug). Ran `npm run check` clean, committed
+  (`fa997f8`), pushed, and confirmed staging failed once
+  (`34156798043`, a fourth distinct bug: `CannotPullContainerError` on the
+  worker image immediately after a freshly-provisioned NAT gateway, before it
+  was routing ECR pulls) then passed clean on retry after fixing it
+  (`beeb98a`: retry the ECS migrate task launch on a pull-specific failure,
+  `scripts/aws/run-worker-command.sh`). With the maintainer's explicit
+  confirmation, dispatched production for `beeb98a`
+  (`34160436572`) — it cleared EKS provisioning, Kubernetes Secret
+  propagation, `runAsNonRoot`, migration, and Kubernetes deployment for the
+  first time ever, but failed "Smoke test CloudFront path" with a persistent
+  504 (root cause not found; filed as **#8**).
+  That run's own 61-minute duration then exceeded the GitHub OIDC role's
+  default 1-hour AWS session, so its automatic failure cleanup died mid-destroy
+  with `ExpiredToken`, leaving a live, undestroyed production runtime (EKS,
+  ALB, CloudFront, WAF, NAT) and an orphaned Terraform state lock — while the
+  SSM `active` flag had already (mis)reported `false`, causing two automated
+  deactivation attempts to silently no-op. Diagnosed live with the
+  maintainer's help confirming real AWS Console state (the logs alone were
+  not trustworthy here — this is itself worth remembering). Fixed the masked
+  SSM-read failure path (`b2e0d5f`), added emergency `skip_activation_check`
+  and `stale_lock_id` workflow_dispatch inputs (`69854cb`, `57e6a3e`) to
+  bypass the wrong gate and clear the orphaned lock, and successfully tore
+  down the remaining 5 resources (`34165576307`) — the maintainer confirmed
+  via the Console that everything (EKS/ALB/CloudFront/WAF/NAT) is gone;
+  Aurora and the VPC foundation remain by design. Filed the session's two new
+  bugs as **#9** (OIDC session duration) and **#10** (review the emergency
+  bypass inputs). Also confirmed staging's own deactivation for `beeb98a` was
+  already clean and unaffected.
+  At the maintainer's direction, stopped pursuing further production
+  activation attempts in-session and instead converted all remaining Phase 2
+  work into GitHub issues (**#8–#15**, including a maintainer-requested
+  tagging-standardization issue, **#11**) so nothing depends on this file's
+  memory alone. Documented the existing AWS tagging convention and its gaps
+  in `docs/OPERATIONS.md` (`47c3123`). Checked off P2.3's "review real
+  plans and apply inactive foundations" item (now genuinely satisfied by this
+  session's repeated successful foundation applies). Rewrote this file's
+  Resume point to reflect the maintainer's stated intent to move toward Phase
+  3 now that development is stable, rather than continuing Phase 2
+  automatically. Did not create a git tag — Phase 2 is deliberately being
+  left incomplete-but-tracked rather than declared done.
 
 - **2026-09-07 - Claude.** Continued from the prior session's AMI-fix
   handoff, with the user's goal of closing out Phase 2 (P2.1–P2.6) in

@@ -163,8 +163,11 @@ accounts and therefore remain release gates.
 - [x] Make staging/production runtime resources conditional through
       `environment_active` while retaining their data planes.
 - [x] Bootstrap the target account and apply the development environment.
-- [ ] Review real staging/production plans and apply their inactive foundations
-      after the remaining account/domain inputs are set.
+- [x] Review real staging/production plans and apply their inactive foundations:
+      both roots' persistent foundations (VPC, ACM validation, Aurora, S3, SQS,
+      secrets) have been applied and confirmed multiple times this session,
+      including the production teardown that resolved the 2026-09-07 incident
+      (issues #9, #10).
 
 ### P2.4 — GitHub Actions delivery and just-in-time lifecycle
 
