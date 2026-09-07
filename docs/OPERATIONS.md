@@ -27,6 +27,61 @@ Aurora uses `DATABASE_SSL_MODE=verify-full` with the regional RDS CA bundle.
 Keep database pools bounded (two connections per Lambda environment and five
 per ECS task or pod). The external development `DATABASE_URL` must require TLS.
 
+## Resource tagging
+
+Every root's `provider "aws"` block sets `default_tags`, which the AWS
+provider applies automatically to every resource type that supports tags —
+new resources should rely on this rather than setting tags individually.
+`development`, `environment`, and `production` each define a `local.common_tags`
+map (`main.tf`/`locals.tf`/`foundation.tf`) with:
+
+- `Application = "vinylhound"` — identifies every resource as belonging to
+  this project, distinct from anything else in the account.
+- `Environment` — `development`, `staging`, or `production`. The primary key
+  for separating cost and blast radius between environments that otherwise
+  share the same account and resource-naming scheme.
+- `ManagedBy = "terraform"` — marks the resource as Terraform-owned, so it is
+  never hand-edited or deleted from the console without updating state first.
+- `Owner = "jessig1"` — the accountable person for cost and incident response.
+- `ExpiresAt` (staging/production only) — the just-in-time activation's
+  intended teardown time, or `"inactive"`/`"staging-pipeline"` when not
+  counting down; lets the hourly deactivation sweep and any cost audit
+  distinguish a fresh activation from one that has overrun.
+- `CostProfile` — `scale-to-zero` (development) or `performance` (production);
+  a coarse cost/performance tradeoff label for budget review, independent of
+  the numeric budget alarms already in place per environment.
+
+Why this matters in practice, beyond convention:
+
+- **Cost management.** AWS Cost Explorer can only break down spend by tag
+  once a tag key is activated for cost allocation
+  (Billing → Cost allocation tags); `Environment` and `Application` are the
+  two keys that make a monthly cost review possible at all, since this
+  account runs multiple environments and, over time, other projects side by
+  side.
+- **Finding resources.** Tag-based lookups (the Resource Groups & Tag Editor
+  console, or `aws resourcegroupstaggingapi get-resources`) are the only
+  reliable way to find every resource belonging to one environment when a
+  Terraform apply has failed partway and console inspection is the fastest
+  way to confirm real state — as happened during the first production
+  rehearsal, where confirming live resources required checking the console
+  directly because Terraform's own state had drifted from reality.
+- **Automation.** The hourly `deactivate-environment.yml` sweep and any
+  future cost- or compliance-driven automation (e.g. "alert on anything
+  tagged `production` older than its `ExpiresAt`") depend on tags being
+  present and accurate, not on naming conventions alone, since naming drifts
+  more easily than a value the provider stamps on every apply.
+
+Known gaps, tracked as a Phase 2 follow-up issue: `bootstrap`'s tags
+(`infra/terraform/bootstrap/versions.tf`) are a separate literal map missing
+`Environment`/`Owner`/`ExpiresAt` rather than reusing the `common_tags`
+pattern (arguably correct, since bootstrap resources are account-level and
+outlive any one environment, but not yet a deliberate decision written down
+anywhere); and no audit has yet confirmed every resource across all four
+roots actually receives `default_tags` — a small number of AWS resource types
+do not support tags at all, and it is not yet verified which of this
+project's resources fall into that category.
+
 ## Just-in-time lifecycle
 
 Development is always reachable but scales compute to zero. Staging and
