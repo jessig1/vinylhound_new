@@ -13,7 +13,16 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-07
+## Current state — verified 2026-09-08
+
+- **Phase 3-4 roadmap is now written.** At the maintainer's request,
+  `docs/ROADMAP.md` replaces the placeholder with P3.1-P3.5 product maturity
+  and P4.1-P4.5 measured service extraction. It incorporates the plan review's
+  corrections/prerequisites, names staging/ECS for demonstrations, preserves
+  Phase 2 gates, and defers training beyond Phase 4. All milestones are planned,
+  not implemented; current architecture ADRs still apply until cutover.
+  The next implementation slice is P3.1. This session changed planning
+  documentation only.
 
 - **Staging activation:** staging publishes and reuses isolated
   `<sha>-staging` image tags and promotes verified digests to
@@ -526,7 +535,17 @@ does not block GitHub Actions, which authenticate via OIDC independently
 (this is exactly the credential path that produced the #9 incident, so bear
 that in mind if debugging anything OIDC/session-related).
 
-Phase 3 remains a placeholder pending the maintainer's actual scoping request.
+**Phase 3-4 planning is complete for this request (2026-09-08).**
+Read `docs/ROADMAP.md` for sequence, dependencies, deliverables, and measurable
+exit criteria. `docs/PHASE_3_4_PLAN_REVIEW.md` remains the historical review.
+Next implementation slice: P3.1, beginning with image-read, quota-headroom,
+and correlation contracts, then bounded continuous capture and durable
+review-later progress. Include the early persistent-cost inventory.
+
+P3.3 is the first product scope cut if needed; its compatibility foundation
+still precedes extraction. Phase 4 uses staging and retains explicit production
+and Terraform-transfer gates. No milestone implementation began this session.
+Do not default to resuming Phase 2 production incident work.
 
 Things worth knowing before extending this further:
 
@@ -774,6 +793,31 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-08 - Claude.** Outside-evaluation session; no code changed. The
+  maintainer supplied a draft Phase 3-4 plan and asked for critique and
+  suggestions, with clarity of goals and outcomes as the explicit lens and no
+  changes forced where nothing better was available. Verified the draft's claims
+  against the code rather than against the docs, and wrote
+  `docs/PHASE_3_4_PLAN_REVIEW.md`: three errors (Phase 2 described as
+  "delivered with tracked exceptions" when it is deliberately untagged with #8
+  open; a $25/month target that does not compose with the existing $25
+  production budget alarm, $10 development alarm, and
+  `USER_MONTHLY_SPEND_LIMIT_USD` default of 20; and "reuse existing batch
+  grouping" understating P3.1, since the server genuinely supports incremental
+  batch membership but `scan/page.tsx` is a 708-line one-shot form), eleven
+  gaps, and an exit-criteria replacement table. Confirmed several things worth
+  recording independently of the review: batches accept incremental scans with
+  no schema or API change (`createOrGetBatch` takes no scan list);
+  `USER_ACTIVE_SCAN_LIMIT` (20) exactly equals `MAX_SCANS_PER_BATCH` (20) while
+  `ANALYSIS_CONCURRENCY` defaults to 1, so a full capture session sits at the
+  quota ceiling and quota is only checked at submit, after upload and `sharp`
+  normalization are already paid for; there is no Redis or ElastiCache in any
+  AWS root, so a shared discovery cache has no substrate; and the Playwright
+  suite selects capture controls by `input[type="file"]:not([capture])`, which a
+  live-camera surface would break in four places. Updated this file's Current
+  state and Resume point; deliberately did **not** touch `docs/ROADMAP.md`, file
+  GitHub issues, or change any Phase 2 status. Verified with `npm run check`.
 
 - **2026-09-07 - Claude (second session).** Picked up the prior session's
   uncommitted `USER node` → `USER 1000:1000` Dockerfile fix (for the
@@ -1570,3 +1614,13 @@ test:integration` (29/29, 2 new), `npm run build` (28 routes, +2), and
 - **2026-08-26 — Claude.** Evaluated project state; verified `npm run check`
   and `npm run build` pass. Created `CLAUDE.md` and this handoff file; linked
   both from `AGENTS.md`. No application code changed.
+
+- **2026-09-08 - Codex.** Created the requested Phase 3-4 roadmap from the
+  review and handoff: ten milestones with sequencing, acceptance evidence,
+  cost/runtime gates, and deferrals. Included image reads, quotas, tracing,
+  compatibility fixtures, generalized outbox, catalog ownership, audit/deletion
+  invariants, and staged Terraform ownership transfer. Updated current state and
+  resume point; preserved existing handoff history and package-lock edits.
+  Validation: edited-document Prettier checks pass. `npm run check` stopped
+  at existing formatting issues in 179 other files; lint/typecheck/tests were
+  not reached. No application/infrastructure changes; build not required.
