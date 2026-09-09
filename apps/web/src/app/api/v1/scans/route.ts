@@ -75,6 +75,12 @@ export async function POST(request: Request) {
       source: input.source,
       idempotencyKey,
       batchId: input.batchId,
+      quotaLimits: {
+        dailyAnalysisLimit: context.config.USER_DAILY_ANALYSIS_LIMIT,
+        activeScanLimit: context.config.USER_ACTIVE_SCAN_LIMIT,
+        monthlySpendLimitUsd: context.config.USER_MONTHLY_SPEND_LIMIT_USD,
+        scanCostReservationUsd: context.config.SCAN_COST_RESERVATION_USD,
+      },
     });
     const response = CreateScanResponseSchema.parse({
       scanId: result.record.id,

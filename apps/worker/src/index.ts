@@ -4,6 +4,7 @@ import {
 } from "@vinylhound/ai";
 import { loadQueueWorkerConfig } from "@vinylhound/config";
 import {
+  cleanupAbandonedScans,
   createDatabase,
   databaseOptionsFromConfig,
   dispatchNextOutboxMessage,
@@ -137,6 +138,65 @@ function runPoll() {
   });
 }
 
+let nextCleanupPoll: NodeJS.Timeout | undefined;
+let activeCleanupPoll: Promise<void> | undefined;
+
+async function cleanupAbandonedUploads() {
+  const olderThan = new Date(
+    Date.now() - config.ABANDONED_UPLOAD_TTL_HOURS * 60 * 60 * 1_000,
+  );
+  const canceled = await cleanupAbandonedScans(database.db, {
+    olderThan,
+    limit: config.ABANDONED_UPLOAD_CLEANUP_BATCH_SIZE,
+  });
+  if (canceled.length === 0) {
+    return;
+  }
+  console.info("[worker] abandoned_scans_canceled", {
+    count: canceled.length,
+  });
+  await Promise.all(
+    canceled.flatMap((scan) =>
+      scan.imageObjectKeys.map(async (objectKey) => {
+        try {
+          await storage.deleteObject(objectKey);
+        } catch (error) {
+          console.error(
+            "[worker] failed to delete an abandoned upload's object",
+            {
+              objectKey,
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            },
+          );
+        }
+      }),
+    ),
+  );
+}
+
+async function cleanupPoll() {
+  try {
+    await cleanupAbandonedUploads();
+  } catch (error) {
+    console.error("[worker] abandoned upload cleanup failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+  } finally {
+    if (!stopping) {
+      nextCleanupPoll = setTimeout(
+        runCleanupPoll,
+        config.ABANDONED_UPLOAD_CLEANUP_INTERVAL_MS,
+      );
+    }
+  }
+}
+
+function runCleanupPoll() {
+  activeCleanupPoll = cleanupPoll().finally(() => {
+    activeCleanupPoll = undefined;
+  });
+}
+
 async function shutdown(signal: (typeof shutdownSignals)[number]) {
   if (stopping) {
     return;
@@ -145,8 +205,15 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
   if (nextPoll) {
     clearTimeout(nextPoll);
   }
+  if (nextCleanupPoll) {
+    clearTimeout(nextCleanupPoll);
+  }
   console.info(`[worker] received ${signal}; shutting down cleanly`);
-  await Promise.allSettled([analysisWorker?.close(), activePoll]);
+  await Promise.allSettled([
+    analysisWorker?.close(),
+    activePoll,
+    activeCleanupPoll,
+  ]);
   await metricsPublisher.close();
   await queue.close();
   await database.close();
@@ -164,6 +231,9 @@ console.info("[worker] started", {
   analysisEnabled: Boolean(analysisWorker),
   analysisConcurrency: config.ANALYSIS_CONCURRENCY,
   cloudWatchMetricsEnabled: config.CLOUDWATCH_METRICS_ENABLED,
+  abandonedUploadTtlHours: config.ABANDONED_UPLOAD_TTL_HOURS,
+  abandonedUploadCleanupIntervalMs: config.ABANDONED_UPLOAD_CLEANUP_INTERVAL_MS,
 });
 void recordHeartbeat();
 runPoll();
+runCleanupPoll();

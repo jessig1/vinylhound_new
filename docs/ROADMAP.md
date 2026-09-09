@@ -258,12 +258,35 @@ before measuring it. Retaining or returning to the monolith is a valid outcome.
 - [x] Add an authenticated signed-thumbnail read endpoint with ownership checks,
       short TTL, private cache policy, expiry refresh, and safe missing/legacy
       image fallback. Reuse the thumbnails already generated in storage.
-- [ ] Add quota-headroom contracts/polling and an early admission check before
+- [x] Add quota-headroom contracts/polling and an early admission check before
       expensive upload processing. Keep submission/retry quotas transactional:
       headroom is advisory under concurrency. Define abandoned-upload cleanup.
 - [ ] Reconcile active-scan (20), batch (20), daily-attempt (100, including retries),
       and worker-concurrency (1) defaults. Define batch rollover, queue-pressure
       pause/resume, and daily/spend exhaustion behavior without retry loops.
+
+Partial progress, 2026-09-09 (not enough to check the second box above):
+`GET /quota` (advisory, unlocked) and an early admission check inside
+`createOrGetScan` (also advisory) now exist, backed by a shared headroom
+computation `enforceScanQuota` also uses, so the transactional submit/retry
+check and every advisory read stay in sync by construction. The worker
+cancels abandoned `awaiting_upload` scans (no scan/image activity within
+`ABANDONED_UPLOAD_TTL_HOURS`, default 24h) on its own poll loop and
+best-effort deletes their orphaned image objects. `/scan` polls headroom
+before starting/resuming and after a `quota_exceeded` failure, disables
+starting a session while blocked, and never auto-retries a quota failure —
+it waits for headroom to return (polled every 20s) or for the user to retry
+manually, satisfying "queue-pressure pause/resume" and "daily/spend
+exhaustion... without retry loops" uniformly across all three quota
+dimensions. `docs/OPERATIONS.md` now documents why active-scan (20)
+deliberately equals batch (20) and why `ANALYSIS_CONCURRENCY` (worker
+throughput) is independent of the per-user limits. Still outstanding: batch
+rollover itself (a continuous session spanning more than one batch) is
+deferred to P3.2's continuous-capture state machine rather than retrofitted
+onto today's one-shot upload picker, which already hard-caps a session at
+`MAX_SCANS_PER_BATCH` client-side and so never reaches the server-side batch
+limit in normal use.
+
 - [ ] Add structured web request/error timing and validated correlation IDs
       across HTTP, outbox/job payloads, and worker attempts. Preserve compatibility
       with queued jobs. Treat inbound IDs as untrusted metadata, never identity;

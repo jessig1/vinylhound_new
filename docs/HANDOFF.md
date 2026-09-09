@@ -15,6 +15,62 @@ the log.
 
 ## Current state — verified 2026-09-09
 
+- **P3.1 task 3: quota-headroom polling, an early admission check, and
+  abandoned-upload cleanup.** `packages/database/src/scan-repository.ts`'s
+  `enforceScanQuota` (the transactional, per-user-locked check submit/retry
+  already ran) is refactored around a new shared `computeQuotaHeadroom`, so
+  every quota read — the authoritative locked one and every advisory one —
+  computes the same three numbers the same way and cannot drift. Two new
+  advisory (unlocked) call sites reuse it: `getScanQuotaHeadroomForUser`
+  backs a new `GET /api/v1/quota` (contract: `packages/contracts/src/
+quota.ts`'s `GetQuotaHeadroomResponseSchema`, `{ used, limit, remaining }`
+  per dimension plus `admissible`/`blockedBy`), and `createOrGetScan` gained
+  an optional `quotaLimits` parameter that rejects a genuinely new scan
+  (never an idempotent replay) with `quota_exceeded` before it's even
+  inserted when headroom is already clearly exhausted — wired from
+  `POST /scans`, so a session with no realistic chance of admission fails
+  before the client uploads and normalizes an image rather than only at
+  submit. Both are explicitly advisory (can false-pass or false-block under
+  concurrency); submit/retry remain the sole authority, unchanged.
+  Abandoned-upload cleanup is new end to end: `cleanupAbandonedScans`
+  (`scan-repository.ts`) finds `awaiting_upload` scans with no scan-or-image
+  activity older than a TTL (candidate query unlocked, then re-verified
+  under a row lock before canceling, since `FOR UPDATE` can't combine with
+  the aggregate that finds them), cancels them, and returns each image's
+  three derived object keys for cleanup. `apps/worker/src/index.ts` runs
+  this on its own poll loop (`ABANDONED_UPLOAD_CLEANUP_INTERVAL_MS`, default
+  30 min; `ABANDONED_UPLOAD_TTL_HOURS`, default 24h — both new
+  `QueueWorkerConfigSchema` fields) alongside the existing outbox poller,
+  best-effort deleting the returned objects from storage the same way
+  `DELETE /account` does. On the client, `capture-session.tsx` fetches
+  `/api/v1/quota` on mount and after any `quota_exceeded` failure, shows a
+  banner naming which dimension is blocking (`blockedBy`), disables
+  starting/resuming a session while blocked, and polls every 20s while
+  blocked and idle — a failed record is never auto-retried, so an exhausted
+  daily/spend limit cannot turn into a request loop; the user retries
+  manually once the banner clears. `docs/OPERATIONS.md` and
+  `docs/ROADMAP.md` (P3.1's second remaining checkbox, left unchecked with a
+  dated partial-progress note) now document why `USER_ACTIVE_SCAN_LIMIT`
+  (20) deliberately equals `MAX_SCANS_PER_BATCH` (20) and why
+  `ANALYSIS_CONCURRENCY` is independent of per-user quota; true batch
+  rollover (a continuous session spanning more than one batch) is explicitly
+  deferred to P3.2, since today's client already hard-caps a session at 20
+  records and so never reaches the server-side batch limit in normal use —
+  see "Known gaps and risks."
+  Verified: `npm run check` (84/84 unit tests, +5: 3 new quota contract
+  tests, 2 new worker config tests), `npm run build` (new
+  `/api/v1/quota` route), `npm run test:integration` (33/33 database, +3:
+  headroom reflects active-scan usage, the early admission check rejects
+  before any row is created, abandoned-scan cleanup cancels a backdated scan
+  and leaves a recent one alone — storage/queue/worker suites otherwise
+  unchanged), and a real isolated dev-server pass (`NEXT_DIST_DIR`-scoped on
+  port 3100, matching prior sessions' pattern, so the maintainer's own
+  server on port 3000 was never touched): `GET /api/v1/quota` returned a
+  real 200 body against actual dev data, and a scripted Playwright check
+  confirmed `/scan` shows no quota banner and an enabled "Start capture
+  session" button under normal (non-exhausted) quota with zero console
+  errors. The isolated instance and its dist dir were removed afterward.
+
 - **P3.1 task 2: bounded upload concurrency, a persisted session queue,
   retry/cancel, review-later navigation, and refresh recovery for `/scan`.**
   `apps/web/src/app/scan/capture-session.tsx` was rewritten from a single
@@ -703,10 +759,17 @@ does not retain file bytes across a reload. Batch cards now show their
 authenticated cover thumbnail and candidate metadata, and high-confidence
 matches can be added directly to collection or wishlist; both matched and
 needs-review candidates have direct list actions, while a "This isn't a
-match" choice exposes new scan and manual-entry paths. The next slice is
-P3.1 task 3: quota headroom/admission, active-scan/batch/daily-limit
-reconciliation, and abandoned-upload cleanup — see task 2's implementation
-note below for known follow-on gaps before starting it.
+match" choice exposes new scan and manual-entry paths.
+
+P3.1 task 3 (quota headroom/admission, active-scan/batch/daily-limit
+reconciliation, and abandoned-upload cleanup) is now complete — see "Current
+state" for the full description. The next slice is P3.1's remaining
+checkbox: structured web request/error timing and validated correlation IDs
+across HTTP, outbox/job payloads, and worker attempts (`docs/ROADMAP.md`),
+followed by P3.1's persistent-spend inventory. Batch rollover was
+deliberately deferred out of task 3 to P3.2 (see "Known gaps and risks");
+pick it up there rather than retrofitting it here unless the maintainer asks
+otherwise.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
@@ -912,6 +975,21 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 ## Known gaps and risks
 
+- **Batch rollover is not implemented.** A capture session cannot yet span
+  more than one batch: `/scan` still hard-caps a session at
+  `MAX_SCANS_PER_BATCH` (20) records client-side (unchanged by P3.1 task 3),
+  so no session can reach the server's own 20-scan batch limit in normal
+  use. This was a deliberate scope decision, not an oversight — see
+  `docs/ROADMAP.md`'s P3.1 partial-progress note — because rollover's
+  natural home is P3.2's always-armed continuous-capture state machine, not
+  a retrofit onto today's one-shot upload picker.
+- **P3.1 task 3's quota-headroom polling has no Playwright coverage yet.**
+  Verified by a scripted browser pass against a real dev server (see
+  "Current state") and by database integration tests covering the headroom
+  computation and early admission check directly, but nothing in
+  `apps/web/e2e/` exercises the blocked-banner/disabled-button path (it
+  would need a seeded user already at a quota limit, which the existing e2e
+  fixtures don't set up). A regression here would not be caught in CI.
 - **P3.1 task 2's capture-session queue (`/scan`) has no Playwright coverage
   yet**, and two scope limitations worth knowing before extending it: the
   "N submitted so far" review-later link's counter is in-memory only and
@@ -1009,6 +1087,25 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-09 - Claude.** Implemented P3.1 task 3: quota-headroom
+  contracts/polling (`GET /api/v1/quota`), an early advisory admission check
+  in `createOrGetScan`, and worker-driven abandoned-upload cleanup — see
+  "Current state" for the full description. Refactored
+  `enforceScanQuota` around a new shared `computeQuotaHeadroom` so the
+  transactional (locked) and advisory (unlocked) quota reads cannot drift.
+  Wired `/scan`'s capture session to poll headroom, show why capture is
+  blocked, and never auto-retry a `quota_exceeded` failure. Documented the
+  active-scan/batch/daily-attempt/worker-concurrency reconciliation and
+  deferred batch rollover to P3.2 in `docs/OPERATIONS.md` and
+  `docs/ROADMAP.md` (left task 3's second roadmap checkbox unchecked with a
+  dated partial-progress note, since rollover itself isn't implemented).
+  Verified `npm run check` (84/84 unit tests), `npm run build`,
+  `npm run test:integration` (33/33 database), and a real isolated
+  dev-server pass on port 3100 (the maintainer's own port-3000 server was
+  never touched) confirming `GET /api/v1/quota` against real dev data and a
+  scripted Playwright check of `/scan`'s unblocked state with zero console
+  errors.
 
 - **2026-09-08 - Codex.** Implemented P3.1 task 1, the `/scan`
   capture-session refactor. `CaptureSession` replaces the mode toggle with

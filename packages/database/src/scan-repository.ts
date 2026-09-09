@@ -22,6 +22,7 @@ import {
   type ImageMimeType,
   type ImageViewType,
   type IngestionSource,
+  type QuotaHeadroomReason,
 } from "@vinylhound/contracts";
 import { estimateTokenUsageCostUsd } from "@vinylhound/domain";
 
@@ -106,6 +107,12 @@ export async function createOrGetScan(
     source: IngestionSource;
     idempotencyKey: string;
     batchId?: string;
+    // Advisory only: an early, unlocked headroom check so a scan that has
+    // no realistic chance of being admitted fails before the client spends
+    // time uploading and normalizing an image, rather than only at submit.
+    // The transactional check inside submitScan/retryScan remains the sole
+    // authority; this can both false-pass and false-block under concurrency.
+    quotaLimits?: ScanQuotaLimits;
   },
 ) {
   return db.transaction(async (transaction) => {
@@ -148,6 +155,20 @@ export async function createOrGetScan(
         throw new DatabaseCommandError(
           "batch_scan_limit",
           `A batch cannot contain more than ${MAX_SCANS_PER_BATCH} scans.`,
+        );
+      }
+    }
+
+    if (input.quotaLimits) {
+      const headroom = await computeQuotaHeadroom(transaction, {
+        userId: input.userId,
+        limits: input.quotaLimits,
+        now: new Date(),
+      });
+      if (!headroom.admissible) {
+        throw new DatabaseCommandError(
+          "quota_exceeded",
+          quotaHeadroomBlockedMessage(headroom.blockedBy),
         );
       }
     }
@@ -367,21 +388,43 @@ const DEFAULT_SCAN_QUOTA_LIMITS: ScanQuotaLimits = {
   scanCostReservationUsd: 0.25,
 };
 
-async function enforceScanQuota(
-  transaction: Parameters<Parameters<Database["transaction"]>[0]>[0],
+export interface QuotaDimensionSnapshot {
+  used: number;
+  limit: number;
+  remaining: number;
+}
+
+export interface QuotaHeadroomSnapshot {
+  checkedAt: Date;
+  limits: ScanQuotaLimits;
+  dailyAnalysis: QuotaDimensionSnapshot;
+  activeScans: QuotaDimensionSnapshot;
+  monthlySpend: QuotaDimensionSnapshot & { reservedUsd: number };
+  admissible: boolean;
+  blockedBy: QuotaHeadroomReason | null;
+}
+
+type Queryable =
+  Database | Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/**
+ * Reads the same three usage signals `enforceScanQuota` enforces, without
+ * taking the per-user advisory lock. Used both by the polling headroom
+ * endpoint and by `createOrGetScan`'s early admission check, where blocking
+ * on a lock for a cheap, best-effort read would serialize unrelated tabs
+ * for no correctness benefit — the authoritative check still happens once,
+ * locked, at submit/retry.
+ */
+async function computeQuotaHeadroom(
+  queryable: Queryable,
   input: { userId: string; limits: ScanQuotaLimits; now: Date },
-) {
-  // Serializing quota checks per user makes concurrent browser tabs/batch
-  // submissions see the same reservation balance before either can enqueue.
-  await transaction.execute(
-    sql`select pg_advisory_xact_lock(hashtext(${input.userId}))`,
-  );
+): Promise<QuotaHeadroomSnapshot> {
   const dayStart = new Date(input.now);
   dayStart.setUTCHours(0, 0, 0, 0);
   const monthStart = new Date(input.now);
   monthStart.setUTCDate(monthStart.getUTCDate() - 30);
 
-  const [{ value: dailyAnalysisCount }] = await transaction
+  const [{ value: dailyAnalysisCount }] = await queryable
     .select({ value: count() })
     .from(outboxMessages)
     .innerJoin(scans, eq(scans.id, outboxMessages.aggregateId))
@@ -391,14 +434,8 @@ async function enforceScanQuota(
         gte(outboxMessages.createdAt, dayStart),
       ),
     );
-  if (dailyAnalysisCount >= input.limits.dailyAnalysisLimit) {
-    throw new DatabaseCommandError(
-      "quota_exceeded",
-      "Your daily scan limit has been reached. Please try again tomorrow.",
-    );
-  }
 
-  const [{ value: activeScanCount }] = await transaction
+  const [{ value: activeScanCount }] = await queryable
     .select({ value: count() })
     .from(scans)
     .where(
@@ -407,14 +444,8 @@ async function enforceScanQuota(
         inArray(scans.status, ["queued", "processing"]),
       ),
     );
-  if (activeScanCount >= input.limits.activeScanLimit) {
-    throw new DatabaseCommandError(
-      "quota_exceeded",
-      "You already have the maximum number of scans in progress. Please wait for one to finish.",
-    );
-  }
 
-  const attempts = await transaction
+  const attempts = await queryable
     .select({
       model: scanAttempts.model,
       inputTokens: scanAttempts.inputTokens,
@@ -437,12 +468,100 @@ async function enforceScanQuota(
       }) ?? 0)
     );
   }, 0);
+  // Reserves for the scan a caller is about to admit, in addition to every
+  // scan already active, so a burst of concurrent submissions cannot spend
+  // past the monthly limit while real token usage is still unknown.
   const reservedSpendUsd =
     (activeScanCount + 1) * input.limits.scanCostReservationUsd;
-  if (actualSpendUsd + reservedSpendUsd > input.limits.monthlySpendLimitUsd) {
+
+  const dailyOk = dailyAnalysisCount < input.limits.dailyAnalysisLimit;
+  const activeOk = activeScanCount < input.limits.activeScanLimit;
+  const spendOk =
+    actualSpendUsd + reservedSpendUsd <= input.limits.monthlySpendLimitUsd;
+  const blockedBy: QuotaHeadroomReason | null = !dailyOk
+    ? "daily_analysis_limit"
+    : !activeOk
+      ? "active_scan_limit"
+      : !spendOk
+        ? "monthly_spend_limit"
+        : null;
+
+  return {
+    checkedAt: input.now,
+    limits: input.limits,
+    dailyAnalysis: {
+      used: dailyAnalysisCount,
+      limit: input.limits.dailyAnalysisLimit,
+      remaining: Math.max(
+        0,
+        input.limits.dailyAnalysisLimit - dailyAnalysisCount,
+      ),
+    },
+    activeScans: {
+      used: activeScanCount,
+      limit: input.limits.activeScanLimit,
+      remaining: Math.max(0, input.limits.activeScanLimit - activeScanCount),
+    },
+    monthlySpend: {
+      used: actualSpendUsd,
+      limit: input.limits.monthlySpendLimitUsd,
+      remaining: Math.max(
+        0,
+        input.limits.monthlySpendLimitUsd - actualSpendUsd,
+      ),
+      reservedUsd: reservedSpendUsd,
+    },
+    admissible: blockedBy === null,
+    blockedBy,
+  };
+}
+
+function quotaHeadroomBlockedMessage(reason: QuotaHeadroomReason | null) {
+  switch (reason) {
+    case "daily_analysis_limit":
+      return "Your daily scan limit has been reached. Please try again tomorrow.";
+    case "active_scan_limit":
+      return "You already have the maximum number of scans in progress. Please wait for one to finish.";
+    case "monthly_spend_limit":
+      return "This scan would exceed your monthly analysis budget. Please try again after the budget period resets.";
+    default:
+      return "This scan cannot be admitted right now.";
+  }
+}
+
+/**
+ * Advisory headroom for the polling endpoint the client checks before
+ * starting or resuming a capture session. Unlocked, so it can be stale
+ * under concurrency; never treat `admissible: true` as a submit guarantee.
+ */
+export async function getScanQuotaHeadroomForUser(
+  db: Database,
+  input: { userId: string; limits?: ScanQuotaLimits; now?: Date },
+): Promise<QuotaHeadroomSnapshot> {
+  return computeQuotaHeadroom(db, {
+    userId: input.userId,
+    limits: input.limits ?? DEFAULT_SCAN_QUOTA_LIMITS,
+    now: input.now ?? new Date(),
+  });
+}
+
+async function enforceScanQuota(
+  transaction: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  input: { userId: string; limits: ScanQuotaLimits; now: Date },
+) {
+  // Serializing quota checks per user makes concurrent browser tabs/batch
+  // submissions see the same reservation balance before either can enqueue.
+  // This is the sole authoritative enforcement point; every other quota
+  // read in this module (createOrGetScan's early check, the headroom
+  // polling endpoint) is deliberately unlocked and advisory.
+  await transaction.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${input.userId}))`,
+  );
+  const headroom = await computeQuotaHeadroom(transaction, input);
+  if (!headroom.admissible) {
     throw new DatabaseCommandError(
       "quota_exceeded",
-      "This scan would exceed your monthly analysis budget. Please try again after the budget period resets.",
+      quotaHeadroomBlockedMessage(headroom.blockedBy),
     );
   }
 }
@@ -729,6 +848,94 @@ export async function cancelScan(
       .returning();
 
     return { record: updated!, created: true } as const;
+  });
+}
+
+export interface AbandonedScanCleanupResult {
+  scanId: string;
+  userId: string;
+  imageObjectKeys: string[];
+}
+
+/**
+ * A scan left `awaiting_upload` (no submit, ever) does not count against
+ * daily/active/spend quota, but it does hold a batch's `MAX_SCANS_PER_BATCH`
+ * slot and can leave uploaded-but-never-completed image objects in storage
+ * indefinitely. "Abandoned" means no activity — neither the scan itself nor
+ * any of its images was created after `olderThan` — while still
+ * `awaiting_upload`; a scan a user is still actively adding photos to is
+ * left alone even if it was originally created long ago. Cancellation
+ * mirrors `cancelScan`; callers are expected to best-effort delete the
+ * returned object keys from storage afterward (the three normalized
+ * variants per image, mirroring `deleteAccount`'s cleanup).
+ */
+export async function cleanupAbandonedScans(
+  db: Database,
+  input: { olderThan: Date; limit: number },
+): Promise<AbandonedScanCleanupResult[]> {
+  const candidates = await db
+    .select({ scanId: scans.id })
+    .from(scans)
+    .leftJoin(imageAssets, eq(imageAssets.scanId, scans.id))
+    .where(eq(scans.status, "awaiting_upload"))
+    .groupBy(scans.id)
+    .having(
+      sql`greatest(${scans.createdAt}, coalesce(max(${imageAssets.createdAt}), ${scans.createdAt})) < ${input.olderThan}`,
+    )
+    .orderBy(asc(scans.createdAt))
+    .limit(input.limit);
+
+  if (candidates.length === 0) {
+    return [];
+  }
+  const candidateIds = candidates.map((candidate) => candidate.scanId);
+
+  return db.transaction(async (transaction) => {
+    // A plain "FOR UPDATE" lock can't be combined with the aggregate query
+    // above, so lock the candidate rows by ID here and re-verify status
+    // under the lock before canceling, in case one was submitted or
+    // canceled between the two queries.
+    const locked = await transaction
+      .select({ id: scans.id, userId: scans.userId, status: scans.status })
+      .from(scans)
+      .where(inArray(scans.id, candidateIds))
+      .for("update", { skipLocked: true });
+
+    const canceledAt = new Date();
+    const results: AbandonedScanCleanupResult[] = [];
+    for (const scan of locked) {
+      if (scan.status !== "awaiting_upload") continue;
+
+      const images = await transaction
+        .select({ id: imageAssets.id })
+        .from(imageAssets)
+        .where(eq(imageAssets.scanId, scan.id));
+
+      await transaction
+        .update(scans)
+        .set({
+          status: "canceled",
+          updatedAt: canceledAt,
+          completedAt: canceledAt,
+        })
+        .where(eq(scans.id, scan.id));
+
+      results.push({
+        scanId: scan.id,
+        userId: scan.userId,
+        imageObjectKeys: images.flatMap((image) => {
+          const lookup = {
+            userId: scan.userId,
+            scanId: scan.id,
+            imageId: image.id,
+          };
+          return (["original", "analysis", "thumbnail"] as const).map(
+            (variant) => deriveImageObjectKey(lookup, variant),
+          );
+        }),
+      });
+    }
+    return results;
   });
 }
 

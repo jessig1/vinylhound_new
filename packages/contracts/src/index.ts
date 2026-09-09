@@ -2,6 +2,7 @@ export * from "./account.js";
 export * from "./batch.js";
 export * from "./catalog.js";
 export * from "./library.js";
+export * from "./quota.js";
 export * from "./scan.js";
 export * from "./upload.js";
 export * from "./usage.js";

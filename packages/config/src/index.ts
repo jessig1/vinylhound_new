@@ -194,6 +194,29 @@ export const QueueWorkerConfigSchema = z
     SCAN_QUEUE_NAME: z.string().min(1).default("vinylhound-scans"),
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
     ANALYSIS_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(1),
+    // A scan left awaiting_upload with no activity (neither the scan nor
+    // any of its images created) for this long is abandoned: canceled, and
+    // its orphaned image objects best-effort deleted from storage. Keeps
+    // an interrupted capture session from permanently holding a batch slot
+    // or leaking storage.
+    ABANDONED_UPLOAD_TTL_HOURS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(720)
+      .default(24),
+    ABANDONED_UPLOAD_CLEANUP_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(86_400_000)
+      .default(1_800_000),
+    ABANDONED_UPLOAD_CLEANUP_BATCH_SIZE: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .default(50),
     CLOUDWATCH_METRICS_ENABLED: BooleanStringSchema.default(false),
     CLOUDWATCH_METRIC_NAMESPACE: z.string().min(1).default("VinylHound"),
     CLOUDWATCH_METRICS_INTERVAL_MS: z.coerce

@@ -50,8 +50,12 @@ lock rather than relying on the browser limit.
 The `/scan` browser flow is an upload-only capture-session draft: every
 selected cover photo creates one independent record draft. Starting the session
 creates a batch and adds/submits each draft as an independent `batch_upload`
-scan. Selected local files are not yet durable before submission; later P3.1
-queue/review-later work adds recovery state around that boundary.
+scan, at most three uploading concurrently, with per-record retry/cancel. The
+queue's bookkeeping (batch/scan identity and idempotency keys, never file
+bytes) persists to `localStorage` and rehydrates after a refresh; a record
+whose image never finished uploading comes back needing its photo reattached.
+Selected local files themselves are not durable across a refresh — only the
+server-side progress already made is.
 
 Each requested upload declares a `viewType` (`front`, `back`, `spine`, `label`,
 `barcode`, `runout`, or `other`; defaults to `front` when omitted, preserving
@@ -98,6 +102,33 @@ member scan's current state from `scans`/`scan_attempts`, so it can never
 drift out of sync with `GET /scans/{scanId}` for the same scan. It also
 returns a `cost` summary (token totals and estimated USD) aggregated across
 every attempt made by the batch's member scans.
+
+## Quota endpoint
+
+| Method | Path     | Purpose                                           |
+| ------ | -------- | ------------------------------------------------- |
+| GET    | `/quota` | Advisory daily/active-scan/monthly-spend headroom |
+
+`GET /quota` reports the same three signals `POST /scans/{scanId}/submit` and
+`POST /scans/{scanId}/retry` enforce transactionally
+(`USER_DAILY_ANALYSIS_LIMIT`, `USER_ACTIVE_SCAN_LIMIT`,
+`USER_MONTHLY_SPEND_LIMIT_USD`) as `{ used, limit, remaining }` per dimension,
+plus `admissible` and, when `false`, `blockedBy` naming which dimension would
+block a new scan right now. This read takes no per-user lock — unlike submit
+and retry, which serialize behind a `pg_advisory_xact_lock` so concurrent tabs
+see a consistent reservation balance — so it can be stale under concurrency in
+both directions and must never be treated as a submission guarantee. The
+`/scan` capture session polls it before starting/resuming and after a
+`quota_exceeded` failure, to show why capture has paused and let the banner
+clear once headroom returns, without retrying the failed request in a loop.
+
+`POST /scans` also runs this same unlocked check before creating a genuinely
+new scan (not on idempotent replay) and rejects with `quota_exceeded` if it is
+already clearly inadmissible, so a session with no realistic chance of being
+admitted fails before the client spends time uploading and normalizing an
+image. This is advisory, not authoritative: it can both false-pass (a
+concurrent request wins the real check) and, more rarely, false-block; submit
+and retry remain the sole enforcement point.
 
 ## Usage endpoint
 

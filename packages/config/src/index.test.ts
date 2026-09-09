@@ -176,4 +176,25 @@ describe("QueueWorkerConfigSchema", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("defaults abandoned-upload cleanup to a 24-hour TTL and 30-minute interval", () => {
+    const config = QueueWorkerConfigSchema.parse({
+      ...baseEnv,
+      REDIS_URL: "redis://localhost:6379",
+    });
+
+    expect(config.ABANDONED_UPLOAD_TTL_HOURS).toBe(24);
+    expect(config.ABANDONED_UPLOAD_CLEANUP_INTERVAL_MS).toBe(1_800_000);
+    expect(config.ABANDONED_UPLOAD_CLEANUP_BATCH_SIZE).toBe(50);
+  });
+
+  it("rejects an abandoned-upload cleanup interval below one minute", () => {
+    expect(
+      QueueWorkerConfigSchema.safeParse({
+        ...baseEnv,
+        REDIS_URL: "redis://localhost:6379",
+        ABANDONED_UPLOAD_CLEANUP_INTERVAL_MS: "1000",
+      }).success,
+    ).toBe(false);
+  });
 });

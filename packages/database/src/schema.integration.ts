@@ -32,6 +32,7 @@ import {
 } from "./library-repository.js";
 import {
   cancelScan,
+  cleanupAbandonedScans,
   completeImageUpload,
   createOrGetBatch,
   createOrGetImageUpload,
@@ -39,6 +40,7 @@ import {
   dispatchNextOutboxMessage,
   getBatchForUser,
   getOrCreateUserIdByClerkId,
+  getScanQuotaHeadroomForUser,
   retryScan,
   submitScan,
 } from "./scan-repository.js";
@@ -359,6 +361,202 @@ describe("initial scan persistence schema", () => {
     ).rejects.toMatchObject({ code: "quota_exceeded" });
 
     await database.db.delete(users).where(eq(users.id, quotaUserId));
+  });
+
+  it("reports advisory quota headroom that reflects active scans", async () => {
+    const headroomUserId = randomUUID();
+    await database.db.insert(users).values({ id: headroomUserId });
+
+    const fresh = await getScanQuotaHeadroomForUser(database.db, {
+      userId: headroomUserId,
+      limits: {
+        dailyAnalysisLimit: 100,
+        activeScanLimit: 1,
+        monthlySpendLimitUsd: 20,
+        scanCostReservationUsd: 0.25,
+      },
+    });
+    expect(fresh).toMatchObject({
+      admissible: true,
+      blockedBy: null,
+      activeScans: { used: 0, limit: 1, remaining: 1 },
+    });
+
+    const scan = await createOrGetScan(database.db, {
+      userId: headroomUserId,
+      source: "single_upload",
+      idempotencyKey: `headroom-scan-${randomUUID()}`,
+    });
+    const upload = await createOrGetImageUpload(database.db, {
+      userId: headroomUserId,
+      scanId: scan.record.id,
+      idempotencyKey: `headroom-upload-${randomUUID()}`,
+      filename: "front.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 512,
+      checksumSha256: "c".repeat(64),
+      maxImages: 12,
+    });
+    await completeImageUpload(database.db, {
+      userId: headroomUserId,
+      scanId: scan.record.id,
+      imageId: upload.record.id,
+      width: 800,
+      height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
+    });
+    await submitScan(database.db, {
+      userId: headroomUserId,
+      scanId: scan.record.id,
+      idempotencyKey: `headroom-submit-${randomUUID()}`,
+    });
+
+    const afterSubmit = await getScanQuotaHeadroomForUser(database.db, {
+      userId: headroomUserId,
+      limits: {
+        dailyAnalysisLimit: 100,
+        activeScanLimit: 1,
+        monthlySpendLimitUsd: 20,
+        scanCostReservationUsd: 0.25,
+      },
+    });
+    expect(afterSubmit).toMatchObject({
+      admissible: false,
+      blockedBy: "active_scan_limit",
+      activeScans: { used: 1, limit: 1, remaining: 0 },
+    });
+
+    await database.db.delete(users).where(eq(users.id, headroomUserId));
+  });
+
+  it("rejects creating a new scan before any upload work when the active-scan limit is already exhausted", async () => {
+    const admissionUserId = randomUUID();
+    await database.db.insert(users).values({ id: admissionUserId });
+
+    const active = await createOrGetScan(database.db, {
+      userId: admissionUserId,
+      source: "single_upload",
+      idempotencyKey: `admission-scan-active-${randomUUID()}`,
+    });
+    const activeUpload = await createOrGetImageUpload(database.db, {
+      userId: admissionUserId,
+      scanId: active.record.id,
+      idempotencyKey: `admission-upload-${randomUUID()}`,
+      filename: "front.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 512,
+      checksumSha256: "d".repeat(64),
+      maxImages: 12,
+    });
+    await completeImageUpload(database.db, {
+      userId: admissionUserId,
+      scanId: active.record.id,
+      imageId: activeUpload.record.id,
+      width: 800,
+      height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
+    });
+    await submitScan(database.db, {
+      userId: admissionUserId,
+      scanId: active.record.id,
+      idempotencyKey: `admission-submit-${randomUUID()}`,
+    });
+
+    const blockedIdempotencyKey = `admission-scan-blocked-${randomUUID()}`;
+    await expect(
+      createOrGetScan(database.db, {
+        userId: admissionUserId,
+        source: "single_upload",
+        idempotencyKey: blockedIdempotencyKey,
+        quotaLimits: {
+          dailyAnalysisLimit: 100,
+          activeScanLimit: 1,
+          monthlySpendLimitUsd: 20,
+          scanCostReservationUsd: 0.25,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "quota_exceeded" });
+
+    const blockedScan = await database.db.query.scans.findFirst({
+      where: eq(scans.idempotencyKey, blockedIdempotencyKey),
+    });
+    expect(blockedScan).toBeUndefined();
+
+    await database.db.delete(users).where(eq(users.id, admissionUserId));
+  });
+
+  it("cancels an abandoned awaiting_upload scan and leaves a recent one untouched", async () => {
+    const cleanupUserId = randomUUID();
+    await database.db.insert(users).values({ id: cleanupUserId });
+
+    const abandoned = await createOrGetScan(database.db, {
+      userId: cleanupUserId,
+      source: "single_upload",
+      idempotencyKey: `cleanup-scan-abandoned-${randomUUID()}`,
+    });
+    const abandonedUpload = await createOrGetImageUpload(database.db, {
+      userId: cleanupUserId,
+      scanId: abandoned.record.id,
+      idempotencyKey: `cleanup-upload-${randomUUID()}`,
+      filename: "front.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 512,
+      checksumSha256: "e".repeat(64),
+      maxImages: 12,
+    });
+    const staleTimestamp = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+    await database.db
+      .update(scans)
+      .set({ createdAt: staleTimestamp, updatedAt: staleTimestamp })
+      .where(eq(scans.id, abandoned.record.id));
+    await database.db
+      .update(imageAssets)
+      .set({ createdAt: staleTimestamp })
+      .where(eq(imageAssets.id, abandonedUpload.record.id));
+
+    const recent = await createOrGetScan(database.db, {
+      userId: cleanupUserId,
+      source: "single_upload",
+      idempotencyKey: `cleanup-scan-recent-${randomUUID()}`,
+    });
+
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1_000);
+    const canceled = await cleanupAbandonedScans(database.db, {
+      olderThan: cutoff,
+      limit: 50,
+    });
+    const canceledForUser = canceled.filter(
+      (result) => result.userId === cleanupUserId,
+    );
+
+    expect(canceledForUser).toHaveLength(1);
+    expect(canceledForUser[0]).toMatchObject({ scanId: abandoned.record.id });
+    expect(canceledForUser[0]!.imageObjectKeys.sort()).toEqual(
+      [
+        `${cleanupUserId}/${abandoned.record.id}/${abandonedUpload.record.id}/original`,
+        `${cleanupUserId}/${abandoned.record.id}/${abandonedUpload.record.id}/analysis`,
+        `${cleanupUserId}/${abandoned.record.id}/${abandonedUpload.record.id}/thumbnail`,
+      ].sort(),
+    );
+
+    const [abandonedStatus, recentStatus] = await Promise.all([
+      database.db.query.scans.findFirst({
+        where: eq(scans.id, abandoned.record.id),
+      }),
+      database.db.query.scans.findFirst({
+        where: eq(scans.id, recent.record.id),
+      }),
+    ]);
+    expect(abandonedStatus?.status).toBe("canceled");
+    expect(recentStatus?.status).toBe("awaiting_upload");
+
+    await database.db.delete(users).where(eq(users.id, cleanupUserId));
   });
 
   it("enforces per-user idempotency keys", async () => {

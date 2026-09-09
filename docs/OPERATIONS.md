@@ -168,10 +168,73 @@ The web process enforces these limits transactionally before each initial
 submission or retry is written to the outbox: `USER_DAILY_ANALYSIS_LIMIT`,
 `USER_ACTIVE_SCAN_LIMIT`, and `USER_MONTHLY_SPEND_LIMIT_USD`. Pending scans
 reserve `SCAN_COST_RESERVATION_USD` each, so a burst cannot spend past the
-monthly limit while token usage is still unknown. The defaults are for local
-development; production must deliberately set values aligned with the OpenAI
-project's hard monthly limit. The OpenAI project must additionally have its own
-spend cap and rate limits, because application controls are defense in depth.
+monthly limit while token usage is still unknown. This check is the single
+authoritative gate: it takes a per-user `pg_advisory_xact_lock` first, so
+concurrent tabs or batch submissions see a consistent reservation balance
+before either can enqueue. The defaults are for local development; production
+must deliberately set values aligned with the OpenAI project's hard monthly
+limit. The OpenAI project must additionally have its own spend cap and rate
+limits, because application controls are defense in depth.
+
+`GET /quota` (P3.1) reports the same three signals as an advisory, unlocked
+read — `{ used, limit, remaining }` per dimension plus `admissible` — so the
+`/scan` capture session can decide whether to start expensive upload/
+normalization work before spending it, without paying the lock's
+serialization cost on every page load. `POST /scans` runs the same unlocked
+check before creating a genuinely new scan, rejecting early when it is
+already clearly inadmissible. Both are best-effort: they can be stale under
+concurrency in either direction, and the transactional check above remains
+the only thing that can actually block a submission.
+
+**Reconciling the defaults.** `USER_ACTIVE_SCAN_LIMIT` (20) intentionally
+equals `MAX_SCANS_PER_BATCH` (20): a full capture session should be able to
+have every one of its records in flight at once without a second,
+independent ceiling cutting it off first. `USER_DAILY_ANALYSIS_LIMIT` (100)
+is set well above the active-scan limit so a day of normal retries and
+several sessions do not routinely collide with it; `ANALYSIS_CONCURRENCY`
+(1) governs how many analysis jobs one worker process runs at a time, not
+how many a user may have queued, so it is independent of the per-user limits
+by design and is scaled by adding worker capacity, not by relaxing quota.
+
+**Queue-pressure pause/resume.** When the active-scan or daily/spend limit is
+already exhausted, `/scan` shows why (via `GET /quota`'s `blockedBy`) and
+disables starting or resuming a session rather than letting requests fail
+into an opaque error. If a record's submit is rejected mid-session anyway
+(the advisory check raced a concurrent submission), the session does not
+retry it automatically — it surfaces the failure, refreshes the quota
+banner, and waits for the user to retry once headroom returns, polled every
+20 seconds while blocked. This applies uniformly to all three quota
+dimensions; there is no separate faster path for an active-scan limit that
+is expected to clear soon versus a daily/spend limit that will not clear
+until its window resets; the difference shows up only in the banner's
+message, not in retry behavior.
+
+**Batch rollover** (multiple batches within one continuous capture session,
+so a user is never hard-stopped at 20 records) is deferred to P3.2's
+continuous-capture state machine rather than added here: today's `/scan`
+already refuses to queue more than `MAX_SCANS_PER_BATCH` records in a single
+session client-side, so no session can reach the server-side batch limit in
+normal use, and rollover's natural home is the always-armed capture flow
+P3.2 is designed around rather than a retrofit onto the current one-shot
+upload picker.
+
+## Abandoned uploads
+
+A scan left `awaiting_upload` — created, possibly with images attached, but
+never submitted — does not count against any of the quota dimensions above,
+but it does hold one of a batch's 20 scan slots and can leave uploaded image
+objects in storage indefinitely (a closed tab, a crashed browser, a
+recapture that never got its new photo reattached). The worker polls for
+these independently of the outbox (`ABANDONED_UPLOAD_CLEANUP_INTERVAL_MS`,
+default 30 minutes) and cancels any `awaiting_upload` scan with no activity —
+neither the scan nor any of its images was created — within the last
+`ABANDONED_UPLOAD_TTL_HOURS` (default 24). A scan a user is still actively
+adding photos to is left alone even if it was originally created long
+before the TTL, since the check looks at the most recent image, not only the
+scan's own creation time. Canceling frees the batch slot the same way an
+explicit cancel does; each of the scan's images' `original`/`analysis`/
+`thumbnail` objects is then deleted from storage best-effort (logged, not
+retried, mirroring `DELETE /account`'s cleanup) rather than left orphaned.
 
 ## AWS telemetry and budget
 

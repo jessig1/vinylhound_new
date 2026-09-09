@@ -10,9 +10,11 @@ import {
   CreateBatchResponseSchema,
   CreateScanResponseSchema,
   detectImageMimeType,
+  GetQuotaHeadroomResponseSchema,
   IMAGE_SNIFF_BYTE_LENGTH,
   type ImageMimeType,
   MAX_SCANS_PER_BATCH,
+  type QuotaHeadroomReason,
   SignedUploadSchema,
   SubmitScanResponseSchema,
 } from "@vinylhound/contracts";
@@ -69,6 +71,15 @@ type PersistedSession = {
   records: PersistedRecord[];
 };
 
+type QuotaState =
+  | { status: "unknown" }
+  | { status: "ok" }
+  | {
+      status: "blocked";
+      blockedBy: QuotaHeadroomReason | null;
+      message: string;
+    };
+
 /**
  * A capture session's selected files are a client-side draft: the browser
  * loses them on refresh. What survives in `localStorage` is the queue's
@@ -102,6 +113,42 @@ export function CaptureSession() {
     {},
   );
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [quota, setQuota] = useState<QuotaState>({ status: "unknown" });
+
+  const refreshQuota = useRef(async () => {
+    try {
+      const headroom = GetQuotaHeadroomResponseSchema.parse(
+        await requestJson("/api/v1/quota", { method: "GET" }),
+      );
+      setQuota(
+        headroom.admissible
+          ? { status: "ok" }
+          : {
+              status: "blocked",
+              blockedBy: headroom.blockedBy,
+              message: quotaBlockedMessage(headroom.blockedBy),
+            },
+      );
+    } catch {
+      // Best-effort UX signal only; a failed check must never block the
+      // session, since submit/retry remain the real, authoritative gate.
+      setQuota({ status: "unknown" });
+    }
+  }).current;
+
+  useEffect(() => {
+    void refreshQuota();
+  }, [refreshQuota]);
+
+  // Advisory headroom can free up on its own (an active scan finishes, a
+  // day/budget window rolls over); poll for that instead of retrying the
+  // blocked action itself, so a still-exhausted quota never turns into a
+  // tight request loop.
+  useEffect(() => {
+    if (quota.status !== "blocked" || sessionRunning) return;
+    const interval = setInterval(() => void refreshQuota(), 20_000);
+    return () => clearInterval(interval);
+  }, [quota.status, sessionRunning, refreshQuota]);
 
   useEffect(() => {
     recordsRef.current = records;
@@ -466,6 +513,15 @@ export function CaptureSession() {
       }
     } catch (caught) {
       if (controller.signal.aborted) return;
+      if (
+        caught instanceof ApiRequestError &&
+        caught.code === "quota_exceeded"
+      ) {
+        // Advisory admission can pass and still lose the race to the
+        // authoritative check at submit; refresh the banner rather than
+        // silently retrying, so the user sees why and when it may clear.
+        void refreshQuota();
+      }
       updateRecord(clientId, (item) => ({
         ...item,
         status: "failed",
@@ -529,6 +585,12 @@ export function CaptureSession() {
             </button>
           </div>
         </div>
+      ) : null}
+
+      {quota.status === "blocked" ? (
+        <p className="capture-session__quota-banner" role="status">
+          {quota.message}
+        </p>
       ) : null}
 
       {submittedCount > 0 && batchId ? (
@@ -604,7 +666,9 @@ export function CaptureSession() {
             <div className="button-row multi-view-upload__actions">
               <button
                 className="primary-button"
-                disabled={sessionRunning || !canStart}
+                disabled={
+                  sessionRunning || !canStart || quota.status === "blocked"
+                }
                 onClick={startSession}
                 type="button"
               >
@@ -859,15 +923,41 @@ async function sha256(file: File) {
   ).join("");
 }
 
+class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | undefined,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 async function requestJson(url: string, init: RequestInit) {
   const response = await fetch(url, init);
-  const body = (await response.json()) as { error?: { message?: string } };
+  const body = (await response.json()) as {
+    error?: { code?: string; message?: string };
+  };
   if (!response.ok) {
-    throw new Error(
+    throw new ApiRequestError(
       body.error?.message ?? "The request could not be completed.",
+      body.error?.code,
     );
   }
   return body;
+}
+
+function quotaBlockedMessage(reason: QuotaHeadroomReason | null) {
+  switch (reason) {
+    case "active_scan_limit":
+      return "You already have the maximum number of scans in progress. New records will wait until one finishes.";
+    case "daily_analysis_limit":
+      return "You've reached today's scan limit. Capture will resume after it resets.";
+    case "monthly_spend_limit":
+      return "This would exceed your monthly analysis budget. Capture will resume after the budget period resets.";
+    default:
+      return "Capacity is limited right now. Please try again shortly.";
+  }
 }
 
 function uploadFile(
