@@ -19,10 +19,14 @@ the log.
   `docs/ROADMAP.md` replaces the placeholder with P3.1-P3.5 product maturity
   and P4.1-P4.5 measured service extraction. It incorporates the plan review's
   corrections/prerequisites, names staging/ECS for demonstrations, preserves
-  Phase 2 gates, and defers training beyond Phase 4. All milestones are planned,
-  not implemented; current architecture ADRs still apply until cutover.
-  The next implementation slice is P3.1. This session changed planning
-  documentation only.
+  Phase 2 gates, and defers training beyond Phase 4. P3.1 task 1 is now
+  implemented: `/scan` uses an extracted capture-session component instead of
+  the one-shot mode toggle, creates independent scans under an existing batch,
+  and exposes one upload-only control with one cover per record. The remaining P3.1
+  queue persistence, quotas, tracing, and cost inventory are not implemented.
+  Batch review now presents private signed thumbnails and basic candidate details,
+  with one-tap high-confidence add-to-collection or wishlist actions; current
+  architecture ADRs still apply until a future cutover.
 
 - **Staging activation:** staging publishes and reuses isolated
   `<sha>-staging` image tags and promotes verified digests to
@@ -538,14 +542,21 @@ that in mind if debugging anything OIDC/session-related).
 **Phase 3-4 planning is complete for this request (2026-09-08).**
 Read `docs/ROADMAP.md` for sequence, dependencies, deliverables, and measurable
 exit criteria. `docs/PHASE_3_4_PLAN_REVIEW.md` remains the historical review.
-Next implementation slice: P3.1, beginning with image-read, quota-headroom,
-and correlation contracts, then bounded continuous capture and durable
-review-later progress. Include the early persistent-cost inventory.
+P3.1 task 1 and the signed image-read slice are complete. Its extracted `CaptureSession` replaces `/scan`'s
+mode toggle with one upload-only control: every selected cover photo forms an
+independent record draft, and starting the session creates one batch and
+submits records independently. The next slice is P3.1 task 2: bounded upload
+concurrency, persisted queue/progress, retry/cancel, and review-later recovery.
+Batch cards now show their authenticated cover thumbnail and candidate metadata,
+and high-confidence matches can be added directly to collection or wishlist;
+both matched and needs-review candidates have direct list actions, while a
+"This isn't a match" choice exposes new scan and manual-entry paths. Next add quota headroom/admission, correlation contracts, and the
+early persistent-cost inventory.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
-and Terraform-transfer gates. No milestone implementation began this session.
-Do not default to resuming Phase 2 production incident work.
+and Terraform-transfer gates. Do not default to resuming Phase 2 production
+incident work.
 
 Things worth knowing before extending this further:
 
@@ -793,6 +804,20 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-08 - Codex.** Implemented P3.1 task 1, the `/scan`
+  capture-session refactor. `CaptureSession` replaces the mode toggle with
+  one upload-only control that creates independent cover-photo records, shows
+  the session draft, and creates/submits independent scans incrementally under a single
+  existing batch. A failed session reuses its batch, scan, upload, completion,
+  and submit idempotency keys on retry. Updated scan-flow e2e coverage and
+  API/roadmap/testing docs.
+  Also corrected Playwright's standalone-web-server command (`next start` is
+  incompatible with the app's standalone output). Verified focused Prettier,
+  `npm run check` (79/79 unit tests), and web production build. The local
+  runner reaches the standalone server but its 30-second command window
+  terminates the browser suite before a test result; rerun `npm run test:e2e`
+  in a normal terminal. No database migration or contract change.
 
 - **2026-09-08 - Claude.** Outside-evaluation session; no code changed. The
   maintainer supplied a draft Phase 3-4 plan and asked for critique and
@@ -1624,3 +1649,27 @@ test:integration` (29/29, 2 new), `npm run build` (28 routes, +2), and
   Validation: edited-document Prettier checks pass. `npm run check` stopped
   at existing formatting issues in 179 other files; lint/typecheck/tests were
   not reached. No application/infrastructure changes; build not required.
+
+- **2026-09-08 - Codex.** Reworked batch scan review into compact album cards
+  with cover thumbnails, artist/title/year, visible result state, and direct
+  high-confidence save actions for collection or wishlist. Added the
+  authenticated 60-second signed-thumbnail read endpoint (owner-scoped,
+  `private, no-store`, original fallback for pre-thumbnail records), exposed a
+  thumbnail image ID in the batch contract, and retained detailed review for
+  corrections. `npm run check` passes (79 tests); the web build completed and
+  produced `.next/BUILD_ID`.
+- **2026-09-08 - Codex.** Removed the batch-card review dead end: both matched
+  and needs-review candidates now provide direct collection/wishlist confirmation.
+  Rejecting a proposed match offers a new scan or opens the same scan in
+  manual-entry mode with blank identity fields. The detailed page remains an
+  optional edit-details path. `npm run check` passes (79 tests).
+- **2026-09-08 - Codex.** Compacted the `/scan` session queue into a three-column
+  desktop album-preview grid (two columns on narrow phones). Each record card
+  now uses a square cropped cover thumbnail and reduced metadata spacing rather
+  than consuming the page width. `npm run check` passes (79 tests).
+- **2026-09-08 - Codex.** Removed the batch-card "Edit details" action. Batch
+  candidates now show available release metadata (year, label, catalog number)
+  beneath artist/title; genre, tracklist, and runtime are not yet in the AI or
+  catalog contract and are intentionally not guessed. Updated browser-test
+  navigation to avoid relying on the removed UI link. `npm run check` passes
+  (79 tests).

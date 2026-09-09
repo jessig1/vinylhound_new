@@ -2,9 +2,7 @@ import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import sharp from "sharp";
 
-// The upload input without the capture attribute is the "Upload image" path;
-// the capture input is reserved for the camera.
-const uploadInput = 'input[type="file"]:not([capture])';
+const uploadInput = 'input[aria-label="Upload photos"]';
 
 let coverJpeg: Buffer;
 let backJpeg: Buffer;
@@ -28,31 +26,33 @@ test.beforeAll(async () => {
     .toBuffer();
 });
 
-test("groups front, back, and spine photos into one labeled multi-view scan", async ({
+test("uploads selected cover photos as independently trackable records", async ({
   page,
 }) => {
   await page.goto("/scan");
-
   await page.setInputFiles(uploadInput, [
     { name: "front.jpg", mimeType: "image/jpeg", buffer: coverJpeg },
     { name: "back.jpg", mimeType: "image/jpeg", buffer: backJpeg },
     { name: "spine.jpg", mimeType: "image/jpeg", buffer: spineJpeg },
   ]);
 
-  await expect(page.getByText("3 views of one record")).toBeVisible();
-  const viewSelects = page.locator(".view-card select");
-  await expect(viewSelects).toHaveCount(3);
-  await expect(viewSelects.nth(0)).toHaveValue("front");
-  await expect(viewSelects.nth(1)).toHaveValue("back");
-  await expect(viewSelects.nth(2)).toHaveValue("spine");
+  await expect(page.getByText("3 records ready")).toBeVisible();
+  await expect(page.getByText("Record 1")).toBeVisible();
+  await expect(page.locator(".view-card select")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Identify album" }).click();
+  await page.getByRole("button", { name: "Start capture session" }).click();
 
+  await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/, { timeout: 30_000 });
+  await expect(page.getByText("Matched")).toHaveCount(3, { timeout: 30_000 });
+  const firstScanId = await page
+    .locator(".batch-scan-card")
+    .first()
+    .getAttribute("data-scan-id");
+  await page.goto(`/scans/${firstScanId}`);
   await page.waitForURL(/\/scans\/[0-9a-f-]{36}/, { timeout: 30_000 });
   await expect(
     page.getByRole("heading", { name: "Check the match." }),
   ).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("combined 3 labeled views")).toBeVisible();
   // Results that arrive through polling must populate the form without a reload.
   await expect(page.getByLabel("Artist")).toHaveValue("The Vinyl Hounds");
   await expect(page.getByLabel("Album title")).toHaveValue(
@@ -125,9 +125,8 @@ test("groups two front-cover photos into an independently trackable batch", asyn
   page,
 }) => {
   await page.goto("/scan");
-  await page.getByRole("button", { name: "Multiple records" }).click();
 
-  await expect(page.locator('input[type="file"][capture]')).toHaveAttribute(
+  await expect(page.getByLabel("Upload photos")).toHaveAttribute(
     "multiple",
     "",
   );
@@ -137,10 +136,10 @@ test("groups two front-cover photos into an independently trackable batch", asyn
     { name: "record-b.jpg", mimeType: "image/jpeg", buffer: backJpeg },
   ]);
 
-  await expect(page.getByText("2 records in this batch")).toBeVisible();
+  await expect(page.getByText("2 records ready")).toBeVisible();
   await expect(page.locator(".view-card select")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Identify all records" }).click();
+  await page.getByRole("button", { name: "Start capture session" }).click();
 
   await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/, { timeout: 30_000 });
   await expect(page.getByRole("heading", { name: "2 records" })).toBeVisible();
@@ -149,7 +148,11 @@ test("groups two front-cover photos into an independently trackable batch", asyn
     page.getByText("All records in this batch have finished."),
   ).toBeVisible();
 
-  await page.getByRole("link", { name: "Review" }).first().click();
+  const secondBatchScanId = await page
+    .locator(".batch-scan-card")
+    .first()
+    .getAttribute("data-scan-id");
+  await page.goto(`/scans/${secondBatchScanId}`);
   await page.waitForURL(/\/scans\/[0-9a-f-]{36}/, { timeout: 30_000 });
   await expect(
     page.getByRole("heading", { name: "Check the match." }),
@@ -171,8 +174,14 @@ test("identifies a misnamed cover photo and confirms it into the collection", as
     mimeType: "image/webp",
     buffer: coverJpeg,
   });
-  await page.getByRole("button", { name: "Identify album" }).click();
+  await page.getByRole("button", { name: "Start capture session" }).click();
 
+  await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/, { timeout: 30_000 });
+  const finalScanId = await page
+    .locator(".batch-scan-card")
+    .first()
+    .getAttribute("data-scan-id");
+  await page.goto(`/scans/${finalScanId}`);
   await page.waitForURL(/\/scans\/[0-9a-f-]{36}/, { timeout: 30_000 });
   await expect(
     page.getByRole("heading", { name: "Check the match." }),
@@ -252,7 +261,7 @@ test("rejects a file whose bytes are not an image before uploading", async ({
     mimeType: "image/webp",
     buffer: Buffer.from("These bytes are plain text, not an image."),
   });
-  await page.getByRole("button", { name: "Identify album" }).click();
+  await page.getByRole("button", { name: "Start capture session" }).click();
 
   await expect(page.locator("p.form-error")).toContainText(
     "not a JPEG, PNG, WebP, or GIF",
@@ -272,7 +281,7 @@ test("explains HEIC phone photos before uploading", async ({ page }) => {
     mimeType: "image/heic",
     buffer: heic,
   });
-  await page.getByRole("button", { name: "Identify album" }).click();
+  await page.getByRole("button", { name: "Start capture session" }).click();
 
   await expect(page.locator("p.form-error")).toContainText("HEIC");
   expect(new URL(page.url()).pathname).toBe("/scan");

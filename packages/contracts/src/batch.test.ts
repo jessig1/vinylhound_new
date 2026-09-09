@@ -14,6 +14,7 @@ describe("GetBatchResponseSchema", () => {
             status: "processing",
             createdAt: new Date().toISOString(),
             completedAt: null,
+            thumbnailImageId: null,
             topCandidate: null,
           },
           {
@@ -21,6 +22,7 @@ describe("GetBatchResponseSchema", () => {
             status: "identified",
             createdAt: new Date().toISOString(),
             completedAt: new Date().toISOString(),
+            thumbnailImageId: "00000000-0000-4000-8000-000000000005",
             topCandidate: {
               id: "00000000-0000-4000-8000-000000000004",
               rank: 1,

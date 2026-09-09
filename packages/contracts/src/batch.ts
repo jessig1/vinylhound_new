@@ -23,6 +23,7 @@ export const BatchScanSummarySchema = z
     status: ScanStatusSchema,
     createdAt: z.string().datetime(),
     completedAt: z.string().datetime().nullable(),
+    thumbnailImageId: z.string().uuid().nullable(),
     topCandidate: ScanCandidateResultSchema.nullable(),
   })
   .strict();

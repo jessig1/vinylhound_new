@@ -126,9 +126,9 @@ running dev server: a dedicated `vinylhound_e2e` database (created and migrated
 by the global setup), a dedicated queue name, and a synthetic worker
 (`apps/worker/src/e2e-worker.ts`) that exercises the real outbox, queue,
 storage, and persistence path without calling OpenAI. It covers grouping
-labeled front/back/spine photos into one multi-view scan, grouping two
-front-cover photos into an independently trackable batch (mode toggle on
-`/scan`, parallel per-item upload, the `/scans/batch/{batchId}` progress page,
+labeled cover photos into independently trackable records, grouping two
+front-cover photos into an independently trackable batch (the extracted
+capture-session flow on `/scan`, the `/scans/batch/{batchId}` progress page,
 and cross-navigation back from a batch item's review page), upload of a
 misnamed cover file (content sniffing), identification review, refresh
 recovery, confirmation into the collection, the collection listing, and

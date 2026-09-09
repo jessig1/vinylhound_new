@@ -467,12 +467,20 @@ export async function listScanSummariesForUser(
       if (!scan) {
         throw new DatabaseCommandError("not_found", "Scan not found.");
       }
+      const thumbnail = await db.query.imageAssets.findFirst({
+        where: and(
+          eq(imageAssets.scanId, scan.id),
+          isNotNull(imageAssets.completedAt),
+        ),
+        orderBy: [asc(imageAssets.createdAt), asc(imageAssets.id)],
+      });
       return {
         scanId: scan.id,
         batchId: scan.batchId,
         status: scan.status,
         createdAt: scan.createdAt.toISOString(),
         completedAt: scan.completedAt?.toISOString() ?? null,
+        thumbnailImageId: thumbnail?.id ?? null,
         topCandidate: await getTopCandidateForScan(db, scan.id),
       };
     }),

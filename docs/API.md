@@ -28,6 +28,7 @@ unaffected by which mode is active.
 | POST   | `/scans`                                     | Create a camera/single/batch scan shell       |
 | POST   | `/scans/{scanId}/uploads`                    | Request signed upload instructions            |
 | POST   | `/scans/{scanId}/uploads/{imageId}/complete` | Confirm upload and integrity metadata         |
+| GET    | `/scans/{scanId}/images/{imageId}/thumbnail` | Get a private, short-lived cover read URL     |
 | POST   | `/scans/{scanId}/submit`                     | Validate and enqueue the scan                 |
 | GET    | `/scans/{scanId}`                            | Read status, progress, candidates, and errors |
 | POST   | `/scans/{scanId}/retry`                      | Create a new attempt for a retryable scan     |
@@ -45,6 +46,12 @@ return the owning `batchId` (`null` for an ungrouped scan) so the client can
 link back to batch progress. Batch members use the `batch_upload` ingestion
 source, and the server enforces the shared 20-scan batch limit under a batch-row
 lock rather than relying on the browser limit.
+
+The `/scan` browser flow is an upload-only capture-session draft: every
+selected cover photo creates one independent record draft. Starting the session
+creates a batch and adds/submits each draft as an independent `batch_upload`
+scan. Selected local files are not yet durable before submission; later P3.1
+queue/review-later work adds recovery state around that boundary.
 
 Each requested upload declares a `viewType` (`front`, `back`, `spine`, `label`,
 `barcode`, `runout`, or `other`; defaults to `front` when omitted, preserving
@@ -269,6 +276,9 @@ continue to describe the original as uploaded.
 Images completed before migration 009 have no derived-object metadata. Retry
 and redelivery fall back to their validated original object so historical scans
 remain analyzable; all newly completed images use the bounded analysis copy.
+The thumbnail endpoint verifies scan ownership and responds with a 60-second
+signed URL. It uses the original only for those historical images and sends
+`Cache-Control: private, no-store`; signed object URLs are never persisted.
 
 The web client derives the declared MIME type from the file's magic bytes rather
 than the browser's extension-based `File.type`, so a misnamed file uploads under

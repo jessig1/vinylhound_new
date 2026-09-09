@@ -42,7 +42,10 @@ export default defineConfig({
   // server per app directory, and e2e must not disturb a running `npm run
   // dev` session.
   webServer: {
-    command: `npm run build && npm run start -- --port ${E2E_PORT}`,
+    // The application intentionally uses Next's standalone output, for which
+    // `next start` is unsupported. The traced server lives beneath the app
+    // directory because the monorepo root is the output-file-tracing root.
+    command: "npm run build && node .next-e2e/standalone/apps/web/server.js",
     url: `http://localhost:${E2E_PORT}`,
     // Playwright exports NODE_ENV=test to child processes, which makes Next
     // build against a non-production React; pin it back explicitly.
@@ -50,6 +53,7 @@ export default defineConfig({
       ...buildE2eEnv(),
       NEXT_DIST_DIR: ".next-e2e",
       NODE_ENV: "production",
+      PORT: String(E2E_PORT),
     },
     reuseExistingServer: false,
     timeout: 300_000,

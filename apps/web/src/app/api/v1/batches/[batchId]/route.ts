@@ -42,11 +42,19 @@ export async function GET(
         batchId: batch.id,
         createdAt: batch.createdAt.toISOString(),
         scans: scanSummaries.map(
-          ({ scanId, status, createdAt, completedAt, topCandidate }) => ({
+          ({
             scanId,
             status,
             createdAt,
             completedAt,
+            thumbnailImageId,
+            topCandidate,
+          }) => ({
+            scanId,
+            status,
+            createdAt,
+            completedAt,
+            thumbnailImageId,
             topCandidate,
           }),
         ),

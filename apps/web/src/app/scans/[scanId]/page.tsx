@@ -3,7 +3,7 @@
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 
 import {
   CancelScanResponseSchema,
@@ -64,6 +64,7 @@ const emptyDraft: Draft = {
 
 export default function ScanResultPage() {
   const { scanId } = useParams<{ scanId: string }>();
+  const startManually = useSearchParams().get("manual") === "1";
   const confirmationKey = useRef(`confirm-${crypto.randomUUID()}`);
   const draftInitialized = useRef(false);
   const artistInput = useRef<HTMLInputElement>(null);
@@ -120,8 +121,14 @@ export default function ScanResultPage() {
           nextScan.status !== "processing"
         ) {
           const first = nextScan.candidates[0];
-          setDraft(first ? draftFromCandidate(first) : emptyDraft);
-          setSelectedCandidateId(first?.id ?? null);
+          setDraft(
+            startManually
+              ? emptyDraft
+              : first
+                ? draftFromCandidate(first)
+                : emptyDraft,
+          );
+          setSelectedCandidateId(startManually ? null : (first?.id ?? null));
           draftInitialized.current = true;
         }
         if (nextScan.status === "queued" || nextScan.status === "processing") {
@@ -143,7 +150,13 @@ export default function ScanResultPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [scanId, pollVersion]);
+  }, [scanId, pollVersion, startManually]);
+
+  useEffect(() => {
+    if (startManually && draftInitialized.current) {
+      artistInput.current?.focus();
+    }
+  }, [startManually, scan?.status]);
 
   function selectCandidate(candidate: ScanCandidateResult) {
     setSelectedCandidateId(candidate.id);

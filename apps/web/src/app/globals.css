@@ -1259,6 +1259,103 @@ a.library-toolbar__export {
   gap: 16px;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
+.batch-scan-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.batch-scan-card {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #faf9f5;
+}
+.batch-scan-card__art {
+  width: 112px;
+  height: 112px;
+  object-fit: cover;
+  background: #ece9df;
+}
+.batch-scan-card__art--empty {
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.64rem;
+  text-align: center;
+}
+.batch-scan-card__body,
+.batch-scan-card__heading,
+.batch-scan-card__identity,
+.batch-scan-card__actions {
+  display: grid;
+  gap: 9px;
+}
+.batch-scan-card__body {
+  padding: 14px;
+}
+.batch-scan-card__identity strong,
+.batch-scan-card__identity small {
+  display: block;
+}
+.batch-scan-card__identity strong {
+  overflow: hidden;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-scan-card__identity small,
+.batch-scan-card__waiting {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.batch-scan-card__facts {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+.batch-scan-card__actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  margin-top: auto;
+}
+.batch-scan-card__actions .text-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+.batch-scan-card__actions .batch-scan-card__mismatch {
+  grid-column: 1 / -1;
+}
+.batch-scan-card__mismatch-actions {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+.batch-scan-card__mismatch-actions .secondary-button {
+  justify-content: center;
+  padding: 8px;
+  font-size: 0.7rem;
+}
+.batch-scan-card__actions .primary-button,
+.batch-scan-card__actions .secondary-button {
+  justify-content: center;
+  padding: 9px 8px;
+  font-size: 0.7rem;
+}
+.batch-scan-card__confirmed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #26734d;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
 .view-card {
   min-width: 0;
   overflow: hidden;
@@ -1322,33 +1419,76 @@ a.library-toolbar__export {
 .multi-view-upload > .form-error {
   margin-top: 18px;
 }
-.capture-mode-toggle {
-  display: inline-flex;
-  width: fit-content;
-  margin: 0 0 20px;
-  padding: 4px;
+.capture-session {
+  display: block;
+  min-height: 0;
+  padding: 32px;
+  text-align: left;
+}
+.capture-session__intro {
+  text-align: center;
+}
+.capture-session__intro .upload-card__icon {
+  margin-right: auto;
+  margin-left: auto;
+}
+.capture-session__intro > p {
+  margin-bottom: 22px;
+}
+.capture-session__actions {
+  margin-bottom: 20px;
+}
+.capture-session__queue {
+  margin-top: 30px;
+}
+.capture-session__records {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.capture-session__record {
+  min-width: 0;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #faf9f5;
 }
-.capture-mode-toggle button {
-  min-height: 44px;
-  padding: 8px 16px;
+.capture-session__record > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+.capture-session__record > header span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+.capture-session__record .view-card:only-child {
+  width: 100%;
+}
+.capture-session__record .view-grid {
+  display: block;
+}
+.capture-session__record .view-card {
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 700;
 }
-.capture-mode-toggle button.is-active {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+.capture-session__record .view-card > img {
+  aspect-ratio: 1;
+  object-fit: cover;
 }
-.capture-mode-toggle button:disabled {
-  cursor: wait;
-  opacity: 0.62;
+.capture-session__record .view-card__body {
+  gap: 7px;
+  padding: 8px 1px 0;
+}
+.capture-session__record .view-card__body small {
+  font-size: 0.7rem;
+}
+.capture-session__remove {
+  margin-top: 9px;
+  padding: 0;
 }
 .scan-tip {
   display: flex;
@@ -2144,6 +2284,9 @@ button:disabled,
 }
 
 @media (max-width: 520px) {
+  .capture-session__records {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .auth-mobile-brand {
     margin-bottom: 50px;
   }

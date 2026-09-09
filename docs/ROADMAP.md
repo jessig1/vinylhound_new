@@ -248,14 +248,14 @@ before measuring it. Retaining or returning to the monolith is a valid outcome.
 
 ### P3.1 — Continuous capture and foundations
 
-- [ ] Rewrite `/scan` as an extracted capture-session flow, replacing the one-shot
+- [x] Rewrite `/scan` as an extracted capture-session flow, replacing the one-shot
       mode-toggle control flow. Reuse independent scans and incremental membership
-      in existing batches; that grouping needs no schema/API change. Retain
-      single-record multi-view capture and manual uploads.
+      in existing batches; that grouping needs no schema/API change. The web
+      flow is intentionally upload-only and accepts one cover per record.
 - [ ] Add bounded upload concurrency, session queue, per-item progress,
       retry/cancel, and review-later navigation. Rehydrate persisted scans after
       refresh; clearly identify unuploaded local images as needing recapture.
-- [ ] Add an authenticated signed-thumbnail read endpoint with ownership checks,
+- [x] Add an authenticated signed-thumbnail read endpoint with ownership checks,
       short TTL, private cache policy, expiry refresh, and safe missing/legacy
       image fallback. Reuse the thumbnails already generated in storage.
 - [ ] Add quota-headroom contracts/polling and an early admission check before

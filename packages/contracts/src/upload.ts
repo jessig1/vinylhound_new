@@ -10,6 +10,7 @@ export const ACCEPTED_IMAGE_MIME_TYPES = [
 export const MAX_IMAGES_PER_SCAN = 12;
 export const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 export const SIGNED_UPLOAD_TTL_SECONDS = 5 * 60;
+export const SIGNED_IMAGE_READ_TTL_SECONDS = 60;
 
 export const ImageMimeTypeSchema = z.enum(ACCEPTED_IMAGE_MIME_TYPES);
 
@@ -137,6 +138,14 @@ export const CompleteImageUploadResponseSchema = z
   })
   .strict();
 
+export const SignedImageReadSchema = z
+  .object({
+    url: z.url(),
+    expiresAt: z.string().datetime(),
+    isFallback: z.boolean(),
+  })
+  .strict();
+
 export const ApiErrorSchema = z
   .object({
     error: z
@@ -158,4 +167,5 @@ export type SignedUpload = z.infer<typeof SignedUploadSchema>;
 export type CompleteImageUploadResponse = z.infer<
   typeof CompleteImageUploadResponseSchema
 >;
+export type SignedImageRead = z.infer<typeof SignedImageReadSchema>;
 export type ApiError = z.infer<typeof ApiErrorSchema>;
