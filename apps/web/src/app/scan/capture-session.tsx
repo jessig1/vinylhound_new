@@ -2,6 +2,7 @@
 
 import type { ChangeEvent } from "react";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import {
@@ -18,55 +19,89 @@ import {
 
 import { Icon } from "../ui";
 
-type Phase =
-  "ready" | "hashing" | "preparing" | "uploading" | "validating" | "submitting";
+const UPLOAD_CONCURRENCY = 3;
+const CAPTURE_SESSION_STORAGE_KEY = "vinylhound.captureSession.v1";
 
-type SelectedImage = {
-  clientId: string;
-  file: File;
-  preview: string;
-};
+type ProcessingStage =
+  "hashing" | "preparing" | "uploading" | "validating" | "submitting";
 
-type SessionRecord = {
-  clientId: string;
-  images: SelectedImage[];
-};
+type RecordStatus =
+  "idle" | "needs-recapture" | "queued" | "processing" | "failed";
+
+type SelectedImage = { file: File; preview: string };
 
 type PreparedImage = SelectedImage & {
   mimeType: ImageMimeType;
   checksumSha256: string;
 };
 
-type CaptureSessionWorkflow = {
+type SessionRecord = {
+  clientId: string;
+  fileName: string;
+  image: SelectedImage | null;
+  scanKey: string;
+  submitKey: string;
+  uploadKey: string;
+  completeKey: string;
+  scanId: string | null;
+  imageId: string | null;
+  imageCompleted: boolean;
+  status: RecordStatus;
+  stage: ProcessingStage | null;
+  error: string | null;
+};
+
+type PersistedRecord = {
+  clientId: string;
+  fileName: string;
+  scanKey: string;
+  submitKey: string;
+  uploadKey: string;
+  completeKey: string;
+  scanId: string | null;
+  imageId: string | null;
+  imageCompleted: boolean;
+};
+
+type PersistedSession = {
   batchKey: string;
-  batchId?: string;
-  records: Record<
-    string,
-    {
-      scanKey: string;
-      submitKey: string;
-      images: Record<string, { uploadKey: string; completeKey: string }>;
-    }
-  >;
+  batchId: string | null;
+  records: PersistedRecord[];
 };
 
 /**
- * A capture session is deliberately a client-side draft. Files cannot survive a
- * browser restart, but submitted scans and their batch membership do. Later
- * P3.1 work adds persisted queue state and recovery messaging around this seam.
+ * A capture session's selected files are a client-side draft: the browser
+ * loses them on refresh. What survives in `localStorage` is the queue's
+ * bookkeeping — batch/scan identity and idempotency keys — so a resumed
+ * record can skip straight to whichever step it actually reached rather than
+ * starting over. A record whose image never finished uploading has no bytes
+ * on the server either, so it comes back as "needs recapture" rather than
+ * silently retrying with nothing to send.
  */
 export function CaptureSession() {
   const router = useRouter();
   const recordsRef = useRef<SessionRecord[]>([]);
-  const workflow = useRef<CaptureSessionWorkflow | null>(null);
+  const batchKeyRef = useRef(`capture-session-${crypto.randomUUID()}`);
+  const queueRef = useRef<string[]>([]);
+  const activeCountRef = useRef(0);
+  const abortControllers = useRef<Record<string, AbortController>>({});
+  // Tracks how many records in this session have not yet been submitted.
+  // React's setState updater form does not run synchronously here (these
+  // calls happen inside awaited async work, outside any React event
+  // handler), so a value captured from inside an updater cannot be trusted
+  // immediately after calling setRecords. This ref is the reliable source
+  // for "was that the last one" when deciding whether to auto-navigate.
+  const pendingCountRef = useRef(0);
+
   const [records, setRecords] = useState<SessionRecord[]>([]);
-  const [phase, setPhase] = useState<Phase>("ready");
-  const [activeRecord, setActiveRecord] = useState(0);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [rehydrated, setRehydrated] = useState(false);
+  const [sessionRunning, setSessionRunning] = useState(false);
+  const [submittedCount, setSubmittedCount] = useState(0);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>(
     {},
   );
-  const [error, setError] = useState<string | null>(null);
-  const busy = phase !== "ready";
+  const [globalError, setGlobalError] = useState<string | null>(null);
 
   useEffect(() => {
     recordsRef.current = records;
@@ -75,108 +110,391 @@ export function CaptureSession() {
   useEffect(
     () => () => {
       for (const record of recordsRef.current) {
-        for (const image of record.images) URL.revokeObjectURL(image.preview);
+        if (record.image) URL.revokeObjectURL(record.image.preview);
       }
     },
     [],
   );
 
+  useEffect(() => {
+    const persisted = loadPersistedSession();
+    if (!persisted || persisted.records.length === 0) return;
+    batchKeyRef.current = persisted.batchKey;
+    pendingCountRef.current = persisted.records.length;
+    setBatchId(persisted.batchId);
+    setRecords(
+      persisted.records.map((record) => ({
+        ...record,
+        image: null,
+        status: record.imageCompleted ? "idle" : "needs-recapture",
+        stage: null,
+        error: null,
+      })),
+    );
+    setRehydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!batchId) return;
+    persistSession({
+      batchKey: batchKeyRef.current,
+      batchId,
+      records: records.map(
+        ({
+          clientId,
+          fileName,
+          scanKey,
+          submitKey,
+          uploadKey,
+          completeKey,
+          scanId,
+          imageId,
+          imageCompleted,
+        }) => ({
+          clientId,
+          fileName,
+          scanKey,
+          submitKey,
+          uploadKey,
+          completeKey,
+          scanId,
+          imageId,
+          imageCompleted,
+        }),
+      ),
+    });
+  }, [records, batchId]);
+
   function addIndependentRecords(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    if (!files.length || busy) return;
-    if (records.length + files.length > MAX_SCANS_PER_BATCH) {
-      setError(
+    if (!files.length || sessionRunning) return;
+    if (records.length + submittedCount + files.length > MAX_SCANS_PER_BATCH) {
+      setGlobalError(
         `A capture session can include up to ${MAX_SCANS_PER_BATCH} records.`,
       );
       return;
     }
-
-    setRecords((current) => [
-      ...current,
-      ...files.map((file) => ({
-        clientId: crypto.randomUUID(),
-        images: [createSelectedImage(file)],
-      })),
-    ]);
-    setError(null);
+    pendingCountRef.current += files.length;
+    setRecords((current) => [...current, ...files.map(createIdleRecord)]);
+    setGlobalError(null);
   }
 
-  function removeRecord(recordId: string) {
-    const record = records.find((item) => item.clientId === recordId);
-    if (record) {
-      for (const image of record.images) URL.revokeObjectURL(image.preview);
-    }
+  function attachRecapture(
+    clientId: string,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const image: SelectedImage = { file, preview: URL.createObjectURL(file) };
+    const staleScanId = recordsRef.current.find(
+      (record) => record.clientId === clientId,
+    )?.scanId;
     setRecords((current) =>
-      current.filter((record) => record.clientId !== recordId),
+      current.map((record) =>
+        record.clientId === clientId
+          ? {
+              ...record,
+              image,
+              fileName: file.name || record.fileName,
+              status: "idle",
+              error: null,
+              // A prior attempt may have already registered an image against
+              // this scan (or even just reserved it) before it was
+              // interrupted. Reusing that scan would either replay its
+              // /uploads idempotency key against different image bytes (a
+              // conflict) or leave that stale, never-completed image
+              // registration attached to the scan, which permanently blocks
+              // submission server-side. A reattached photo instead starts a
+              // whole new scan under fresh keys; the stale one is canceled
+              // best-effort below.
+              scanId: null,
+              imageId: null,
+              imageCompleted: false,
+              scanKey: `scan-${crypto.randomUUID()}`,
+              submitKey: `submit-${crypto.randomUUID()}`,
+              uploadKey: `upload-${crypto.randomUUID()}`,
+              completeKey: `complete-${crypto.randomUUID()}`,
+            }
+          : record,
+      ),
     );
+    if (staleScanId) {
+      requestJson(`/api/v1/scans/${staleScanId}/cancel`, {
+        method: "POST",
+        headers: { "idempotency-key": `cancel-${clientId}` },
+      }).catch(() => {
+        // Best-effort: the record already moved on to a new scan.
+      });
+    }
+  }
+
+  async function removeRecord(clientId: string) {
+    const record = recordsRef.current.find(
+      (item) => item.clientId === clientId,
+    );
+    if (!record) return;
+    queueRef.current = queueRef.current.filter((id) => id !== clientId);
+    abortControllers.current[clientId]?.abort();
+    delete abortControllers.current[clientId];
+    if (record.image) URL.revokeObjectURL(record.image.preview);
+    pendingCountRef.current = Math.max(0, pendingCountRef.current - 1);
+    setRecords((current) =>
+      current.filter((item) => item.clientId !== clientId),
+    );
+    setUploadProgress((current) => dropProgress(current, clientId));
+    if (record.scanId) {
+      try {
+        await requestJson(`/api/v1/scans/${record.scanId}/cancel`, {
+          method: "POST",
+          headers: { "idempotency-key": `cancel-${record.clientId}` },
+        });
+      } catch {
+        // Best-effort: the record is already gone from this session locally.
+      }
+    }
+  }
+
+  function retryRecord(clientId: string) {
+    setRecords((current) =>
+      current.map((record) =>
+        record.clientId === clientId
+          ? { ...record, status: "idle", error: null }
+          : record,
+      ),
+    );
+    if (batchId) enqueueRecords([clientId], batchId);
+  }
+
+  async function discardSession() {
+    const toCancel = recordsRef.current.filter((record) => record.scanId);
+    for (const record of recordsRef.current) {
+      if (record.image) URL.revokeObjectURL(record.image.preview);
+    }
+    queueRef.current = [];
+    pendingCountRef.current = 0;
+    setRecords([]);
+    setRehydrated(false);
     setUploadProgress({});
-    setError(null);
+    persistSession(null);
+    batchKeyRef.current = `capture-session-${crypto.randomUUID()}`;
+    setBatchId(null);
+    await Promise.allSettled(
+      toCancel.map((record) =>
+        requestJson(`/api/v1/scans/${record.scanId}/cancel`, {
+          method: "POST",
+          headers: { "idempotency-key": `cancel-${record.clientId}` },
+        }).catch(() => {}),
+      ),
+    );
   }
 
   async function startSession() {
-    if (!records.length || busy) return;
-    setError(null);
-    setUploadProgress({});
-    setPhase("hashing");
+    if (sessionRunning) return;
+    setGlobalError(null);
     try {
-      const keys =
-        workflow.current ??
-        (workflow.current = {
-          batchKey: `capture-session-${crypto.randomUUID()}`,
-          records: {},
-        });
-      const preparedRecords = await Promise.all(
-        records.map(async (record) => ({
-          ...record,
-          images: await Promise.all(record.images.map(prepareImage)),
-        })),
-      );
-
-      setPhase("preparing");
-      const batchId =
-        keys.batchId ??
-        CreateBatchResponseSchema.parse(
+      let targetBatchId = batchId;
+      if (!targetBatchId) {
+        const created = CreateBatchResponseSchema.parse(
           await requestJson("/api/v1/batches", {
             method: "POST",
             headers: {
               "content-type": "application/json",
-              "idempotency-key": keys.batchKey,
+              "idempotency-key": batchKeyRef.current,
             },
             body: JSON.stringify({}),
           }),
-        ).batchId;
-      keys.batchId = batchId;
-
-      // Each record is created independently against the already-created batch.
-      // This uses the existing incremental batch membership contract rather than
-      // treating the selected files as one composite scan.
-      for (const [index, record] of preparedRecords.entries()) {
-        setActiveRecord(index + 1);
-        await uploadRecord(
-          record,
-          batchId,
-          recordWorkflowKeys(keys, record),
-          (imageId, progress) => {
-            setUploadProgress((current) => ({
-              ...current,
-              [imageId]: progress,
-            }));
-          },
-          setPhase,
         );
+        targetBatchId = created.batchId;
+        setBatchId(targetBatchId);
       }
-      router.push(`/scans/batch/${batchId}`);
+      const idleIds = recordsRef.current
+        .filter((record) => record.status === "idle")
+        .map((record) => record.clientId);
+      enqueueRecords(idleIds, targetBatchId);
     } catch (caught) {
-      setPhase("ready");
-      setActiveRecord(0);
-      setError(
+      setGlobalError(
         caught instanceof Error
           ? caught.message
           : "The capture session could not be started. Please try again.",
       );
     }
   }
+
+  function enqueueRecords(clientIds: string[], targetBatchId: string) {
+    const eligible = clientIds.filter((id) => !queueRef.current.includes(id));
+    if (!eligible.length) return;
+    setRecords((current) =>
+      current.map((record) =>
+        eligible.includes(record.clientId)
+          ? { ...record, status: "queued" }
+          : record,
+      ),
+    );
+    queueRef.current.push(...eligible);
+    pump(targetBatchId);
+  }
+
+  function pump(targetBatchId: string) {
+    while (
+      activeCountRef.current < UPLOAD_CONCURRENCY &&
+      queueRef.current.length > 0
+    ) {
+      const clientId = queueRef.current.shift();
+      if (!clientId) break;
+      activeCountRef.current += 1;
+      setSessionRunning(true);
+      void processRecord(clientId, targetBatchId).finally(() => {
+        activeCountRef.current -= 1;
+        if (activeCountRef.current === 0 && queueRef.current.length === 0) {
+          setSessionRunning(false);
+        }
+        pump(targetBatchId);
+      });
+    }
+  }
+
+  async function processRecord(clientId: string, targetBatchId: string) {
+    const controller = new AbortController();
+    abortControllers.current[clientId] = controller;
+    try {
+      const record = recordsRef.current.find(
+        (item) => item.clientId === clientId,
+      );
+      if (!record) return;
+      if (!record.image) {
+        throw new Error("This record needs a photo before it can be uploaded.");
+      }
+
+      updateRecord(clientId, (item) => ({
+        ...item,
+        status: "processing",
+        stage: "hashing",
+      }));
+      const prepared = await prepareImage(record.image);
+
+      let scanId = record.scanId;
+      if (!scanId) {
+        updateRecord(clientId, (item) => ({ ...item, stage: "preparing" }));
+        const scan = CreateScanResponseSchema.parse(
+          await requestJson("/api/v1/scans", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": record.scanKey,
+            },
+            body: JSON.stringify({
+              source: "batch_upload",
+              batchId: targetBatchId,
+            }),
+            signal: controller.signal,
+          }),
+        );
+        validateAgainstScanLimits(prepared, scan.limits);
+        scanId = scan.scanId;
+        updateRecord(clientId, (item) => ({ ...item, scanId }));
+      }
+
+      if (!record.imageCompleted) {
+        updateRecord(clientId, (item) => ({ ...item, stage: "preparing" }));
+        const signedUpload = SignedUploadSchema.parse(
+          await requestJson(`/api/v1/scans/${scanId}/uploads`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": record.uploadKey,
+            },
+            body: JSON.stringify({
+              filename: prepared.file.name || "record-photo",
+              viewType: "front",
+              mimeType: prepared.mimeType,
+              sizeBytes: prepared.file.size,
+              checksumSha256: prepared.checksumSha256,
+            }),
+            signal: controller.signal,
+          }),
+        );
+        updateRecord(clientId, (item) => ({ ...item, stage: "uploading" }));
+        await uploadFile(
+          signedUpload,
+          prepared.file,
+          (progress) =>
+            setUploadProgress((current) => ({
+              ...current,
+              [clientId]: progress,
+            })),
+          controller.signal,
+        );
+        updateRecord(clientId, (item) => ({ ...item, stage: "validating" }));
+        CompleteImageUploadResponseSchema.parse(
+          await requestJson(
+            `/api/v1/scans/${scanId}/uploads/${signedUpload.imageId}/complete`,
+            {
+              method: "POST",
+              headers: { "idempotency-key": record.completeKey },
+              signal: controller.signal,
+            },
+          ),
+        );
+        updateRecord(clientId, (item) => ({
+          ...item,
+          imageId: signedUpload.imageId,
+          imageCompleted: true,
+        }));
+      }
+
+      updateRecord(clientId, (item) => ({ ...item, stage: "submitting" }));
+      SubmitScanResponseSchema.parse(
+        await requestJson(`/api/v1/scans/${scanId}/submit`, {
+          method: "POST",
+          headers: { "idempotency-key": record.submitKey },
+          signal: controller.signal,
+        }),
+      );
+
+      if (record.image) URL.revokeObjectURL(record.image.preview);
+      pendingCountRef.current = Math.max(0, pendingCountRef.current - 1);
+      setRecords((current) =>
+        current.filter((item) => item.clientId !== clientId),
+      );
+      setSubmittedCount((count) => count + 1);
+      setUploadProgress((current) => dropProgress(current, clientId));
+      if (pendingCountRef.current === 0) {
+        persistSession(null);
+        router.push(`/scans/batch/${targetBatchId}`);
+      }
+    } catch (caught) {
+      if (controller.signal.aborted) return;
+      updateRecord(clientId, (item) => ({
+        ...item,
+        status: "failed",
+        stage: null,
+        error:
+          caught instanceof Error
+            ? caught.message
+            : "This record could not be uploaded.",
+      }));
+    } finally {
+      delete abortControllers.current[clientId];
+    }
+  }
+
+  function updateRecord(
+    clientId: string,
+    updater: (record: SessionRecord) => SessionRecord,
+  ) {
+    setRecords((current) =>
+      current.map((record) =>
+        record.clientId === clientId ? updater(record) : record,
+      ),
+    );
+  }
+
+  const needsRecaptureCount = records.filter(
+    (record) => record.status === "needs-recapture",
+  ).length;
+  const canStart = records.some((record) => record.status === "idle");
 
   return (
     <main className="content-page scan-page">
@@ -191,7 +509,41 @@ export function CaptureSession() {
         </div>
       </header>
 
-      <section className="upload-card capture-session" aria-busy={busy}>
+      {rehydrated && records.length > 0 ? (
+        <div className="capture-session__resume-banner" role="status">
+          <p>
+            We restored {records.length}{" "}
+            {records.length === 1 ? "record" : "records"} from your last
+            session.
+            {needsRecaptureCount > 0
+              ? ` ${needsRecaptureCount} ${needsRecaptureCount === 1 ? "needs" : "need"} a photo reattached before it can continue.`
+              : ""}
+          </p>
+          <div className="button-row">
+            <button
+              className="text-button"
+              onClick={discardSession}
+              type="button"
+            >
+              Discard session
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {submittedCount > 0 && batchId ? (
+        <p className="capture-session__review-link" role="status">
+          {submittedCount} {submittedCount === 1 ? "record" : "records"}{" "}
+          submitted so far.{" "}
+          <Link href={`/scans/batch/${batchId}`}>Review them now</Link> — the
+          rest will keep going here.
+        </p>
+      ) : null}
+
+      <section
+        className="upload-card capture-session"
+        aria-busy={sessionRunning}
+      >
         <div className="capture-session__intro">
           <span className="upload-card__icon">
             <Icon name="upload" size={28} />
@@ -204,12 +556,14 @@ export function CaptureSession() {
         </div>
 
         <div className="capture-session__actions button-row">
-          <label className={`primary-button${busy ? " is-disabled" : ""}`}>
+          <label
+            className={`primary-button${sessionRunning ? " is-disabled" : ""}`}
+          >
             <Icon name="upload" size={18} /> Upload photos
             <input
               accept="image/jpeg,image/png,image/webp,image/gif"
               aria-label="Upload photos"
-              disabled={busy}
+              disabled={sessionRunning}
               multiple
               onChange={addIndependentRecords}
               type="file"
@@ -221,12 +575,12 @@ export function CaptureSession() {
           <div className="capture-session__queue">
             <div className="multi-view-upload__heading">
               <span
-                className={`status ${busy ? "status--review" : "status--success"}`}
+                className={`status ${sessionRunning ? "status--review" : "status--success"}`}
               >
-                <Icon name={busy ? "clock" : "check"} size={14} />
-                {busy
-                  ? phaseLabel(phase, activeRecord, records.length)
-                  : `${records.length} ${records.length === 1 ? "record" : "records"} ready`}
+                <Icon name={sessionRunning ? "clock" : "check"} size={14} />
+                {sessionRunning
+                  ? "Uploading your session…"
+                  : `${records.length} ${records.length === 1 ? "record" : "records"} in this session`}
               </span>
               <h2>Your session</h2>
               <p>
@@ -236,76 +590,38 @@ export function CaptureSession() {
             </div>
             <div className="capture-session__records">
               {records.map((record, recordIndex) => (
-                <article
-                  className="capture-session__record"
+                <RecordCard
                   key={record.clientId}
-                >
-                  <header>
-                    <strong>Record {recordIndex + 1}</strong>
-                    <span>Cover photo</span>
-                  </header>
-                  <div className="view-grid">
-                    {record.images.map((image) => (
-                      <div className="view-card" key={image.clientId}>
-                        <img
-                          alt={`Preview of ${image.file.name || "record photo"}`}
-                          src={image.preview}
-                        />
-                        <div className="view-card__body">
-                          <small title={image.file.name}>
-                            {image.file.name || "Record photo"}
-                          </small>
-                          {uploadProgress[image.clientId] !== undefined ? (
-                            <div
-                              aria-label={`Upload progress for ${image.file.name || "record photo"}`}
-                              aria-valuemax={100}
-                              aria-valuemin={0}
-                              aria-valuenow={uploadProgress[image.clientId]}
-                              className="upload-progress"
-                              role="progressbar"
-                            >
-                              <span
-                                style={{
-                                  width: `${uploadProgress[image.clientId]}%`,
-                                }}
-                              />
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <button
-                    aria-label={`Remove record ${recordIndex + 1}`}
-                    className="text-button capture-session__remove"
-                    disabled={busy}
-                    onClick={() => removeRecord(record.clientId)}
-                    type="button"
-                  >
-                    Remove record
-                  </button>
-                </article>
+                  onAttach={(event) => attachRecapture(record.clientId, event)}
+                  onRemove={() => removeRecord(record.clientId)}
+                  onRetry={() => retryRecord(record.clientId)}
+                  progress={uploadProgress[record.clientId]}
+                  record={record}
+                  recordIndex={recordIndex}
+                />
               ))}
             </div>
             <div className="button-row multi-view-upload__actions">
               <button
                 className="primary-button"
-                disabled={busy}
+                disabled={sessionRunning || !canStart}
                 onClick={startSession}
                 type="button"
               >
                 <Icon name="sparkle" size={18} />
-                {busy
-                  ? phaseLabel(phase, activeRecord, records.length)
-                  : "Start capture session"}
+                {sessionRunning
+                  ? "Uploading…"
+                  : batchId
+                    ? "Resume session"
+                    : "Start capture session"}
               </button>
             </div>
           </div>
         ) : null}
 
-        {error ? (
+        {globalError ? (
           <p className="form-error" role="alert">
-            {error}
+            {globalError}
           </p>
         ) : null}
         <small>
@@ -328,118 +644,170 @@ export function CaptureSession() {
   );
 }
 
-function createSelectedImage(file: File): SelectedImage {
+function RecordCard({
+  record,
+  recordIndex,
+  progress,
+  onRemove,
+  onRetry,
+  onAttach,
+}: {
+  record: SessionRecord;
+  recordIndex: number;
+  progress: number | undefined;
+  onRemove: () => void;
+  onRetry: () => void;
+  onAttach: (event: ChangeEvent<HTMLInputElement>) => void;
+}) {
+  const removable =
+    record.status === "idle" || record.status === "needs-recapture";
+
+  return (
+    <article className="capture-session__record" data-status={record.status}>
+      <header>
+        <strong>Record {recordIndex + 1}</strong>
+        <span className={`status ${recordStatusTone(record.status)}`}>
+          {recordStatusLabel(record)}
+        </span>
+      </header>
+
+      {record.status === "needs-recapture" ? (
+        <div className="capture-session__recapture">
+          <p>
+            This device lost the photo for &ldquo;{record.fileName}&rdquo;.
+            Attach it again to continue.
+          </p>
+          <div className="button-row">
+            <label className="secondary-button">
+              <Icon name="camera" size={16} /> Attach photo
+              <input
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                aria-label={`Attach a photo for record ${recordIndex + 1}`}
+                onChange={onAttach}
+                type="file"
+              />
+            </label>
+          </div>
+        </div>
+      ) : record.image ? (
+        <div className="view-grid">
+          <div className="view-card">
+            <img
+              alt={`Preview of ${record.fileName}`}
+              src={record.image.preview}
+            />
+            <div className="view-card__body">
+              <small title={record.fileName}>{record.fileName}</small>
+              {progress !== undefined ? (
+                <div
+                  aria-label={`Upload progress for ${record.fileName}`}
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={progress}
+                  className="upload-progress"
+                  role="progressbar"
+                >
+                  <span style={{ width: `${progress}%` }} />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {record.error ? (
+        <p className="form-error" role="alert">
+          {record.error}
+        </p>
+      ) : null}
+
+      <div className="button-row">
+        {record.status === "failed" ? (
+          <button className="text-button" onClick={onRetry} type="button">
+            Retry
+          </button>
+        ) : null}
+        <button
+          aria-label={
+            removable
+              ? `Remove record ${recordIndex + 1}`
+              : `Cancel record ${recordIndex + 1}`
+          }
+          className="text-button capture-session__remove"
+          onClick={onRemove}
+          type="button"
+        >
+          {removable ? "Remove record" : "Cancel"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function dropProgress(
+  current: Record<string, number>,
+  clientId: string,
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(current).filter(([id]) => id !== clientId),
+  );
+}
+
+function createIdleRecord(file: File): SessionRecord {
   return {
     clientId: crypto.randomUUID(),
-    file,
-    preview: URL.createObjectURL(file),
-  };
-}
-
-function phaseLabel(phase: Phase, activeRecord: number, recordCount: number) {
-  const suffix = activeRecord ? ` ${activeRecord} of ${recordCount}` : "";
-  switch (phase) {
-    case "hashing":
-      return "Checking images…";
-    case "preparing":
-      return `Preparing record${suffix}…`;
-    case "uploading":
-      return `Uploading record${suffix}…`;
-    case "validating":
-      return `Validating record${suffix}…`;
-    case "submitting":
-      return `Starting record${suffix}…`;
-    default:
-      return "Ready to scan";
-  }
-}
-
-async function uploadRecord(
-  record: SessionRecord & { images: PreparedImage[] },
-  batchId: string,
-  keys: CaptureSessionWorkflow["records"][string],
-  onProgress: (imageId: string, progress: number) => void,
-  setPhase: (phase: Phase) => void,
-) {
-  setPhase("preparing");
-  const scan = CreateScanResponseSchema.parse(
-    await requestJson("/api/v1/scans", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "idempotency-key": keys.scanKey,
-      },
-      body: JSON.stringify({ source: "batch_upload", batchId }),
-    }),
-  );
-  validateAgainstScanLimits(record.images, scan.limits);
-
-  for (const image of record.images) {
-    const imageKeys = keys.images[image.clientId];
-    if (!imageKeys)
-      throw new Error("The capture session could not be resumed.");
-    setPhase("preparing");
-    const signedUpload = SignedUploadSchema.parse(
-      await requestJson(`/api/v1/scans/${scan.scanId}/uploads`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": imageKeys.uploadKey,
-        },
-        body: JSON.stringify({
-          filename: image.file.name || "record-photo",
-          viewType: "front",
-          mimeType: image.mimeType,
-          sizeBytes: image.file.size,
-          checksumSha256: image.checksumSha256,
-        }),
-      }),
-    );
-    setPhase("uploading");
-    await uploadFile(signedUpload, image.file, (progress) =>
-      onProgress(image.clientId, progress),
-    );
-    setPhase("validating");
-    CompleteImageUploadResponseSchema.parse(
-      await requestJson(
-        `/api/v1/scans/${scan.scanId}/uploads/${signedUpload.imageId}/complete`,
-        {
-          method: "POST",
-          headers: { "idempotency-key": imageKeys.completeKey },
-        },
-      ),
-    );
-  }
-  setPhase("submitting");
-  SubmitScanResponseSchema.parse(
-    await requestJson(`/api/v1/scans/${scan.scanId}/submit`, {
-      method: "POST",
-      headers: { "idempotency-key": keys.submitKey },
-    }),
-  );
-}
-
-function recordWorkflowKeys(
-  workflow: CaptureSessionWorkflow,
-  record: SessionRecord,
-): CaptureSessionWorkflow["records"][string] {
-  const existing = workflow.records[record.clientId];
-  if (existing) return existing;
-  const keys = {
+    fileName: file.name || "Record photo",
+    image: { file, preview: URL.createObjectURL(file) },
     scanKey: `scan-${crypto.randomUUID()}`,
     submitKey: `submit-${crypto.randomUUID()}`,
-    images: Object.fromEntries(
-      record.images.map((image) => [
-        image.clientId,
-        {
-          uploadKey: `upload-${crypto.randomUUID()}`,
-          completeKey: `complete-${crypto.randomUUID()}`,
-        },
-      ]),
-    ),
+    uploadKey: `upload-${crypto.randomUUID()}`,
+    completeKey: `complete-${crypto.randomUUID()}`,
+    scanId: null,
+    imageId: null,
+    imageCompleted: false,
+    status: "idle",
+    stage: null,
+    error: null,
   };
-  workflow.records[record.clientId] = keys;
-  return keys;
+}
+
+function recordStatusLabel(record: SessionRecord) {
+  switch (record.status) {
+    case "idle":
+      return "Ready";
+    case "needs-recapture":
+      return "Needs recapture";
+    case "queued":
+      return "Queued";
+    case "processing":
+      return stageLabel(record.stage);
+    case "failed":
+      return "Failed";
+  }
+}
+
+function recordStatusTone(status: RecordStatus) {
+  if (status === "failed") return "status--error";
+  if (status === "needs-recapture") return "status--review";
+  if (status === "idle") return "status--success";
+  return "status--review";
+}
+
+function stageLabel(stage: ProcessingStage | null) {
+  switch (stage) {
+    case "hashing":
+      return "Checking image…";
+    case "preparing":
+      return "Preparing…";
+    case "uploading":
+      return "Uploading…";
+    case "validating":
+      return "Validating…";
+    case "submitting":
+      return "Starting…";
+    default:
+      return "Processing…";
+  }
 }
 
 async function prepareImage(image: SelectedImage): Promise<PreparedImage> {
@@ -463,27 +831,21 @@ async function prepareImage(image: SelectedImage): Promise<PreparedImage> {
 }
 
 function validateAgainstScanLimits(
-  images: readonly PreparedImage[],
+  image: PreparedImage,
   limits: {
     acceptedMimeTypes: readonly ImageMimeType[];
-    maxImages: number;
     maxImageSizeBytes: number;
   },
 ) {
-  if (images.length > limits.maxImages) {
-    throw new Error(`One record can include up to ${limits.maxImages} views.`);
+  if (!limits.acceptedMimeTypes.includes(image.mimeType)) {
+    throw new Error(
+      `${image.file.name}: choose a JPEG, PNG, WebP, or GIF image.`,
+    );
   }
-  for (const image of images) {
-    if (!limits.acceptedMimeTypes.includes(image.mimeType)) {
-      throw new Error(
-        `${image.file.name}: choose a JPEG, PNG, WebP, or GIF image.`,
-      );
-    }
-    if (image.file.size > limits.maxImageSizeBytes) {
-      throw new Error(
-        `${image.file.name}: that image is larger than the 10 MB limit.`,
-      );
-    }
+  if (image.file.size > limits.maxImageSizeBytes) {
+    throw new Error(
+      `${image.file.name}: that image is larger than the 10 MB limit.`,
+    );
   }
 }
 
@@ -516,6 +878,7 @@ function uploadFile(
   },
   file: File,
   onProgress: (progress: number) => void,
+  signal: AbortSignal,
 ) {
   return new Promise<void>((resolve, reject) => {
     const request = new XMLHttpRequest();
@@ -537,6 +900,64 @@ function uploadFile(
     request.addEventListener("error", () =>
       reject(new Error("The image upload was interrupted. Please try again.")),
     );
+    request.addEventListener("abort", () =>
+      reject(new Error("The image upload was canceled.")),
+    );
+    signal.addEventListener("abort", () => request.abort());
+    if (signal.aborted) {
+      request.abort();
+      return;
+    }
     request.send(file);
   });
+}
+
+function loadPersistedSession(): PersistedSession | null {
+  try {
+    const raw = localStorage.getItem(CAPTURE_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isPersistedSession(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSession(session: PersistedSession | null) {
+  try {
+    if (!session) {
+      localStorage.removeItem(CAPTURE_SESSION_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(CAPTURE_SESSION_STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // Best-effort: a full or blocked store should not break the session.
+  }
+}
+
+function isPersistedSession(value: unknown): value is PersistedSession {
+  if (!value || typeof value !== "object") return false;
+  const session = value as Partial<PersistedSession>;
+  return (
+    typeof session.batchKey === "string" &&
+    (session.batchId === null || typeof session.batchId === "string") &&
+    Array.isArray(session.records) &&
+    session.records.every(isPersistedRecord)
+  );
+}
+
+function isPersistedRecord(value: unknown): value is PersistedRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<PersistedRecord>;
+  return (
+    typeof record.clientId === "string" &&
+    typeof record.fileName === "string" &&
+    typeof record.scanKey === "string" &&
+    typeof record.submitKey === "string" &&
+    typeof record.uploadKey === "string" &&
+    typeof record.completeKey === "string" &&
+    (record.scanId === null || typeof record.scanId === "string") &&
+    (record.imageId === null || typeof record.imageId === "string") &&
+    typeof record.imageCompleted === "boolean"
+  );
 }

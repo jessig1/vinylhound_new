@@ -15,6 +15,64 @@ the log.
 
 ## Current state — verified 2026-09-09
 
+- **P3.1 task 2: bounded upload concurrency, a persisted session queue,
+  retry/cancel, review-later navigation, and refresh recovery for `/scan`.**
+  `apps/web/src/app/scan/capture-session.tsx` was rewritten from a single
+  global phase/one-record-at-a-time loop into a per-record state machine
+  (`idle` / `needs-recapture` / `queued` / `processing` / `failed`) driven by
+  a small worker-pool queue (`UPLOAD_CONCURRENCY = 3`): up to three records
+  create-scan/upload/complete/submit concurrently, each with its own progress
+  bar, retry button, and cancel button (best-effort server-side `cancel` if a
+  scan already exists). Once a batch exists, the queue's bookkeeping —
+  batch/scan identity and every idempotency key, but never file bytes —
+  persists to `localStorage` on every change and rehydrates on mount: a
+  record whose image had already been confirmed uploaded resumes as `idle`
+  (just needs a submit retry), while one that hadn't shows "Needs recapture"
+  with its original filename and a control to reattach a photo, since the
+  browser cannot retain `File` objects across a reload. A "N submitted so
+  far — review them now" link to `/scans/batch/{batchId}` appears once
+  anything has been submitted, so a user is not forced to wait for the whole
+  session; the page still auto-navigates there once every record finishes.
+  No contract, schema, or API change — this is purely a client-side queue
+  built on the existing `/batches`, `/scans`, `/scans/{id}/uploads`,
+  `/scans/{id}/uploads/{id}/complete`, `/scans/{id}/submit`, and
+  `/scans/{id}/cancel` routes.
+  Two real bugs were found and fixed during verification, both specific to
+  the recapture-after-refresh path (an untested seam before this session):
+  (1) reattaching a _different_ photo than the original while reusing the
+  original upload/complete idempotency keys hit the server's idempotency
+  conflict guard (`409`, "idempotency key already used with different image
+  data"), since those keys' payload includes the file's checksum/size; (2)
+  even after minting fresh upload/complete keys, reusing the _same scan_
+  left the original, never-completed image registration attached to it,
+  and the server correctly refuses to submit a scan with any incomplete
+  registered image (`409`, "All registered images must finish uploading
+  before submission") — an interrupted-then-resumed record can never
+  progress on the same `scanId`. The fix: `attachRecapture` now discards the
+  old scan entirely (best-effort `cancel`, fire-and-forget) and mints a
+  whole new `scanKey`/`submitKey`/`uploadKey`/`completeKey` set, so a
+  reattached photo always starts a clean scan rather than resuming a
+  partially-registered one. A third bug was in the verification approach,
+  not the product: relying on a value assigned inside a `setRecords`
+  updater immediately after calling it (to detect "was this the last
+  record, so auto-navigate now") silently never fired, because that updater
+  does not run synchronously outside a React event handler — fixed by
+  tracking the pending-record count in a plain ref (`pendingCountRef`)
+  instead, which is the only value the auto-navigate check now reads.
+  Verified: `npm run check` (79/79 unit tests), `npm run build`, and a
+  scripted Playwright pass against a real dev server (Postgres/Redis/MinIO,
+  `AUTH_MODE=development`) with real small PNGs — confirmed at most 3
+  concurrent uploads, a mid-upload reload producing the resume banner with
+  correct per-record needs-recapture/ready state, a full recapture-with-a-
+  different-photo-then-resume cycle completing with zero console errors and
+  a correct auto-navigate, and a queued/mid-upload record's cancel button
+  correctly excluding it from the resulting batch (3 of 4 scan cards, as
+  expected). Manual dev-server verification needed its own isolated
+  `next dev` instance (`NEXT_DIST_DIR`-scoped, matching the existing e2e
+  pattern) because another `next dev` was already holding the project's
+  usual dev lock; that instance and all scratch files were removed
+  afterward, and the pre-existing dev server on port 3000 was left running
+  and untouched throughout.
 - **Library UX pass: real cover art, an album detail page, and records that can
   actually be removed (ADR-0018).** The maintainer asked for a broad UI/UX
   review "as a user looking to scan albums, review album details, add, edit and
@@ -631,16 +689,24 @@ that in mind if debugging anything OIDC/session-related).
 **Phase 3-4 planning is complete for this request (2026-09-08).**
 Read `docs/ROADMAP.md` for sequence, dependencies, deliverables, and measurable
 exit criteria. `docs/PHASE_3_4_PLAN_REVIEW.md` remains the historical review.
-P3.1 task 1 and the signed image-read slice are complete. Its extracted `CaptureSession` replaces `/scan`'s
-mode toggle with one upload-only control: every selected cover photo forms an
-independent record draft, and starting the session creates one batch and
-submits records independently. The next slice is P3.1 task 2: bounded upload
-concurrency, persisted queue/progress, retry/cancel, and review-later recovery.
-Batch cards now show their authenticated cover thumbnail and candidate metadata,
-and high-confidence matches can be added directly to collection or wishlist;
-both matched and needs-review candidates have direct list actions, while a
-"This isn't a match" choice exposes new scan and manual-entry paths. Next add quota headroom/admission, correlation contracts, and the
-early persistent-cost inventory.
+P3.1 task 1, the signed image-read slice, and task 2 (bounded upload
+concurrency/session queue/retry/cancel/review-later/rehydration) are complete.
+Its extracted `CaptureSession` replaces `/scan`'s mode toggle with one
+upload-only control: every selected cover photo forms an independent record
+draft, and starting the session creates one batch and submits records
+independently, at most three at a time, with per-record retry/cancel and a
+"review them now" link to the batch page once anything has submitted. A
+refresh mid-session restores the queue's bookkeeping from `localStorage`
+(batch/scan identity and idempotency keys) and marks any record whose image
+never finished uploading as needing its photo reattached, since the browser
+does not retain file bytes across a reload. Batch cards now show their
+authenticated cover thumbnail and candidate metadata, and high-confidence
+matches can be added directly to collection or wishlist; both matched and
+needs-review candidates have direct list actions, while a "This isn't a
+match" choice exposes new scan and manual-entry paths. The next slice is
+P3.1 task 3: quota headroom/admission, active-scan/batch/daily-limit
+reconciliation, and abandoned-upload cleanup — see task 2's implementation
+note below for known follow-on gaps before starting it.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
@@ -846,6 +912,18 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 ## Known gaps and risks
 
+- **P3.1 task 2's capture-session queue (`/scan`) has no Playwright coverage
+  yet**, and two scope limitations worth knowing before extending it: the
+  "N submitted so far" review-later link's counter is in-memory only and
+  resets to zero on a refresh, so a returning user does not immediately see
+  it even though earlier records in the same batch really did submit (the
+  batch page itself is always authoritative — nothing is lost, the link is
+  just not shown again until at least one more record submits in the new
+  session); and a record that is rehydrated as "needs recapture" is labeled
+  the same way whether its upload had actually reached the server or never
+  started at all (it never had a chance to register partial server state in
+  the latter case), which is accurate but slightly imprecise. Neither
+  blocks P3.1 task 3.
 - **The `/library/{itemId}` detail page has no Playwright coverage yet.** Its
   behavior was verified by a scripted browser pass against a dev server (steps
   listed in "Current state") and by database integration tests, but nothing in
@@ -1832,3 +1910,16 @@ test:integration` (29/29, 2 new), `npm run build` (28 routes, +2), and
   `.strict()` schema bug in `GET /api/v1/scans` and a local Playwright e2e
   timeout unrelated to this change — both recorded under "Known gaps and
   risks" for whoever picks either up next.
+
+- **2026-09-09 - Claude.** Resumed the roadmap sequence: implemented P3.1
+  task 2 (bounded upload concurrency, persisted session queue, per-item
+  progress, retry/cancel, review-later navigation, refresh rehydration with
+  recapture) as a rewrite of `apps/web/src/app/scan/capture-session.tsx`; see
+  "Current state" for the full design and the two idempotency-key/orphaned-
+  scan bugs found and fixed while verifying the recapture-after-refresh path
+  against a real dev server. No contract/schema/API change. Verified
+  `npm run check` (79/79), `npm run build`, and a scripted Playwright pass
+  against Postgres/Redis/MinIO with real images covering bounded concurrency,
+  mid-upload reload/resume/recapture, and cancel-while-queued; all scratch
+  verification files and the extra `next dev` instance used for it were
+  removed afterward. Checked off task 2 in `docs/ROADMAP.md`.

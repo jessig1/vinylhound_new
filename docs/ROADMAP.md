@@ -252,7 +252,7 @@ before measuring it. Retaining or returning to the monolith is a valid outcome.
       mode-toggle control flow. Reuse independent scans and incremental membership
       in existing batches; that grouping needs no schema/API change. The web
       flow is intentionally upload-only and accepts one cover per record.
-- [ ] Add bounded upload concurrency, session queue, per-item progress,
+- [x] Add bounded upload concurrency, session queue, per-item progress,
       retry/cancel, and review-later navigation. Rehydrate persisted scans after
       refresh; clearly identify unuploaded local images as needing recapture.
 - [x] Add an authenticated signed-thumbnail read endpoint with ownership checks,
