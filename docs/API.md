@@ -32,7 +32,7 @@ unaffected by which mode is active.
 | POST   | `/scans/{scanId}/submit`                     | Validate and enqueue the scan                 |
 | GET    | `/scans/{scanId}`                            | Read status, progress, candidates, and errors |
 | POST   | `/scans/{scanId}/retry`                      | Create a new attempt for a retryable scan     |
-| POST   | `/scans/{scanId}/cancel`                     | Stop a scan that has not yet completed        |
+| POST   | `/scans/{scanId}/cancel`                     | Stop an active scan, or dismiss its result    |
 | POST   | `/scans/{scanId}/confirm`                    | Confirm/correct and add to the chosen list    |
 
 Photos of several views of one record belong to one scan, not several jobs
@@ -70,12 +70,19 @@ outbox/worker path as the original submission (`202` for the new attempt,
 by confirmation or manual correction, not a new attempt.
 
 `POST /scans/{scanId}/cancel` requires `Idempotency-Key` and no request body.
-It is valid from `awaiting_upload`, `queued`, or `processing` and always
-returns `200` with `{ "status": "canceled" }`, including on replay of an
-already-canceled scan. Canceling before the worker has dispatched the job
-skips it for good; canceling while an attempt is already processing does not
-abort that in-flight provider call — it finishes and persists a result, but
-no further attempt is queued afterward. See ADR-0006.
+It is valid from `awaiting_upload`, `queued`, or `processing` (stopping an
+active scan) and always returns `200` with `{ "status": "canceled" }`,
+including on replay of an already-canceled scan. Canceling before the worker
+has dispatched the job skips it for good; canceling while an attempt is
+already processing does not abort that in-flight provider call — it finishes
+and persists a result, but no further attempt is queued afterward. See
+ADR-0006.
+
+The same endpoint also dismisses a reviewable result: `identified`,
+`needs_review`, `unresolved`, and `failed` are cancelable too, so a user can
+discard a scan they do not want to act on without confirming it. It rejects
+with `invalid_state` if the scan already has a confirmation (`scan_confirmations`
+row) — a saved result cannot be dismissed after the fact. See ADR-0017.
 
 ## Batch endpoints
 
@@ -119,14 +126,17 @@ when no attempt in the window used a priced model.
 `GET /account/export` (ADR-0014) returns every row the requesting user owns:
 account, batches, scans, image metadata (not image bytes), attempts,
 confirmations, library items, and library copies, plus each stored image's
-`objectKey`. It has no side effects and needs no `Idempotency-Key`.
+`objectKey`. It has no side effects and needs no `Idempotency-Key`. An
+exported confirmation whose saved record was since removed carries
+`libraryItemId: null` and `list: null` (ADR-0018); the decision itself is
+still the user's data and is still exported.
 
 `DELETE /account` (ADR-0014) permanently deletes the account: `users` and
 every FK-cascaded row (`scans`, `image_assets`, `scan_attempts`,
 `scan_candidates`, `batches`, `library_items`, `library_copies`), plus the
-user's `scan_confirmations` rows deleted explicitly first (they carry
-deliberate `restrict` FKs to `library_items`/`releases` — ADR-0011 — that a
-plain cascade cannot satisfy on its own). Shared catalog rows (`albums`,
+user's `scan_confirmations` rows deleted explicitly first (they carry a
+deliberate `restrict` FK to `releases` that a plain cascade cannot satisfy on
+its own). Shared catalog rows (`albums`,
 `releases`) are never touched. Each deleted image's `original`/`analysis`/
 `thumbnail` S3 objects are then deleted best-effort. Like
 `DELETE /library/{itemId}`, no `Idempotency-Key` is required — deletion is
@@ -174,16 +184,20 @@ owned copy" rule. Moving a `collection` item to `wishlist` is rejected with
 orphaned. Per-copy condition/location/notes/acquisition-date editing is not
 part of this endpoint (ADR-0010, ADR-0011).
 
-`DELETE /library/{itemId}` rejects with `invalid_state` whenever the item has
-any `scan_confirmations` history, which is true of nearly every item created
-through the normal app flow — deleting would otherwise violate the
-confirmation table's `restrict` foreign key and break the image-to-result
-audit trail (ADR-0011). The collection/wishlist pages hide the "Remove" action
-for any item with `confirmedFromScanId` set.
+`DELETE /library/{itemId}` removes the item and cascades its copies. Any
+`scan_confirmations` row that pointed at it keeps every audit field while its
+`library_item_id` clears itself (ADR-0018, migration 012), so the decision
+survives and the originating scan reads as unconfirmed and reviewable again —
+the same record can be saved from it a second time. This supersedes ADR-0011's
+rejection of items with confirmation history, which in practice made nearly
+every real item permanently undeletable.
 
 Collection responses include `copyCount` and `copies`; each copy has optional
 media/sleeve condition, storage location, notes, and acquisition date. Wishlist
-items always contain zero copies.
+items always contain zero copies. Every item also carries `coverImage`
+(`{ scanId, imageId }` or `null`) identifying the first completed image of the
+scan it was confirmed from, which the client exchanges for a short-lived read
+URL through `GET /scans/{scanId}/images/{imageId}/thumbnail`.
 
 ## Catalog endpoint
 

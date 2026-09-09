@@ -630,9 +630,12 @@ export const scanConfirmations = pgTable(
     releaseId: uuid("release_id")
       .notNull()
       .references(() => releases.id, { onDelete: "restrict" }),
-    libraryItemId: uuid("library_item_id")
-      .notNull()
-      .references(() => libraryItems.id, { onDelete: "restrict" }),
+    // Nullable so removing a saved record keeps this audit row (ADR-0018);
+    // scan_id, release_id, reviewed_release, and confirmed_at still record
+    // exactly what was confirmed.
+    libraryItemId: uuid("library_item_id").references(() => libraryItems.id, {
+      onDelete: "set null",
+    }),
     copyId: uuid("copy_id").references(() => libraryCopies.id, {
       onDelete: "set null",
     }),

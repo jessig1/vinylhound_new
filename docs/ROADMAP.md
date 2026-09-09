@@ -333,6 +333,15 @@ the compatibility foundation separately before Phase 4 extraction.
       recover a failed scan, find an older library entry, and edit a copy.
       Record completion, assistance, and failures per task without personal data.
 
+Partial progress, 2026-09-09 (not enough to check any box above): a library
+item detail page at `/library/{itemId}` now carries per-copy editing with real
+mutation feedback, notes editing, and removal, and P3.1 image reads are wired
+into scan history and both library grids. Still outstanding for these items:
+batch review navigation, explicit last-copy rules, full-library search and
+pagination, Playwright coverage for the new page, and the participant testing.
+Saved records became removable via ADR-0018, which supersedes ADR-0011's
+delete restriction while preserving confirmation audit history.
+
 Exit: tests find/export records beyond a 100-item fixture, paginate without
 duplicates, and verify copy mutations/audit protection. All four browser profiles
 and accessibility checks pass. At least four of five participants complete every

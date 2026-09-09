@@ -1,10 +1,11 @@
-import { and, asc, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lt } from "drizzle-orm";
 
 import type {
   AlbumIdentification,
   AnalyzeScanJob,
   GetScanResponse,
   ImageMimeType,
+  LibraryList,
   ProviderErrorCategory,
   ReviewOutcomeReason,
 } from "@vinylhound/contracts";
@@ -16,7 +17,14 @@ import {
   DatabaseCommandError,
   deriveImageObjectKey,
 } from "./scan-repository.js";
-import { imageAssets, scanAttempts, scanCandidates, scans } from "./schema.js";
+import {
+  imageAssets,
+  libraryItems,
+  scanAttempts,
+  scanCandidates,
+  scanConfirmations,
+  scans,
+} from "./schema.js";
 
 export interface PrepareScanAnalysisInput {
   job: AnalyzeScanJob;
@@ -459,6 +467,26 @@ export async function listScanSummariesForUser(
   db: Database,
   input: { userId: string; scanIds: readonly string[] },
 ) {
+  const confirmedListByScanId = new Map<string, LibraryList>();
+  if (input.scanIds.length) {
+    const confirmedRows = await db
+      .select({ scanId: scanConfirmations.scanId, list: libraryItems.list })
+      .from(scanConfirmations)
+      .innerJoin(
+        libraryItems,
+        eq(libraryItems.id, scanConfirmations.libraryItemId),
+      )
+      .where(
+        and(
+          eq(scanConfirmations.userId, input.userId),
+          inArray(scanConfirmations.scanId, [...input.scanIds]),
+        ),
+      );
+    for (const row of confirmedRows) {
+      confirmedListByScanId.set(row.scanId, row.list);
+    }
+  }
+
   const summaries = await Promise.all(
     input.scanIds.map(async (scanId) => {
       const scan = await db.query.scans.findFirst({
@@ -482,6 +510,7 @@ export async function listScanSummariesForUser(
         completedAt: scan.completedAt?.toISOString() ?? null,
         thumbnailImageId: thumbnail?.id ?? null,
         topCandidate: await getTopCandidateForScan(db, scan.id),
+        confirmedList: confirmedListByScanId.get(scan.id) ?? null,
       };
     }),
   );

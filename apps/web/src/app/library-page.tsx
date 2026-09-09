@@ -7,10 +7,9 @@ import { listLibraryItemsForUser } from "@vinylhound/database";
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
-import { LibraryItemActions } from "./library-item-actions";
-import { LibraryCopyEditor } from "./library-copy-editor";
+import { CoverArt } from "./cover-art";
 import { LibraryToolbar } from "./library-toolbar";
-import { Art, Icon } from "./ui";
+import { Icon } from "./ui";
 
 export async function LibraryPage({
   description,
@@ -68,40 +67,35 @@ export async function LibraryPage({
               release.country,
             ].filter(Boolean);
             return (
-              <article className="album-card album-card--large" key={item.id}>
+              <Link
+                className="album-card album-card--large"
+                href={`/library/${item.id}`}
+                key={item.id}
+              >
                 <div className="album-card__art-wrap">
-                  <Art title={release.title} tone={toneFor(item.id)} />
+                  <CoverArt
+                    image={item.coverImage}
+                    title={release.title}
+                    tone={toneFor(item.id)}
+                  />
                   {wishlist ? (
                     <span className="heart-badge">
                       <Icon name="heart" size={17} />
                     </span>
                   ) : null}
+                  {!wishlist && item.copyCount > 1 ? (
+                    <span className="copy-badge">{item.copyCount} copies</span>
+                  ) : null}
                 </div>
                 <h2>{release.title}</h2>
                 <p>{release.artist}</p>
                 <small>{facts.join(" · ") || "Release details not set"}</small>
-                {!wishlist ? (
-                  <>
-                    <small>
-                      {item.copyCount}{" "}
-                      {item.copyCount === 1 ? "copy" : "copies"}
-                    </small>
-                    {item.copies.map((copy) => (
-                      <LibraryCopyEditor
-                        copy={copy}
-                        itemId={item.id}
-                        key={copy.id}
-                      />
-                    ))}
-                  </>
+                {item.notes ? (
+                  <small className="album-card__note">
+                    <Icon name="info" size={13} /> {item.notes}
+                  </small>
                 ) : null}
-                <LibraryItemActions
-                  copyCount={item.copyCount}
-                  hasConfirmationHistory={item.confirmedFromScanId !== null}
-                  itemId={item.id}
-                  list={item.list}
-                />
-              </article>
+              </Link>
             );
           })}
         </section>

@@ -87,7 +87,10 @@ export async function getAccountExportForUser(
         list: libraryItems.list,
       })
       .from(scanConfirmations)
-      .innerJoin(
+      // Left joined: a confirmation whose saved record was removed (ADR-0018)
+      // keeps no library item, and the export still owes the user that
+      // decision.
+      .leftJoin(
         libraryItems,
         eq(libraryItems.id, scanConfirmations.libraryItemId),
       )
@@ -218,10 +221,11 @@ export async function deleteAccount(
       ];
     });
 
-    // scan_confirmations.library_item_id/.release_id are deliberate `restrict`
-    // FKs (ADR-0011) protecting the audit trail for single-item deletes; a
-    // whole-account delete must remove them directly first so the users
-    // cascade below can also remove library_items without a FK violation.
+    // scan_confirmations.release_id is a deliberate `restrict` FK protecting
+    // shared catalog rows, so a whole-account delete removes confirmations
+    // directly first rather than relying on the users cascade alone.
+    // (library_item_id clears itself since ADR-0018, but the explicit delete
+    // keeps this ordering obvious.)
     await transaction
       .delete(scanConfirmations)
       .where(eq(scanConfirmations.userId, input.userId));

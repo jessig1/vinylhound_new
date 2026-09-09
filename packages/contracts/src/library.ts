@@ -152,6 +152,18 @@ export const ConfirmScanResponseSchema = ScanConfirmationSummarySchema.extend({
   scanId: z.string().uuid(),
 }).strict();
 
+/**
+ * Enough to request a signed read of the cover photo the item was confirmed
+ * from, through the existing scan-scoped image endpoint. Null whenever the
+ * item has no scan history or its scan kept no completed image.
+ */
+export const LibraryCoverImageSchema = z
+  .object({
+    scanId: z.string().uuid(),
+    imageId: z.string().uuid(),
+  })
+  .strict();
+
 export const LibraryItemResultSchema = z
   .object({
     id: z.string().uuid(),
@@ -161,6 +173,7 @@ export const LibraryItemResultSchema = z
     copyCount: z.number().int().nonnegative(),
     copies: z.array(LibraryCopySchema).max(100),
     confirmedFromScanId: z.string().uuid().nullable(),
+    coverImage: LibraryCoverImageSchema.nullable(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
@@ -212,6 +225,7 @@ export type UpdateLibraryItemResponse = z.infer<
 export type DeleteLibraryItemResponse = z.infer<
   typeof DeleteLibraryItemResponseSchema
 >;
+export type RecordCondition = z.infer<typeof RecordConditionSchema>;
 export type CopyDetailsInput = z.infer<typeof CopyDetailsInputSchema>;
 export type LibraryCopy = z.infer<typeof LibraryCopySchema>;
 export type UpdateLibraryCopy = z.infer<typeof UpdateLibraryCopySchema>;
@@ -221,5 +235,6 @@ export type ScanConfirmationSummary = z.infer<
   typeof ScanConfirmationSummarySchema
 >;
 export type ConfirmScanResponse = z.infer<typeof ConfirmScanResponseSchema>;
+export type LibraryCoverImage = z.infer<typeof LibraryCoverImageSchema>;
 export type LibraryItemResult = z.infer<typeof LibraryItemResultSchema>;
 export type GetLibraryResponse = z.infer<typeof GetLibraryResponseSchema>;

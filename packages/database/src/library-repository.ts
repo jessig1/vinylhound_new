@@ -1,7 +1,8 @@
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull } from "drizzle-orm";
 
 import type {
   GetLibraryResponse,
+  LibraryCoverImage,
   LibraryItemResult,
   LibraryCopy,
   LibraryList,
@@ -14,6 +15,7 @@ import type { Database } from "./database.js";
 import { DatabaseCommandError } from "./scan-repository.js";
 import {
   albums,
+  imageAssets,
   libraryCopies,
   libraryItems,
   releases,
@@ -41,6 +43,21 @@ export async function listLibraryItemsForUser(
     input.sort ?? "recent",
   );
   return { list: input.list, items };
+}
+
+export async function getLibraryItemForUser(
+  db: Database,
+  input: { userId: string; itemId: string },
+): Promise<LibraryItemResult> {
+  const rows = await selectLibraryItemRows(db, {
+    userId: input.userId,
+    itemId: input.itemId,
+  });
+  const [item] = await attachCopiesAndSerialize(db, input.userId, rows);
+  if (!item) {
+    throw new DatabaseCommandError("not_found", "Library item not found.");
+  }
+  return item;
 }
 
 export async function countLibraryItemsForUser(
@@ -187,18 +204,9 @@ export async function deleteLibraryItem(
       throw new DatabaseCommandError("not_found", "Library item not found.");
     }
 
-    const [confirmation] = await transaction
-      .select({ scanId: scanConfirmations.scanId })
-      .from(scanConfirmations)
-      .where(eq(scanConfirmations.libraryItemId, item.id))
-      .limit(1);
-    if (confirmation) {
-      throw new DatabaseCommandError(
-        "invalid_state",
-        "This item has scan confirmation history and cannot be deleted directly.",
-      );
-    }
-
+    // Confirmations are not deleted with the item: their library_item_id
+    // clears itself (ADR-0018) so the record of what was reviewed and when
+    // survives, while the scan reads as reviewable again.
     const [deleted] = await transaction
       .delete(libraryItems)
       .where(eq(libraryItems.id, item.id))
@@ -360,6 +368,10 @@ async function attachCopiesAndSerialize(
     itemCopies.push(copy);
     copiesByItem.set(copy.libraryItemId, itemCopies);
   }
+  const coverByScanId = await selectCoverImages(
+    db,
+    rows.map((row) => row.confirmedFromScanId),
+  );
 
   return rows.map((row) => {
     const reviewed = row.reviewedRelease;
@@ -387,10 +399,42 @@ async function attachCopiesAndSerialize(
       copyCount: itemCopies.length,
       copies: itemCopies.map(serializeLibraryCopy),
       confirmedFromScanId: row.confirmedFromScanId,
+      coverImage: row.confirmedFromScanId
+        ? (coverByScanId.get(row.confirmedFromScanId) ?? null)
+        : null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
   });
+}
+
+/**
+ * The cover a library item displays is the first completed image of the scan it
+ * was confirmed from; the item itself owns no image. Read as one batched query
+ * so a 100-item page does not issue 100 lookups.
+ */
+async function selectCoverImages(
+  db: Pick<Database, "select">,
+  scanIds: readonly (string | null)[],
+): Promise<Map<string, LibraryCoverImage>> {
+  const ids = [...new Set(scanIds.filter((id): id is string => id !== null))];
+  if (!ids.length) return new Map();
+
+  const images = await db
+    .select({ id: imageAssets.id, scanId: imageAssets.scanId })
+    .from(imageAssets)
+    .where(
+      and(inArray(imageAssets.scanId, ids), isNotNull(imageAssets.completedAt)),
+    )
+    .orderBy(asc(imageAssets.createdAt), asc(imageAssets.id));
+
+  const covers = new Map<string, LibraryCoverImage>();
+  for (const image of images) {
+    if (!covers.has(image.scanId)) {
+      covers.set(image.scanId, { scanId: image.scanId, imageId: image.id });
+    }
+  }
+  return covers;
 }
 
 function serializeLibraryCopy(

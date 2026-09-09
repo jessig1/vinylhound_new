@@ -54,11 +54,14 @@ export const AccountExportAttemptSchema = z
 export const AccountExportConfirmationSchema = z
   .object({
     scanId: z.string().uuid(),
-    libraryItemId: z.string().uuid(),
+    // Null once the saved record this decision produced was removed
+    // (ADR-0018). The decision itself is still the user's data and is
+    // exported, so both the item reference and its list can be absent.
+    libraryItemId: z.string().uuid().nullable(),
     releaseId: z.string().uuid(),
     artist: z.string().min(1),
     title: z.string().min(1),
-    list: LibraryListSchema,
+    list: LibraryListSchema.nullable(),
     confirmedAt: z.string().datetime(),
   })
   .strict();

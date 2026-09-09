@@ -6,7 +6,8 @@ import { listScansForUser } from "@vinylhound/database";
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
-import { Art, Icon } from "../ui";
+import { CoverArt } from "../cover-art";
+import { Icon } from "../ui";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,15 @@ export default async function ScansPage() {
                 id={scan.scanId}
                 key={scan.scanId}
               >
-                <Art title={title} tone={toneFor(scan.scanId)} />
+                <CoverArt
+                  image={
+                    scan.thumbnailImageId
+                      ? { scanId: scan.scanId, imageId: scan.thumbnailImageId }
+                      : null
+                  }
+                  title={title}
+                  tone={toneFor(scan.scanId)}
+                />
                 <div className="scan-row__title">
                   <h2>{title}</h2>
                   <p>{scan.topCandidate?.artist ?? "No candidate yet"}</p>

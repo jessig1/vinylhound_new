@@ -18,3 +18,5 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0014: Account export is metadata-only JSON; account deletion is an ordered hard delete](0014-account-export-and-deletion.md)
 - [ADR-0015: Run production-shaped AWS environments just in time](0015-jit-aws-platform.md)
 - [ADR-0016: Use tiered AWS runtimes with SQS as the cloud queue](0016-tiered-aws-runtime-and-sqs.md)
+- [ADR-0017: Dismissing a scan result reuses `cancelScan`; the dashboard acts on scans directly](0017-dismiss-scan-results.md)
+- [ADR-0018: A saved record can always be removed; its confirmation row survives without it](0018-removable-library-items.md)

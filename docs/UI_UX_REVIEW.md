@@ -10,18 +10,25 @@ Ranking considers user impact first, then effort and regression risk. The first
 eight items were selected before implementation; the remaining two need separate
 work. Effort and risk are relative to this repository.
 
-| Rank | Improvement                                                 | Impact | Effort     | Risk   | Decision      |
-| ---- | ----------------------------------------------------------- | ------ | ---------- | ------ | ------------- |
-| 1    | Make scan rows tappable and keyboard accessible             | High   | Low        | Low    | Implement     |
-| 2    | Collapse optional copy details during confirmation          | High   | Low        | Low    | Implement     |
-| 3    | Expose upload-control focus and enlarge tap targets         | High   | Low        | Low    | Implement     |
-| 4    | Improve readable text, contrast, sizing, and wrapping       | High   | Low        | Low    | Implement     |
-| 5    | Preserve full photo edges and enlarge a single preview      | High   | Low        | Low    | Implement     |
-| 6    | Clarify scan-mode spacing, selection, and primary actions   | High   | Low        | Low    | Implement     |
-| 7    | Clarify processing, catalog-search, and save feedback       | Medium | Low–medium | Low    | Implement     |
-| 8    | Provide a clear-search action for empty results             | Medium | Low        | Low    | Implement     |
-| 9    | Display real cover thumbnails in library and review screens | High   | Medium     | Medium | Separate task |
-| 10   | Add persistent batch actions and next-review navigation     | Medium | Medium     | Medium | Separate task |
+| Rank | Improvement                                                 | Impact | Effort     | Risk   | Decision        |
+| ---- | ----------------------------------------------------------- | ------ | ---------- | ------ | --------------- |
+| 1    | Make scan rows tappable and keyboard accessible             | High   | Low        | Low    | Implement       |
+| 2    | Collapse optional copy details during confirmation          | High   | Low        | Low    | Implement       |
+| 3    | Expose upload-control focus and enlarge tap targets         | High   | Low        | Low    | Implement       |
+| 4    | Improve readable text, contrast, sizing, and wrapping       | High   | Low        | Low    | Implement       |
+| 5    | Preserve full photo edges and enlarge a single preview      | High   | Low        | Low    | Implement       |
+| 6    | Clarify scan-mode spacing, selection, and primary actions   | High   | Low        | Low    | Implement       |
+| 7    | Clarify processing, catalog-search, and save feedback       | Medium | Low–medium | Low    | Implement       |
+| 8    | Provide a clear-search action for empty results             | Medium | Low        | Low    | Implement       |
+| 9    | Display real cover thumbnails in library and review screens | High   | Medium     | Medium | Done 2026-09-09 |
+| 10   | Add persistent batch actions and next-review navigation     | Medium | Medium     | Medium | Separate task   |
+
+Rank 9 shipped on 2026-09-09 as part of a wider library pass: a shared
+`CoverArt` component layers the signed thumbnail over the existing tone
+placeholder and loads lazily, and library items expose the cover of the scan
+they were confirmed from. The same pass added the `/library/{itemId}` detail
+page, so library cards are no longer dead ends. See `HANDOFF.md` and ADR-0018.
+Rank 10 remains open.
 
 ## Implemented behavior
 

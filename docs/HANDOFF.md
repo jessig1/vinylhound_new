@@ -13,7 +13,96 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-08
+## Current state — verified 2026-09-09
+
+- **Library UX pass: real cover art, an album detail page, and records that can
+  actually be removed (ADR-0018).** The maintainer asked for a broad UI/UX
+  review "as a user looking to scan albums, review album details, add, edit and
+  delete lists," naming missing scan thumbnails and dead-end wishlist cards.
+  Four things changed:
+  1. **Real covers everywhere.** A shared `CoverArt` client component
+     (`apps/web/src/app/cover-art.tsx`) layers the signed thumbnail over the
+     existing tone placeholder, so a missing or slow image never shifts layout.
+     It requests signed reads only as artwork nears the viewport
+     (`IntersectionObserver`), since a library page can hold 100 covers and each
+     one costs a request. Used by the dashboard activity rows, the dashboard
+     collection/wishlist previews, `/scans` history, the library grids, and the
+     detail page. This closes rank 9 of `docs/UI_UX_REVIEW.md`, which had been
+     deferred as a separate task, and the scan-history half of P3.4's image-read
+     item. The batch review page keeps its own `BatchThumbnail` (a different
+     fixed-size card shape) and was deliberately left alone.
+  2. **A library item detail page** at `/library/{itemId}` — collection and
+     wishlist cards are now links to it, which is what "clicking a wishlist item
+     does nothing" was about. It shows the cover, full release facts, a
+     MusicBrainz link (rendered only for `https://` URLs, since the reference
+     arrives through a client-sent confirmation body), editable notes, per-copy
+     editors, list actions, and a link back to the originating scan.
+     `getLibraryItemForUser` is the new repository read; `LibraryItemResult`
+     gained `coverImage` (`{ scanId, imageId } | null`), batch-loaded in one
+     query. Note `apps/web/src/app/library/layout.tsx` re-exports the dashboard
+     layout — without it the route renders with no app shell, which is how every
+     other authenticated section here works.
+  3. **Editing feedback.** The grid no longer carries inline editors. The copy
+     editor gained the media/sleeve condition fields the API already supported,
+     real error/pending/saved states, and an inline delete confirmation instead
+     of `window.confirm`; it previously ignored failures entirely. Notes are now
+     editable at all (`PATCH /library/{itemId}` supported `notes` with no UI).
+  4. **Records can be removed.** See ADR-0018 below.
+- **ADR-0018 supersedes ADR-0011's delete restriction.** Migration 012 makes
+  `scan_confirmations.library_item_id` nullable with `on delete set null`.
+  Previously that `restrict` FK meant nearly every real library item was
+  permanently undeletable — ADR-0011 recorded this as "effectively a no-op path
+  for real data," and the UI hid "Remove" for anything with
+  `confirmedFromScanId`. Now the item deletes, its copies cascade, and the
+  confirmation keeps `scan_id`/`release_id`/`reviewed_release`/`confirmed_at`;
+  only the item pointer clears. Three reads follow: `getScanConfirmationForUser`
+  returns null (the scan is reviewable again), `confirmScan` replaces the stale
+  row instead of raising its "already confirmed" conflict (otherwise removal
+  would permanently block re-saving that scan, since `scan_id` is the PK), and
+  the account export left-joins with `libraryItemId`/`list` nullable so the
+  decision is still exported.
+- **Verification for the above:** `npm run check` (79/79 unit tests),
+  `npm run build`, `npm run test:integration` (30/30 database — +2 net new
+  covering removal-keeps-the-audit-row, re-saving after removal, and the cover
+  lookup — plus storage/queue/worker), a scripted 14-step browser pass against a
+  running dev server (wishlist card → detail, notes round-trip, move to
+  collection, copy edit persistence, copy removal, delete-with-confirm →
+  redirect, scan still in history, 404 on unknown id — all passing), axe
+  WCAG 2 A/AA with zero violations on dashboard/collection/wishlist/scans/detail,
+  and a Pixel 7 pass with no horizontal overflow. Seeded data and scratch
+  scripts were removed afterward.
+- **Watch out:** one existing integration test
+  (`confirms a reviewed result idempotently…`) asserts a **global** count of
+  `catalog_references` rows rather than scoping to its own data, so any seeded
+  development data makes it fail. This bit this session and cost a false
+  regression scare; it is pre-existing test fragility, not a code bug.
+
+- **Dashboard "Latest scans" now supports inline add/dismiss per scan
+  (ADR-0017).** The maintainer asked, outside the roadmap sequence, to (1)
+  confirm the dashboard shows each scan result individually rather than as a
+  batch — already true, since `listScansForUser` has always projected one row
+  per scan (ADR-0006) — and (2) let a user add a scan's top candidate to their
+  collection/wishlist or dismiss it without leaving the dashboard. `cancelScan`
+  (`packages/database/src/scan-repository.ts`) now also accepts `identified`,
+  `needs_review`, `unresolved`, and `failed` as cancelable pre-states
+  (transitioning to `canceled`), rejecting with `invalid_state` if the scan
+  already has a `scan_confirmations` row — no new status or endpoint.
+  `listScanSummariesForUser` now also returns `confirmedList` (`"collection" |
+"wishlist" | null`) via one batched query joining `scan_confirmations` to
+  `library_items` across the requested scan IDs. A new client component,
+  `apps/web/src/app/dashboard/scan-activity-row.tsx`, renders each row and
+  calls the existing `POST /scans/{scanId}/confirm`/`cancel` routes, then
+  `router.refresh()` rather than tracking optimistic local state. The
+  dashboard-only label "Dismissed" replaces "Canceled" purely as presentation
+  in that component; every other page still says "Canceled" for the same
+  status. Verified: `npm run check` (79/79 unit tests), `npm run build`,
+  `npm run test:integration` (28/28 database tests, +2 new: dismiss a
+  reviewable result, reject dismissing a confirmed one), and manual
+  verification against a running dev server with seeded data (screenshotted,
+  then cleaned up) — dismiss and add-to-collection both worked end to end,
+  including the server-side rejection when dismissing an already-confirmed
+  scan. The Playwright e2e suite could not be used to verify this locally; see
+  "Known gaps and risks."
 
 - **Phase 3-4 roadmap is now written.** At the maintainer's request,
   `docs/ROADMAP.md` replaces the placeholder with P3.1-P3.5 product maturity
@@ -757,6 +846,44 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 ## Known gaps and risks
 
+- **The `/library/{itemId}` detail page has no Playwright coverage yet.** Its
+  behavior was verified by a scripted browser pass against a dev server (steps
+  listed in "Current state") and by database integration tests, but nothing in
+  `apps/web/e2e/` exercises it, so a regression would not be caught in CI. The
+  natural home is a new spec covering collection card → detail → notes save →
+  copy edit → remove; it needs library data seeded through the API rather than
+  the `/scan` UI, since that flow is what currently times out locally.
+- **`GET /api/v1/scans` likely throws on every real call.** Discovered this
+  session while touching `listScanSummariesForUser`, not caused by it:
+  `apps/web/src/app/api/v1/scans/route.ts` parses that function's output
+  directly through `ListScansResponseSchema`, but `ScanListItemSchema`
+  (`packages/contracts/src/scan.ts`) is `.strict()` and does not declare the
+  `thumbnailImageId` field the repository has returned since the batch-card
+  work (`docs/decisions/0007...`/batch thumbnails). No test exercises this
+  route with real data — `scan.test.ts` has no coverage for
+  `ListScansResponseSchema`/`ScanListItemSchema` at all — which matches this
+  file's own earlier note that `.strict()` mismatches have slipped through
+  unit/integration tests before and only surfaced via e2e. This route is not
+  used by any current page (the dashboard and `/scans` both call
+  `listScansForUser` directly as server components), so nothing in the app is
+  visibly broken today, but any future client of this JSON endpoint will hit
+  it immediately. Fix is small (add `thumbnailImageId` to `ScanListItemSchema`,
+  or stop spreading the raw summaries into the response) but out of scope for
+  the dashboard change that found it — see ADR-0017's consequences section.
+- The Playwright e2e suite (`npm run test:e2e`/`test:e2e:matrix`) could not be
+  used to verify the dashboard change on this machine: every project times out
+  waiting for `/scan`'s "Start capture session" button across unrelated tests
+  (`groups two front-cover photos...`, `identifies a misnamed cover photo...`,
+  etc.), before ever reaching the dashboard assertions later in the same file.
+  This session's changes never touch `/scan` or `capture-session.tsx`, so the
+  timeout is very unlikely to be a regression from this work, but it was not
+  re-verified against an unmodified tree to confirm that — consistent with
+  this file's 2026-09-08 note that the local runner has had timing trouble
+  with the standalone e2e server before. The dashboard
+  add/dismiss behavior was instead verified manually against a running dev
+  server with seeded data (see "Current state"). Whoever next needs real e2e
+  coverage on this machine should investigate that timeout first; it blocks
+  more than just this session's change.
 - MusicBrainz search has fixture-backed adapter coverage but has not yet been
   exercised against the 20-case metadata acceptance set in
   `docs/CATALOG_EVALUATION.md`. Search remains user-triggered and reviewable;
@@ -1673,3 +1800,35 @@ test:integration` (29/29, 2 new), `npm run build` (28 routes, +2), and
   catalog contract and are intentionally not guessed. Updated browser-test
   navigation to avoid relying on the removed UI link. `npm run check` passes
   (79 tests).
+
+- **2026-09-09 - Claude.** Second ad hoc UX request the same day: review the
+  app as a real user and improve it, especially the dashboard. Delivered real
+  cover art across dashboard/scan-history/library (shared lazy `CoverArt`
+  component over the existing signed-thumbnail endpoint, closing
+  `UI_UX_REVIEW.md` rank 9), a new `/library/{itemId}` detail page with
+  clickable cards replacing dead-end grids, a rebuilt copy editor with
+  conditions and real save/delete feedback, first-ever notes editing, and
+  ADR-0018 + migration 012 making saved records removable while their
+  confirmation audit row survives. Verified with `npm run check` (79/79),
+  `npm run build`, `npm run test:integration` (30/30 database), a 14-step
+  scripted browser pass, axe WCAG 2 A/AA (no violations on five routes), and a
+  Pixel 7 layout check. Browser regression coverage for the new detail page is
+  still owed — see "Known gaps and risks."
+
+- **2026-09-09 - Claude.** Ad hoc maintainer UX request, outside the P3.1
+  sequence: dashboard "Latest scans" gained inline add-to-collection/wishlist
+  and dismiss actions per scan (ADR-0017). Confirmed the "not as a batch"
+  half of the request was already true (per-scan rows since ADR-0006) and
+  implemented the add/dismiss half: `cancelScan` widened to accept
+  `identified`/`needs_review`/`unresolved`/`failed` as dismissible pre-states
+  (rejecting a scan that already has a confirmation), and
+  `listScanSummariesForUser` gained a batched `confirmedList` lookup. New
+  client component `apps/web/src/app/dashboard/scan-activity-row.tsx` wires
+  both into the existing `/confirm`/`/cancel` routes via `router.refresh()`.
+  Verified: `npm run check` (79/79), `npm run build`, `npm run test:integration`
+  (28/28, +2 new tests), and a manual dev-server check with seeded/cleaned-up
+  data confirming both actions and the server-side confirmed-scan guard.
+  Discovered, but left unfixed as out of scope, a likely pre-existing
+  `.strict()` schema bug in `GET /api/v1/scans` and a local Playwright e2e
+  timeout unrelated to this change — both recorded under "Known gaps and
+  risks" for whoever picks either up next.

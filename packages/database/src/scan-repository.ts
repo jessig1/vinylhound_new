@@ -31,6 +31,7 @@ import {
   imageAssets,
   outboxMessages,
   scanAttempts,
+  scanConfirmations,
   scans,
   users,
 } from "./schema.js";
@@ -669,6 +670,13 @@ export async function retryScan(
   });
 }
 
+const DISMISSIBLE_RESULT_STATUSES = new Set([
+  "identified",
+  "needs_review",
+  "unresolved",
+  "failed",
+]);
+
 export async function cancelScan(
   db: Database,
   input: { userId: string; scanId: string },
@@ -686,15 +694,27 @@ export async function cancelScan(
     if (scan.status === "canceled") {
       return { record: scan, created: false } as const;
     }
-    if (
-      scan.status !== "awaiting_upload" &&
-      scan.status !== "queued" &&
-      scan.status !== "processing"
-    ) {
+    const isActive =
+      scan.status === "awaiting_upload" ||
+      scan.status === "queued" ||
+      scan.status === "processing";
+    const isDismissibleResult = DISMISSIBLE_RESULT_STATUSES.has(scan.status);
+    if (!isActive && !isDismissibleResult) {
       throw new DatabaseCommandError(
         "invalid_state",
         `A scan in ${scan.status} state cannot be canceled.`,
       );
+    }
+    if (isDismissibleResult) {
+      const confirmation = await transaction.query.scanConfirmations.findFirst({
+        where: eq(scanConfirmations.scanId, scan.id),
+      });
+      if (confirmation) {
+        throw new DatabaseCommandError(
+          "invalid_state",
+          "A confirmed scan cannot be dismissed.",
+        );
+      }
     }
 
     const canceledAt = new Date();

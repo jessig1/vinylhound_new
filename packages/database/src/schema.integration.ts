@@ -20,9 +20,13 @@ import {
   listScanSummariesForUser,
   prepareScanAnalysis,
 } from "./analysis-repository.js";
-import { confirmScan } from "./confirmation-repository.js";
+import {
+  confirmScan,
+  getScanConfirmationForUser,
+} from "./confirmation-repository.js";
 import {
   deleteLibraryItem,
+  getLibraryItemForUser,
   listLibraryItemsForUser,
   updateLibraryItem,
 } from "./library-repository.js";
@@ -757,18 +761,42 @@ describe("direct library item management", () => {
     ).rejects.toMatchObject({ code: "not_found" });
   });
 
-  it("rejects deleting a library item with scan confirmation history", async () => {
+  it("deletes an item with scan history while keeping its confirmation audit row", async () => {
     const itemId = await confirmWishlistItem("collection");
+    const [confirmationBefore] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.libraryItemId, itemId));
+    expect(confirmationBefore).toBeDefined();
+    const scanId = confirmationBefore!.scanId;
 
-    await expect(
-      deleteLibraryItem(database.db, { userId, itemId }),
-    ).rejects.toMatchObject({ code: "invalid_state" });
+    const deleted = await deleteLibraryItem(database.db, { userId, itemId });
+    expect(deleted).toEqual({ id: itemId });
     expect(
       await database.db
         .select()
         .from(libraryItems)
         .where(eq(libraryItems.id, itemId)),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
+
+    // The decision survives with its reviewed snapshot; only the pointer to the
+    // removed item is cleared (ADR-0018).
+    const [confirmationAfter] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    expect(confirmationAfter).toMatchObject({
+      scanId,
+      libraryItemId: null,
+    });
+    expect(confirmationAfter!.reviewedRelease).toMatchObject({
+      title: "Direct Update",
+    });
+
+    // The scan reads as reviewable again, so the record can be saved anew.
+    expect(
+      await getScanConfirmationForUser(database.db, { userId, scanId }),
+    ).toBeNull();
   });
 
   it("deletes a library item with no confirmation history and cascades its copies", async () => {
@@ -805,6 +833,124 @@ describe("direct library item management", () => {
 
     await expect(
       deleteLibraryItem(database.db, { userId, itemId: item!.id }),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("saves a scan again after its item was removed, replacing the old decision", async () => {
+    const itemId = await confirmWishlistItem("wishlist");
+    const [confirmation] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.libraryItemId, itemId));
+    const scanId = confirmation!.scanId;
+    await deleteLibraryItem(database.db, { userId, itemId });
+
+    const resaved = await confirmScan(database.db, {
+      userId,
+      scanId,
+      idempotencyKey: `confirm-again-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: "Resaved Artist",
+        title: "Resaved Title",
+        releaseYear: 1999,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "collection",
+        notes: null,
+        copy: null,
+      },
+    });
+
+    expect(resaved.created).toBe(true);
+    expect(resaved.record.libraryItem.id).not.toBe(itemId);
+    expect(resaved.record.libraryItem.list).toBe("collection");
+  });
+
+  it("exposes the confirming scan's first completed image as the item cover", async () => {
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `cover-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    const [cover] = await database.db
+      .insert(imageAssets)
+      .values({
+        scanId: scan!.id,
+        idempotencyKey: `cover-image-${randomUUID()}`,
+        objectKey: `${userId}/${scan!.id}/${randomUUID()}`,
+        filename: "front.jpg",
+        viewType: "front",
+        mimeType: "image/jpeg",
+        sizeBytes: 1_024,
+        checksumSha256: "d".repeat(64),
+        completedAt: new Date(),
+        width: 800,
+        height: 800,
+        analysisSizeBytes: 200,
+        analysisWidth: 800,
+        analysisHeight: 800,
+        thumbnailSizeBytes: 40,
+      })
+      .returning();
+
+    const confirmed = await confirmScan(database.db, {
+      userId,
+      scanId: scan!.id,
+      idempotencyKey: `cover-confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: `Cover Art Test ${randomUUID()}`,
+        title: "Has A Cover",
+        releaseYear: 1971,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "collection",
+        notes: null,
+        copy: null,
+      },
+    });
+
+    const item = await getLibraryItemForUser(database.db, {
+      userId,
+      itemId: confirmed.record.libraryItem.id,
+    });
+    expect(item.coverImage).toEqual({
+      scanId: scan!.id,
+      imageId: cover!.id,
+    });
+
+    await expect(
+      getLibraryItemForUser(database.db, { userId, itemId: randomUUID() }),
     ).rejects.toMatchObject({ code: "not_found" });
   });
 
@@ -1229,6 +1375,128 @@ describe("batch grouping and scan lifecycle", () => {
     await expect(
       cancelScan(database.db, { userId, scanId: scan.record.id }),
     ).resolves.toMatchObject({ created: false });
+  });
+
+  it("dismisses a reviewable scan result idempotently", async () => {
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId,
+        source: "single_upload",
+        status: "needs_review",
+        idempotencyKey: `dismiss-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 15,
+      completedAt: new Date(),
+    });
+
+    const summariesBeforeDismiss = await listScanSummariesForUser(database.db, {
+      userId,
+      scanIds: [scan!.id],
+    });
+    expect(summariesBeforeDismiss[0]).toMatchObject({
+      status: "needs_review",
+      confirmedList: null,
+    });
+
+    const dismissed = await cancelScan(database.db, {
+      userId,
+      scanId: scan!.id,
+    });
+    expect(dismissed.created).toBe(true);
+    expect(dismissed.record.status).toBe("canceled");
+
+    const replayedDismiss = await cancelScan(database.db, {
+      userId,
+      scanId: scan!.id,
+    });
+    expect(replayedDismiss.created).toBe(false);
+    expect(replayedDismiss.record.status).toBe("canceled");
+  });
+
+  it("rejects dismissing a scan that has already been confirmed", async () => {
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `dismiss-confirmed-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    const [attempt] = await database.db
+      .insert(scanAttempts)
+      .values({
+        scanId: scan!.id,
+        attemptNumber: 1,
+        status: "succeeded",
+        model: "integration-test-model",
+        promptVersion: "integration-test.v1",
+        providerResponseId: `response-${randomUUID()}`,
+        durationMs: 15,
+        completedAt: new Date(),
+      })
+      .returning();
+    const [candidate] = await database.db
+      .insert(scanCandidates)
+      .values({
+        scanAttemptId: attempt!.id,
+        rank: 1,
+        artist: "Dismiss Guard Test",
+        title: "Kept Album",
+        releaseYear: 2000,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        confidence: 0.95,
+        evidence: [],
+        warnings: [],
+      })
+      .returning();
+
+    await confirmScan(database.db, {
+      userId,
+      scanId: scan!.id,
+      idempotencyKey: `dismiss-confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: candidate!.id,
+        artist: "Dismiss Guard Test",
+        title: "Kept Album",
+        releaseYear: 2000,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "wishlist",
+        notes: null,
+        copy: null,
+      },
+    });
+
+    const summaries = await listScanSummariesForUser(database.db, {
+      userId,
+      scanIds: [scan!.id],
+    });
+    expect(summaries[0]).toMatchObject({ confirmedList: "wishlist" });
+
+    await expect(
+      cancelScan(database.db, { userId, scanId: scan!.id }),
+    ).rejects.toMatchObject({ code: "invalid_state" });
   });
 });
 

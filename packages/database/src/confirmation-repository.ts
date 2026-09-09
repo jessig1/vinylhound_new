@@ -91,7 +91,15 @@ export async function confirmScan(
       await transaction.query.scanConfirmations.findFirst({
         where: eq(scanConfirmations.scanId, scan.id),
       });
-    if (existingConfirmation) {
+    if (existingConfirmation && existingConfirmation.libraryItemId === null) {
+      // The saved record this decision produced was removed (ADR-0018), so the
+      // decision no longer describes anything in the library and must not block
+      // saving the scan again. Replacing it leaves the image/attempt/candidate
+      // audit trail untouched; only the superseded review decision is dropped.
+      await transaction
+        .delete(scanConfirmations)
+        .where(eq(scanConfirmations.scanId, scan.id));
+    } else if (existingConfirmation) {
       if (
         existingConfirmation.idempotencyKey !== input.idempotencyKey ||
         existingConfirmation.requestFingerprint !== requestFingerprint
@@ -429,7 +437,9 @@ export async function getScanConfirmationForUser(
       eq(scanConfirmations.userId, input.userId),
     ),
   });
-  if (!confirmation) return null;
+  // A confirmation whose library item was removed (ADR-0018) describes nothing
+  // the user still holds, so the scan reads as unconfirmed and reviewable again.
+  if (!confirmation || confirmation.libraryItemId === null) return null;
 
   const response = await readConfirmationResponse(
     db,
@@ -464,12 +474,14 @@ async function readConfirmationResponse(
   const album = release
     ? await db.query.albums.findFirst({ where: eq(albums.id, release.albumId) })
     : null;
-  const libraryItem = await db.query.libraryItems.findFirst({
-    where: and(
-      eq(libraryItems.id, confirmation.libraryItemId),
-      eq(libraryItems.userId, userId),
-    ),
-  });
+  const libraryItem = confirmation.libraryItemId
+    ? await db.query.libraryItems.findFirst({
+        where: and(
+          eq(libraryItems.id, confirmation.libraryItemId),
+          eq(libraryItems.userId, userId),
+        ),
+      })
+    : null;
   const copy = confirmation.copyId
     ? await db.query.libraryCopies.findFirst({
         where: and(

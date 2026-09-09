@@ -1,7 +1,14 @@
 # ADR-0011: Direct library management stays list/notes only; confirmed items cannot be hard-deleted
 
-- Status: accepted
+- Status: accepted; the delete restriction is superseded by
+  [ADR-0018](0018-removable-library-items.md) (2026-09-09)
 - Date: 2026-08-31
+
+> **Superseded in part.** The `DELETE /library/{itemId}` behavior described
+> below — rejecting any item with `scan_confirmations` history — was replaced
+> by ADR-0018, which makes `scan_confirmations.library_item_id` nullable so
+> the item can be removed while its confirmation audit row survives. The
+> `PATCH` decisions and the copies-present rule below still stand.
 
 ## Context
 
