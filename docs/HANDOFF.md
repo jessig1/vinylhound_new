@@ -15,6 +15,15 @@ the log.
 
 ## Current state — verified 2026-09-09
 
+- **Supabase migration-metadata hardening is pending deployment.** Migration
+  014 enables RLS on node-pg-migrate's `public.vinylhound_migrations` table
+  and revokes `PUBLIC`, `anon`, and `authenticated` privileges. The latter two
+  are conditional because local/AWS PostgreSQL does not create Supabase roles.
+  This leaves the migration-table owner able to run migrations, but prevents
+  PostgREST API roles from reading or changing schema history. Apply it to the
+  Supabase environment with `npm run db:migrate` (or the normal deployment
+  migration step); it has not been applied by this local-only session.
+
 - **P3.1 Task 7: persistent-spend inventory is complete, and P3.1 is now
   fully complete (all 7 tasks checked in `docs/ROADMAP.md`).** This session
   first re-verified Task 6 against the code rather than trusting the prior
@@ -806,6 +815,10 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
+Apply migration 014 to the Supabase environment after reviewing the existing
+uncommitted `apps/web/package.json` and `package-lock.json` changes, which
+belong to the maintainer and are unrelated to this security migration.
+
 The requested incremental frontend pass is documented in `docs/UI_UX_REVIEW.md`.
 Review those local changes before committing. Real cover art, batch review
 navigation, and copy-editor mutation feedback remain separate tasks.
@@ -1260,6 +1273,14 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-09 - Codex.** Addressed Supabase's RLS warning for the
+  `public.vinylhound_migrations` bookkeeping table with forward-only migration 014. It enables RLS, revokes default `PUBLIC` access, and conditionally
+  revokes direct grants from Supabase `anon` and `authenticated` roles while
+  staying portable to local/AWS PostgreSQL where those roles do not exist.
+  It has not been applied to Supabase from this session. The pre-existing
+  uncommitted `apps/web/package.json` and `package-lock.json` changes were
+  preserved.
 
 - **2026-09-09 - Claude (continuing the same day).** Asked to verify Task 6
   was genuinely complete (not just trust the prior session's writeup), then
