@@ -15,6 +15,60 @@ the log.
 
 ## Current state — verified 2026-09-10
 
+- **`Platform`'s Terraform validate job now only runs when infrastructure
+  actually changed; the container build/Trivy scan job is deliberately
+  unchanged and still runs on every push/PR.** The maintainer asked whether
+  `Platform` could be manual or scoped to infra changes instead of running
+  on every push. Both of `Platform`'s jobs are infra-adjacent but not
+  equally infra-_specific_: Terraform/kubeconform validation genuinely only
+  matters when `infra/terraform/**` or `infra/kubernetes/**` change, but the
+  container scan validates whatever `Dockerfile.*` actually builds today —
+  including plain dependency bumps like the Next.js CVE fixed earlier this
+  session, which touched only `apps/web/package.json`. Scoping the whole
+  workflow to infra paths would have silently stopped catching exactly that
+  class of bug, so it was called out and the maintainer chose to split the
+  two rather than gate both.
+  Implementation: a new `changes` job in `.github/workflows/platform.yml`
+  diffs `infra/terraform`, `infra/kubernetes`, and the workflow file itself
+  against the right base (`pull_request.base.sha` for PRs, `github.event
+.before` for pushes; falls back to `infra=true` when there's no usable base
+  — e.g. a new branch), then `terraform`'s `if:` gates on that output or a
+  manual `workflow_dispatch` (also newly added to `Platform`'s triggers, so
+  a full run including the infra checks can be forced on demand — the
+  "manual" half of the maintainer's question, alongside "only if infra
+  changed" as the default). `terraform-plan`'s `if:` gained an explicit
+  `needs.terraform.result == 'success'` check, since setting a job's own
+  `if:` replaces the implicit `needs`-success gating GitHub Actions would
+  otherwise apply — without that, a skipped `terraform` job could
+  (depending on evaluation order) still let `terraform-plan` attempt to run.
+  The `containers` job was not touched at all: same triggers, same matrix,
+  same Trivy config.
+  Deliberately did _not_ rename the workflow or its `terraform`/`containers`
+  job names, and did not split them into separate workflow files — branch
+  protection's required status checks are pinned to exact context strings
+  (`Platform / Terraform validate`, `Platform / Container build and scan
+(web|worker|worker-lambda)`, confirmed via `gh api repos/.../branches/main
+/protection`), and a `skipped` job conclusion satisfies a required check the
+  same way `success` does, so gating with `if:` inside the existing workflow
+  needed zero branch-protection reconfiguration. Renaming or splitting into
+  a new workflow file would have changed those context strings and left
+  every future PR blocked on a check that no longer gets reported, until
+  someone manually updated the branch protection rule.
+  Verified: `git diff --name-only <base> <head> -- infra/terraform
+infra/kubernetes .github/workflows/platform.yml` run by hand against real
+  commit pairs in this repo's own history — correctly `true` for the
+  Aurora-auto-start commit (touched `infra/terraform/environment/
+outputs.tf`), correctly empty/`false` for the manual-triggers commit (only
+  touched a deploy workflow and docs), and correctly `true` for this
+  session's own uncommitted edit to `platform.yml` itself (self-referential
+  path match). `terraform fmt -check -recursive infra/terraform` and
+  `terraform validate` against both affected roots still pass. YAML syntax
+  of both edited workflow files verified with `js-yaml` (no local
+  `actionlint` available on this machine). Did not push yet as of writing
+  this entry — the next push (which touches `platform.yml` itself) will be
+  the live confirmation that `terraform` actually runs and `containers`
+  still runs unconditionally; check that before assuming this is closed.
+
 - **Staging and production deploys are now both manual `workflow_dispatch`
   jobs; only `deploy-development.yml` still triggers automatically on a push
   to `main`.** Follow-up to the pipeline investigation below, at the
@@ -1395,6 +1449,23 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-10 - Claude (continuing, same day, third follow-up).** Asked
+  whether `Platform` "can be manual or only if there's a change to the
+  infrastructure rather than every push." Flagged before implementing
+  anything that `Platform`'s two jobs aren't equally "infrastructure":
+  Terraform/kubeconform validation is, but the container build/Trivy scan
+  isn't — it caught this session's real CVE via a plain dependency bump, not
+  an infra file. Recommended splitting rather than gating both, and the
+  maintainer agreed. Implemented via a same-workflow `changes` detection job
+  plus `if:` gating on `terraform` (and a fixed-up `terraform-plan`
+  dependency check), specifically avoiding a rename or a separate workflow
+  file because branch protection's required checks are pinned to exact
+  `Platform / <job name>` context strings — see "Current state" for the
+  full reasoning and verification done so far (diff logic tested by hand
+  against real commit pairs, Terraform/YAML validated locally; not yet
+  confirmed live by an actual push, since this entry is being written
+  before that push).
 
 - **2026-09-10 - Claude (continuing, same day).** Two follow-up requests
   after the pipeline investigation below. First, "add an auto start option":
