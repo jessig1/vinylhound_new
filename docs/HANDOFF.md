@@ -1020,13 +1020,19 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-Apply migration 014 to the Supabase environment after reviewing the existing
-uncommitted `apps/web/package.json` and `package-lock.json` changes, which
-belong to the maintainer and are unrelated to this security migration.
+**P3.1 is closed out (2026-09-10), maintainer-confirmed.** All 7 tasks are
+checked in `docs/ROADMAP.md`, tagged `phase-3-p3.1`. Start P3.2 (guided
+automatic mobile capture) next — see below for its task list and the one
+known gap (G3) already flagged against it. Nothing from P3.1 is left
+pending; the CI/CD hardening below (manual staging/production deploys,
+Platform's infra-change gating, the Aurora auto-start safeguard, the arm64
+runner) happened the same day as a maintainer-requested side effort, not a
+roadmap task, and is itself already verified and closed.
 
-The requested incremental frontend pass is documented in `docs/UI_UX_REVIEW.md`.
-Review those local changes before committing. Real cover art, batch review
-navigation, and copy-editor mutation feedback remain separate tasks.
+Migration 014 (Supabase RLS hardening on `vinylhound_migrations`, Codex,
+2026-09-09) is committed but per its own commit message had not been applied
+to the Supabase environment as of that session — confirm whether it's been
+applied since before assuming it has.
 
 **Task, as of 2026-09-07 (second session of the day):** the maintainer decided
 to stop pursuing a fully-passing production activation in-session — five real,
@@ -1042,18 +1048,28 @@ development is stable — Phase 2 is **not** being marked complete or tagged;
 it's being left in a clean, fully-tracked, non-costing state while priorities
 shift.
 
-**Current infrastructure state (verified 2026-09-07):**
+**Current infrastructure state (verified 2026-09-07, staging corrected
+2026-09-10 — production not re-verified today, see note below):**
 
 - **Development**: live, always-on, unaffected by anything in this session.
   `https://dev-vh.siliconforest.io`.
-- **Staging**: inactive. Last full lifecycle run (`34158399023`, commit
-  `beeb98a`) passed completely — build, migrate, deploy, smoke test, image
-  promotion (`staging-passed-beeb98aa4cc5eb071c9b158426ef182f8e792f68`), clean
-  deactivation. No known issues.
-- **Production**: inactive, confirmed via both Terraform apply output
-  (`environment_active = false`, no errors) and the maintainer's direct AWS
-  Console check. EKS, ALB, CloudFront distribution, WAF, and NAT gateway are
-  all destroyed. Aurora (serverless, scaled to zero compute) and the VPC/
+- **Staging**: inactive, but its Aurora cluster is confirmed `available`
+  (started by hand 2026-09-10 after being found administratively `stopped`
+  since 2026-09-07 — see "Current state" for the full pipeline
+  investigation). Last full lifecycle run as of this writing is
+  `34493532167` (native-arm64 runner, dispatched manually since
+  `deploy-staging.yml` is no longer push-triggered) — passed completely:
+  build, migrate, deploy, smoke test, clean deactivation. No known issues.
+- **Production**: JIT runtime (EKS/ALB/CloudFront/WAF/NAT) inactive, last
+  confirmed 2026-09-07 via Terraform apply output and the maintainer's AWS
+  Console check — not re-verified today. **Its Aurora cluster showed the
+  identical administrative `stopped` status as staging's during today's
+  investigation** (`aws rds describe-db-clusters`), and — unlike staging —
+  was deliberately _not_ started, since the maintainer only asked to start
+  staging's. `deploy-production.yml` now runs
+  `scripts/aws/ensure-database-available.sh` and will auto-start it on the
+  next production deploy attempt; until then, production's database
+  is stopped, not just scaled to zero. The VPC/
   subnet/foundation layer remain, by design (ADR-0016's persistent data
   plane) — this is expected residual cost, not a leftover bug; the maintainer
   asked about this specifically and was walked through why.
@@ -1104,37 +1120,13 @@ does not block GitHub Actions, which authenticate via OIDC independently
 (this is exactly the credential path that produced the #9 incident, so bear
 that in mind if debugging anything OIDC/session-related).
 
-**Phase 3-4 planning is complete for this request (2026-09-08).**
-Read `docs/ROADMAP.md` for sequence, dependencies, deliverables, and measurable
-exit criteria. `docs/PHASE_3_4_PLAN_REVIEW.md` remains the historical review.
-P3.1 Task 1 (capture-session flow), Task 2 (bounded upload concurrency/
-session queue/retry/cancel/review-later/rehydration), and Task 3 (the signed
-image-read slice) are complete.
-Its extracted `CaptureSession` replaces `/scan`'s mode toggle with one
-upload-only control: every selected cover photo forms an independent record
-draft, and starting the session creates one batch and submits records
-independently, at most three at a time, with per-record retry/cancel and a
-"review them now" link to the batch page once anything has submitted. A
-refresh mid-session restores the queue's bookkeeping from `localStorage`
-(batch/scan identity and idempotency keys) and marks any record whose image
-never finished uploading as needing its photo reattached, since the browser
-does not retain file bytes across a reload. Batch cards now show their
-authenticated cover thumbnail and candidate metadata, and high-confidence
-matches can be added directly to collection or wishlist; both matched and
-needs-review candidates have direct list actions, while a "This isn't a
-match" choice exposes new scan and manual-entry paths.
-
-**P3.1 is now fully complete — all 7 tasks checked in `docs/ROADMAP.md`,**
-committed and tagged `phase-3-p3.1` on `origin/main`. Task 4 (quota
-headroom/admission and abandoned-upload cleanup), Task 5 (reconciling
-active-scan/batch/daily-attempt/worker-concurrency defaults and defining
-rollover/pause-resume/exhaustion behavior), Task 6 (structured web
-request/error timing and correlation IDs), and Task 7 (the persistent-spend
-inventory) are all complete — see "Current state" for descriptions. Note that
-Task 5's batch rollover is a written behavioral definition, not an
-implementation — the actual rollover code belongs to P3.2's continuous-capture
-state machine, since today's one-shot `/scan` picker hard-caps a session at
-`MAX_SCANS_PER_BATCH` and cannot reach that path.
+`docs/ROADMAP.md` has P3.1's sequence, dependencies, and deliverables (all
+now checked); `docs/PHASE_3_4_PLAN_REVIEW.md` remains the historical plan
+review. Note that P3.1 Task 5's batch rollover is a written behavioral
+definition, not an implementation — the actual rollover code belongs to
+P3.2's continuous-capture state machine, since today's one-shot `/scan`
+picker hard-caps a session at `MAX_SCANS_PER_BATCH` and cannot reach that
+path.
 
 **P3.2 (guided automatic mobile capture) is next per `docs/ROADMAP.md`'s
 sequence** — not yet started. Its four tasks: an opt-in live-camera framing
@@ -1478,6 +1470,29 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-10 - Claude (continuing, same day, closing).** Maintainer said
+  "we can stop here and close out 3.1." Verified the tree was clean and all
+  7 P3.1 checkboxes still checked (nothing regressed across the day's CI/CD
+  detour) before touching docs. Trimmed the "Resume point" section, which
+  had grown to ~430 lines of accumulated historical narrative — a direct
+  violation of this file's own stated rule ("sections above the session log
+  describe current state only; history belongs in the log") — down to
+  roughly 300: replaced the stale top pointer (referencing long-committed
+  `package.json` changes and a UI pass finished sessions ago) with a current
+  one, and collapsed the redundant "P3.1 Task 1-3 complete... P3.1 fully
+  complete" paragraphs (fully superseded by "Current state" and
+  `docs/ROADMAP.md`'s own checkmarks) into one line, while deliberately
+  keeping the still-live #8-#15 issue list, the AWS root-credential note,
+  and the P3.2 task summary since nothing else in this file currently
+  carries them. Also corrected the infrastructure-state snapshot, which
+  still read "verified 2026-09-07" and described Aurora as merely
+  scaled-to-zero — inaccurate for staging (fixed by hand today) and,
+  more importantly, still true and unaddressed for **production**, whose
+  Aurora cluster this session confirmed is in the same fully-`stopped` state
+  and was deliberately left that way. Did not touch the trailing "Things
+  worth knowing" (Clerk `loadEnvConfig` caching bug) or "Recently completed"
+  material — still accurate, not redundant with anything above them.
 
 - **2026-09-10 - Claude (continuing, same day, fourth follow-up).** Asked
   for pipeline speed/efficiency ideas. Answered as an exploratory question
