@@ -4,12 +4,7 @@ import { SearchCatalogReleasesResponseSchema } from "@vinylhound/contracts";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import {
-  createRequestId,
-  errorResponse,
-  HttpError,
-  jsonResponse,
-} from "@/server/http";
+import { HttpError, jsonResponse, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,9 +15,9 @@ const SearchQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(25).default(10),
 });
 
-export async function GET(request: Request) {
-  const requestId = createRequestId();
-  try {
+export const GET = withRoute(
+  "catalog.releases.search",
+  async (request, { requestId }) => {
     const url = new URL(request.url);
     const parsed = SearchQuerySchema.safeParse({
       artist: url.searchParams.get("artist"),
@@ -47,7 +42,5 @@ export async function GET(request: Request) {
     );
     response.headers.set("cache-control", "private, max-age=300");
     return response;
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

@@ -12,59 +12,53 @@ import { createOrGetScan, listScansForUser } from "@vinylhound/database";
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
-  createRequestId,
-  errorResponse,
   HttpError,
   jsonResponse,
   parseJson,
   requireIdempotencyKey,
+  withRoute,
 } from "@/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request) {
-  const requestId = createRequestId();
-  try {
-    const context = getServerContext();
-    const cursor = new URL(request.url).searchParams.get("cursor");
-    const before = cursor ? new Date(cursor) : undefined;
-    if (before && Number.isNaN(before.getTime())) {
-      throw new HttpError(
-        400,
-        "invalid_cursor",
-        "The cursor is not a valid timestamp.",
-      );
-    }
-
-    const userId = await requireUserId(context);
-    const { summaries, nextCursor } = await listScansForUser(
-      context.database.db,
-      {
-        userId,
-        limit: MAX_SCANS_PER_PAGE,
-        before,
-      },
+export const GET = withRoute("scans.list", async (request, { requestId }) => {
+  const context = getServerContext();
+  const cursor = new URL(request.url).searchParams.get("cursor");
+  const before = cursor ? new Date(cursor) : undefined;
+  if (before && Number.isNaN(before.getTime())) {
+    throw new HttpError(
+      400,
+      "invalid_cursor",
+      "The cursor is not a valid timestamp.",
     );
-
-    const response = jsonResponse(
-      ListScansResponseSchema.parse({
-        scans: summaries,
-        nextCursor: nextCursor ? nextCursor.toISOString() : null,
-      }),
-      200,
-      requestId,
-    );
-    response.headers.set("cache-control", "no-store");
-    return response;
-  } catch (error) {
-    return errorResponse(error, requestId);
   }
-}
 
-export async function POST(request: Request) {
-  const requestId = createRequestId();
-  try {
+  const userId = await requireUserId(context);
+  const { summaries, nextCursor } = await listScansForUser(
+    context.database.db,
+    {
+      userId,
+      limit: MAX_SCANS_PER_PAGE,
+      before,
+    },
+  );
+
+  const response = jsonResponse(
+    ListScansResponseSchema.parse({
+      scans: summaries,
+      nextCursor: nextCursor ? nextCursor.toISOString() : null,
+    }),
+    200,
+    requestId,
+  );
+  response.headers.set("cache-control", "no-store");
+  return response;
+});
+
+export const POST = withRoute(
+  "scans.create",
+  async (request, { requestId }) => {
     const idempotencyKey = requireIdempotencyKey(request);
     const input = await parseJson(request, CreateScanRequestSchema);
     const context = getServerContext();
@@ -93,7 +87,5 @@ export async function POST(request: Request) {
     });
 
     return jsonResponse(response, result.created ? 201 : 200, requestId);
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

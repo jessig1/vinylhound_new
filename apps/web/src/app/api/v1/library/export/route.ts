@@ -3,7 +3,7 @@ import { listLibraryItemsForUser } from "@vinylhound/database";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import { createRequestId, errorResponse, HttpError } from "@/server/http";
+import { HttpError, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,9 +20,9 @@ const CSV_COLUMNS = [
   "copyCount",
 ] as const;
 
-export async function GET(request: Request) {
-  const requestId = createRequestId();
-  try {
+export const GET = withRoute(
+  "library.export",
+  async (request, { requestId }) => {
     const searchParams = new URL(request.url).searchParams;
     const parsedQuery = LibraryQuerySchema.safeParse({
       list: searchParams.get("list"),
@@ -70,10 +70,8 @@ export async function GET(request: Request) {
         "x-request-id": requestId,
       },
     });
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);
 
 function csvEscape(value: string) {
   if (!/[",\r\n]/.test(value)) return value;

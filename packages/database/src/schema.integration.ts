@@ -305,6 +305,68 @@ describe("initial scan persistence schema", () => {
     expect(publishedMessage?.publishedAt).toBeInstanceOf(Date);
   });
 
+  it("forwards a caller-supplied correlationId onto the outbox row and the worker attempt it produces", async () => {
+    const scan = await createOrGetScan(database.db, {
+      userId,
+      source: "single_upload",
+      idempotencyKey: `correlation-scan-${randomUUID()}`,
+    });
+    const upload = await createOrGetImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `correlation-upload-${randomUUID()}`,
+      filename: "front.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 1_024,
+      checksumSha256: "d".repeat(64),
+      maxImages: 12,
+    });
+    await completeImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      imageId: upload.record.id,
+      width: 800,
+      height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
+    });
+
+    const correlationId = `trace-${randomUUID()}`;
+    const submitted = await submitScan(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `correlation-submit-${randomUUID()}`,
+      correlationId,
+    });
+    expect(submitted.job.correlationId).toBe(correlationId);
+
+    const [storedMessage] = await database.db
+      .select()
+      .from(outboxMessages)
+      .where(eq(outboxMessages.aggregateId, scan.record.id));
+    expect(storedMessage).toMatchObject({ correlationId });
+
+    const prepared = await prepareScanAnalysis(database.db, {
+      job: submitted.job,
+      deliveryAttempt: 1,
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+    });
+    if (prepared.status !== "ready") {
+      throw new Error(
+        `Expected the attempt to be ready, got ${prepared.status}.`,
+      );
+    }
+
+    const [attemptRow] = await database.db
+      .select()
+      .from(scanAttempts)
+      .where(eq(scanAttempts.id, prepared.attemptId));
+    expect(attemptRow).toMatchObject({ correlationId });
+  });
+
   it("rejects a submission that exceeds the per-user daily analysis quota", async () => {
     const quotaUserId = randomUUID();
     await database.db.insert(users).values({ id: quotaUserId });

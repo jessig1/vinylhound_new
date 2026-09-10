@@ -46,8 +46,11 @@ export function createScanAnalysisHandler(options: ScanAnalysisHandlerOptions) {
     }
 
     const startedAt = Date.now();
+    let storageFetchDurationMs: number | null = null;
+    let providerCallDurationMs: number | null = null;
     let response;
     try {
+      const storageFetchStartedAt = Date.now();
       const images = await Promise.all(
         prepared.images.map(async (image) => {
           const stored = await options.storage.readObject(
@@ -70,21 +73,35 @@ export function createScanAnalysisHandler(options: ScanAnalysisHandlerOptions) {
           };
         }),
       );
+      storageFetchDurationMs = Date.now() - storageFetchStartedAt;
+
+      const providerCallStartedAt = Date.now();
       response = await options.identifier.identify({
         scanId: job.scanId,
         images,
       });
+      providerCallDurationMs = Date.now() - providerCallStartedAt;
     } catch (error) {
       const normalized = normalizeAnalysisError(error);
       const shouldRetry =
         normalized.retryable && delivery.deliveryAttempt < delivery.maxAttempts;
+      const durationMs = Date.now() - startedAt;
       await failScanAnalysis(options.database, {
         scanId: job.scanId,
         attemptId: prepared.attemptId,
         category: normalized.category,
         message: normalized.message,
-        durationMs: Date.now() - startedAt,
+        durationMs,
         terminal: !shouldRetry,
+      });
+      console.info("[worker] scan_analysis_timing", {
+        scanId: job.scanId,
+        attemptId: prepared.attemptId,
+        correlationId: job.correlationId,
+        outcome: "failed",
+        storageFetchDurationMs,
+        providerCallDurationMs,
+        durationMs,
       });
       if (shouldRetry) {
         throw normalized;
@@ -103,13 +120,23 @@ export function createScanAnalysisHandler(options: ScanAnalysisHandlerOptions) {
       candidates,
       identification.needsReviewReasons,
     );
+    const durationMs = Date.now() - startedAt;
     await completeScanAnalysis(options.database, {
       scanId: job.scanId,
       attemptId: prepared.attemptId,
       identification,
       outcome,
       metadata: response.metadata,
-      durationMs: Date.now() - startedAt,
+      durationMs,
+    });
+    console.info("[worker] scan_analysis_timing", {
+      scanId: job.scanId,
+      attemptId: prepared.attemptId,
+      correlationId: job.correlationId,
+      outcome: outcome.status,
+      storageFetchDurationMs,
+      providerCallDurationMs,
+      durationMs,
     });
   };
 }

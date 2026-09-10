@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AnalyzeScanJobSchema,
   CancelScanResponseSchema,
   CreateScanRequestSchema,
   RETRYABLE_SCAN_STATUSES,
   RetryScanResponseSchema,
   ScanStatusSchema,
 } from "./scan.js";
+
+const baseJob = {
+  jobVersion: 1 as const,
+  scanId: "00000000-0000-4000-8000-000000000001",
+  userId: "00000000-0000-4000-8000-000000000002",
+  attemptNumber: 1,
+  imageIds: ["00000000-0000-4000-8000-000000000003"],
+  requestedAt: "2026-01-01T00:00:00.000Z",
+};
 
 describe("CreateScanRequestSchema", () => {
   it("preserves the single-scan shape by making batchId optional", () => {
@@ -22,6 +32,24 @@ describe("CreateScanRequestSchema", () => {
         batchId: "00000000-0000-4000-8000-000000000001",
       }),
     ).toMatchObject({ batchId: "00000000-0000-4000-8000-000000000001" });
+  });
+});
+
+describe("AnalyzeScanJobSchema", () => {
+  it("parses a job with no correlationId, matching every already-queued payload", () => {
+    expect(AnalyzeScanJobSchema.parse(baseJob)).toEqual(baseJob);
+  });
+
+  it("accepts an optional correlationId forwarded from the inbound request", () => {
+    expect(
+      AnalyzeScanJobSchema.parse({ ...baseJob, correlationId: "trace-1" }),
+    ).toMatchObject({ correlationId: "trace-1" });
+  });
+
+  it("rejects an invalid correlationId rather than silently dropping it", () => {
+    expect(() =>
+      AnalyzeScanJobSchema.parse({ ...baseJob, correlationId: "" }),
+    ).toThrow();
   });
 });
 

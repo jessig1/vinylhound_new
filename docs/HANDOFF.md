@@ -15,7 +15,75 @@ the log.
 
 ## Current state — verified 2026-09-09
 
-- **P3.1 task 3: quota-headroom polling, an early admission check, and
+- **P3.1 Task 6: structured request/error timing and correlation IDs is
+  complete.** Every `apps/web` API route (20 files under
+  `apps/web/src/app/api/v1/**`) now shares one `withRoute` wrapper
+  (`apps/web/src/server/http.ts`) instead of hand-rolling its own
+  `createRequestId`/try-catch/`errorResponse` triplet: it mints the existing
+  self-generated `requestId` (unchanged `x-request-id` response contract,
+  still `z.string().uuid()` in `ApiErrorSchema`), reads and validates an
+  inbound `x-request-id` header as an optional, untrusted `correlationId`
+  (`CorrelationIdSchema`, new `packages/contracts/src/common.ts`: trimmed,
+  1-200 chars, `[A-Za-z0-9._-]+` only — an absent or malformed value is
+  dropped, never rejected, since it is metadata, never identity), and logs one
+  `[web] http_request` line (route, method, status, `durationMs`, `requestId`,
+  `correlationId`) on every request whether it succeeds or throws. Two probe
+  routes (`/api/healthz`, `/api/readyz`) were deliberately left unwrapped —
+  no user identity, hit constantly by load balancers, and per-hit structured
+  logging there would add log volume disproportionate to their purpose against
+  the $25/month budget ceiling.
+  The correlation ID is forwarded past the HTTP boundary: `AnalyzeScanJobSchema`
+  (`packages/contracts/src/scan.ts`) gained an optional `correlationId` field
+  (still `.strict()`; optional means every already-queued JSONB payload
+  without it still parses), and migration 013 added a nullable, length-checked
+  `correlation_id` column to both `outbox_messages` and `scan_attempts`
+  (`packages/database/src/schema.ts`). `submitScan` and `retryScan`
+  (`packages/database/src/scan-repository.ts`) accept an optional
+  `correlationId` and write it onto both the job payload and the outbox row;
+  `prepareScanAnalysis` (`packages/database/src/analysis-repository.ts`)
+  copies `job.correlationId` onto the `scan_attempts` row it creates or resets
+  on redelivery. `POST /scans/{scanId}/submit` and `.../retry` are the two
+  routes that actually thread the request's `correlationId` through (the
+  earlier `POST /scans` admission check has no job/outbox row to attach one
+  to). One caller-supplied trace value can now be grepped across the HTTP
+  request, the queued job, and the worker attempt it produces — never used
+  for lookups, joins, or authorization at any hop.
+  Timing was split into named phases rather than one opaque duration, without
+  adding new `scan_attempts` columns (reusing the existing bundled
+  `duration_ms`, per the plan review's instrumentation guidance): the
+  upload-complete route (`apps/web/src/app/api/v1/scans/[scanId]/uploads/
+[imageId]/complete/route.ts`) now logs `[web] upload_complete_timing` with
+  `uploadPhaseDurationMs` (storage readback + validation) and
+  `normalizationPhaseDurationMs` (deriving and storing the analysis/thumbnail
+  variants) measured separately; the worker's analysis handler
+  (`apps/worker/src/analysis-handler.ts`) logs
+  `[worker] scan_analysis_timing` with `storageFetchDurationMs` and
+  `providerCallDurationMs` split out, on both the success and failure paths.
+  `docs/OPERATIONS.md`'s monitoring section now describes this concretely
+  instead of asserting request IDs were "already emitted" durably (they
+  weren't, before this session — only `scanId`/outbox `id`/job
+  `idempotencyKey`/attempt `id` were).
+  Verified: `npm run check` (92/92 unit tests, +8: 5 new
+  `CorrelationIdSchema` tests in `packages/contracts/src/common.test.ts`, 3
+  new `AnalyzeScanJobSchema` compatibility tests in `scan.test.ts`; a new
+  `apps/web/src/server/http.test.ts` for `parseCorrelationId` is not counted
+  in that unit total's package-only history but runs under the same `vitest
+run`), `npm run build` (all 25 web routes present, worker and evals compile),
+  `npm run test:integration` (34/34 database, +1: a new test submits a scan
+  with a correlation ID and confirms it lands on both the outbox row and the
+  `scan_attempts` row `prepareScanAnalysis` creates; storage/queue/worker
+  suites unchanged), and a real isolated dev-server pass on port 3100 (the
+  maintainer's own port-3000 server was never touched, and the scratch scan
+  row this created was deleted from the shared dev database afterward):
+  `GET /api/v1/quota` confirmed a missing, valid, and malformed inbound
+  `x-request-id` all produce a 200 with the log correctly showing
+  `correlationId` as `undefined`, the accepted value, or `undefined` again
+  (malformed dropped, not rejected); a full create-scan → create-upload → PUT
+  to MinIO → complete-upload cycle against real dev infrastructure produced
+  the expected `[web] upload_complete_timing` line with both phase durations
+  and the accepted correlation ID.
+
+- **P3.1 Task 4: quota-headroom polling, an early admission check, and
   abandoned-upload cleanup.** `packages/database/src/scan-repository.ts`'s
   `enforceScanQuota` (the transactional, per-user-locked check submit/retry
   already ran) is refactored around a new shared `computeQuotaHeadroom`, so
@@ -49,7 +117,7 @@ quota.ts`'s `GetQuotaHeadroomResponseSchema`, `{ used, limit, remaining }`
   blocked and idle — a failed record is never auto-retried, so an exhausted
   daily/spend limit cannot turn into a request loop; the user retries
   manually once the banner clears. `docs/OPERATIONS.md` and
-  `docs/ROADMAP.md` (P3.1's second remaining checkbox, left unchecked with a
+  `docs/ROADMAP.md` (P3.1 Task 5, left unchecked with a
   dated partial-progress note) now document why `USER_ACTIVE_SCAN_LIMIT`
   (20) deliberately equals `MAX_SCANS_PER_BATCH` (20) and why
   `ANALYSIS_CONCURRENCY` is independent of per-user quota; true batch
@@ -71,7 +139,7 @@ quota.ts`'s `GetQuotaHeadroomResponseSchema`, `{ used, limit, remaining }`
   session" button under normal (non-exhausted) quota with zero console
   errors. The isolated instance and its dist dir were removed afterward.
 
-- **P3.1 task 2: bounded upload concurrency, a persisted session queue,
+- **P3.1 Task 2: bounded upload concurrency, a persisted session queue,
   retry/cancel, review-later navigation, and refresh recovery for `/scan`.**
   `apps/web/src/app/scan/capture-session.tsx` was rewritten from a single
   global phase/one-record-at-a-time loop into a per-record state machine
@@ -222,7 +290,7 @@ quota.ts`'s `GetQuotaHeadroomResponseSchema`, `{ used, limit, remaining }`
   `docs/ROADMAP.md` replaces the placeholder with P3.1-P3.5 product maturity
   and P4.1-P4.5 measured service extraction. It incorporates the plan review's
   corrections/prerequisites, names staging/ECS for demonstrations, preserves
-  Phase 2 gates, and defers training beyond Phase 4. P3.1 task 1 is now
+  Phase 2 gates, and defers training beyond Phase 4. P3.1 Task 1 is now
   implemented: `/scan` uses an extracted capture-session component instead of
   the one-shot mode toggle, creates independent scans under an existing batch,
   and exposes one upload-only control with one cover per record. The remaining P3.1
@@ -404,7 +472,7 @@ quota.ts`'s `GetQuotaHeadroomResponseSchema`, `{ used, limit, remaining }`
   scan. Exceeding a limit returns 429 `quota_exceeded`; defaults and required
   production configuration are in `.env.example`/`docs/OPERATIONS.md`.
 
-- **Milestone 4 task 3, accessibility and cross-device testing, is complete.**
+- **Milestone 4 Task 4, accessibility and cross-device testing, is complete.**
   `@axe-core/playwright` checks WCAG 2 A/AA violations on dashboard, scan,
   collection, wishlist, and account routes, and an e2e assertion verifies a
   keyboard-visible focus target. The app shell has a skip-to-content link,
@@ -414,7 +482,7 @@ quota.ts`'s `GetQuotaHeadroomResponseSchema`, `{ used, limit, remaining }`
   plus desktop Chromium, desktop Firefox, and iPhone 13 WebKit coverage via
   `npm run test:e2e:matrix`. Firefox and WebKit engines are installed locally.
 
-- **Milestone 4 task 1, production authentication, is complete** (ADR-0013).
+- **Milestone 4 Task 1, production authentication, is complete** (ADR-0013).
   Clerk (`@clerk/nextjs@^7.8.3`) resolves session identity when
   `AUTH_MODE=production`: `apps/web/src/proxy.ts` (Next.js 16's Proxy
   convention, replacing the deprecated `middleware.ts`) protects every route
@@ -438,7 +506,7 @@ quota.ts`'s `GetQuotaHeadroomResponseSchema`, `{ used, limit, remaining }`
   and the sidebar name/avatar now read Clerk's `useUser`/`useClerk` in
   production mode and show a neutral development-mode label otherwise. The
   fake `vinylhound-demo-session` `localStorage` key is gone.
-- **Milestone 4 task 2, account export and deletion, is complete** (ADR-0014).
+- **Milestone 4 Task 2, account export and deletion, is complete** (ADR-0014).
   `GET /account/export` (`getAccountExportForUser`,
   `packages/database/src/account-repository.ts`) returns every row a user
   owns — account, batches, scans, image metadata (not image bytes),
@@ -531,11 +599,11 @@ DELETE` intended only to inspect response headers while manually verifying
   camera inputs now opt into `multiple` in batch mode as well so desktop
   browsers that render `capture` as a normal file dialog do not force
   one-at-a-time selection. One-record camera capture remains single-file.
-- Milestone 3 task 1 is complete. `docs/CATALOG_EVALUATION.md` and ADR-0009
+- Milestone 3 Task 1 is complete. `docs/CATALOG_EVALUATION.md` and ADR-0009
   select MusicBrainz as the primary canonical catalog (release group = album,
   release = edition), with Discogs deferred as an optional pressing cross-check
   requiring a fresh terms/attribution/caching review.
-- Milestone 3 task 2 is complete. `packages/catalog` provides the catalog port
+- Milestone 3 Task 2 is complete. `packages/catalog` provides the catalog port
   and MusicBrainz adapter with a meaningful User-Agent, serialized 1 req/s
   access, 429/503 retry, and 24-hour in-memory cache. The review page exposes a
   user-triggered catalog search and persists selected release-group/release
@@ -745,8 +813,9 @@ that in mind if debugging anything OIDC/session-related).
 **Phase 3-4 planning is complete for this request (2026-09-08).**
 Read `docs/ROADMAP.md` for sequence, dependencies, deliverables, and measurable
 exit criteria. `docs/PHASE_3_4_PLAN_REVIEW.md` remains the historical review.
-P3.1 task 1, the signed image-read slice, and task 2 (bounded upload
-concurrency/session queue/retry/cancel/review-later/rehydration) are complete.
+P3.1 Task 1 (capture-session flow), Task 2 (bounded upload concurrency/
+session queue/retry/cancel/review-later/rehydration), and Task 3 (the signed
+image-read slice) are complete.
 Its extracted `CaptureSession` replaces `/scan`'s mode toggle with one
 upload-only control: every selected cover photo forms an independent record
 draft, and starting the session creates one batch and submits records
@@ -761,15 +830,25 @@ matches can be added directly to collection or wishlist; both matched and
 needs-review candidates have direct list actions, while a "This isn't a
 match" choice exposes new scan and manual-entry paths.
 
-P3.1 task 3 (quota headroom/admission, active-scan/batch/daily-limit
-reconciliation, and abandoned-upload cleanup) is now complete — see "Current
-state" for the full description. The next slice is P3.1's remaining
-checkbox: structured web request/error timing and validated correlation IDs
-across HTTP, outbox/job payloads, and worker attempts (`docs/ROADMAP.md`),
-followed by P3.1's persistent-spend inventory. Batch rollover was
-deliberately deferred out of task 3 to P3.2 (see "Known gaps and risks");
-pick it up there rather than retrofitting it here unless the maintainer asks
-otherwise.
+P3.1 Task 4 (quota headroom/admission and abandoned-upload cleanup) and
+Task 6 (structured web request/error timing and correlation IDs) are
+complete — see "Current state" for both descriptions. Two P3.1 checkboxes
+remain unchecked: Task 5 (reconciling active-scan/batch/daily-attempt/
+worker-concurrency defaults, queue-pressure pause/resume, and daily/spend
+exhaustion behavior) is partially done — pause/resume and spend-exhaustion
+behavior are already satisfied by Task 4's work, and the defaults
+reconciliation itself is documented in `docs/OPERATIONS.md`, but batch
+rollover is deliberately deferred to P3.2's continuous-capture state machine
+rather than retrofitted here (see "Known gaps and risks") — and Task 7, the
+persistent-spend inventory (`docs/ROADMAP.md`): reconcile development, both
+retained Aurora data planes, storage/backups/logging, capped aggregate AI
+usage, and declared staging/production activation hours against the
+$25/month target, carrying known costs and unknowns into P3.5's reconciled
+budget artifact. Task 7 is the more natural next slice to pick up (it needs
+no new implementation decision the way Task 5's rollover does); after both,
+P3.1 is fully complete and P3.2 (guided automatic mobile capture) is next per
+`docs/ROADMAP.md`'s sequence. Pick up Task 5's batch rollover in P3.2 rather
+than retrofitting it here unless the maintainer asks otherwise.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
@@ -977,20 +1056,32 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 - **Batch rollover is not implemented.** A capture session cannot yet span
   more than one batch: `/scan` still hard-caps a session at
-  `MAX_SCANS_PER_BATCH` (20) records client-side (unchanged by P3.1 task 3),
+  `MAX_SCANS_PER_BATCH` (20) records client-side (unchanged by P3.1 Task 4),
   so no session can reach the server's own 20-scan batch limit in normal
   use. This was a deliberate scope decision, not an oversight — see
   `docs/ROADMAP.md`'s P3.1 partial-progress note — because rollover's
   natural home is P3.2's always-armed continuous-capture state machine, not
   a retrofit onto today's one-shot upload picker.
-- **P3.1 task 3's quota-headroom polling has no Playwright coverage yet.**
+- **P3.1 Task 4's quota-headroom polling has no Playwright coverage yet.**
   Verified by a scripted browser pass against a real dev server (see
   "Current state") and by database integration tests covering the headroom
   computation and early admission check directly, but nothing in
   `apps/web/e2e/` exercises the blocked-banner/disabled-button path (it
   would need a seeded user already at a quota limit, which the existing e2e
   fixtures don't set up). A regression here would not be caught in CI.
-- **P3.1 task 2's capture-session queue (`/scan`) has no Playwright coverage
+- **The worker side of the new `[worker] scan_analysis_timing` log
+  (correlationId propagation and the storage-fetch/provider-call split) was
+  not exercised against a real running worker or a live provider call.**
+  It was verified indirectly: a database integration test confirms
+  `prepareScanAnalysis` copies `job.correlationId` onto the `scan_attempts`
+  row it creates, and the web-side correlation/timing logging
+  (`[web] http_request`, `[web] upload_complete_timing`) was verified against
+  a real running dev server. Nothing exercises `apps/worker/src/
+analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
+  identify call; a regression in the phase split or in reading
+  `job.correlationId` off a real dispatched job would not be caught by any
+  current test.
+- **P3.1 Task 2's capture-session queue (`/scan`) has no Playwright coverage
   yet**, and two scope limitations worth knowing before extending it: the
   "N submitted so far" review-later link's counter is in-memory only and
   resets to zero on a refresh, so a returning user does not immediately see
@@ -1001,7 +1092,7 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   the same way whether its upload had actually reached the server or never
   started at all (it never had a chance to register partial server state in
   the latter case), which is accurate but slightly imprecise. Neither
-  blocks P3.1 task 3.
+  blocks P3.1 Task 4.
 - **The `/library/{itemId}` detail page has no Playwright coverage yet.** Its
   behavior was verified by a scripted browser pass against a dev server (steps
   listed in "Current state") and by database integration tests, but nothing in
@@ -1087,6 +1178,46 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-09 - Claude (continuing the same day).** Implemented P3.1's
+  structured request/error timing and correlation-ID checkbox — see "Current
+  state" for the full description. Every `apps/web` API route now shares one
+  `withRoute` wrapper (`apps/web/src/server/http.ts`) for request timing,
+  error handling, and a `[web] http_request` log line, replacing 20 routes'
+  duplicated `createRequestId`/try-catch pairs; deliberately left
+  `/api/healthz`/`/api/readyz` unwrapped as budget-conscious probe exceptions.
+  An inbound `x-request-id` header is validated (`CorrelationIdSchema`, new
+  `packages/contracts/src/common.ts`) and forwarded as an optional
+  `correlationId` on `AnalyzeScanJobSchema` and a new nullable
+  `correlation_id` column on `outbox_messages`/`scan_attempts` (migration
+  013), so one trace value greps across the HTTP request, the queued job,
+  and the worker attempt. Split previously-bundled timing into named phases
+  via structured logs only (no new duration columns): the upload-complete
+  route logs upload vs. normalization duration separately, and the worker's
+  analysis handler logs storage-fetch vs. provider-call duration separately.
+  Verified `npm run check` (95/95 unit tests, +11: 5 `CorrelationIdSchema`
+  tests, 3 `AnalyzeScanJobSchema` compatibility tests, 3 new
+  `parseCorrelationId` tests in a new `apps/web/src/server/http.test.ts`),
+  `npm run build` (all 25 web routes present), `npm run test:integration`
+  (34/34 database, +1), and a real isolated dev-server pass on port 3100 (the
+  maintainer's own port-3000 server untouched; the scratch scan created
+  during verification was deleted from the shared dev database afterward)
+  confirming correlation-ID accept/drop behavior and the new
+  `[web] upload_complete_timing` log against a real create-scan → upload →
+  complete cycle. The worker side of the new timing/correlation logging was
+  not exercised against a live analysis run — see "Known gaps and risks."
+  Separately, at the maintainer's request, gave every phase/milestone
+  checklist in `docs/ROADMAP.md` explicit, restarting-per-section `Task N`
+  numbers (e.g. this session's work is P3.1 Task 6) so future references are
+  unambiguous — this session had to ask the maintainer to disambiguate what
+  "P3.1 Task 5" meant before starting, since `docs/HANDOFF.md`'s informal
+  historical numbering did not line up 1:1 with the roadmap's checkbox order.
+  Reconciled every numbered reference in this file's "Current state" and
+  "Resume point" sections against the new canonical numbers (the
+  quota-headroom work above is P3.1 Task 4, not "task 3" as earlier sessions
+  called it; Milestone 4's accessibility work is Task 4, not "task 3").
+  Session-log entries below are left as originally written, since they are
+  historical record, not current state.
 
 - **2026-09-09 - Claude.** Implemented P3.1 task 3: quota-headroom
   contracts/polling (`GET /api/v1/quota`), an early advisory admission check

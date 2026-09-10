@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { CorrelationIdSchema } from "./common.js";
 import {
   ImageMimeTypeSchema,
   ImageViewTypeSchema,
@@ -98,6 +99,7 @@ export const AnalyzeScanJobSchema = z
         message: "Image IDs must be unique.",
       }),
     requestedAt: z.string().datetime(),
+    correlationId: CorrelationIdSchema.optional(),
   })
   .strict();
 

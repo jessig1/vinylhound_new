@@ -4,21 +4,21 @@ import { cancelScan } from "@vinylhound/database";
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
-  createRequestId,
-  errorResponse,
   jsonResponse,
   parseUuid,
   requireIdempotencyKey,
+  withRoute,
 } from "@/server/http";
 
 export const runtime = "nodejs";
 
-export async function POST(
-  request: Request,
-  route: { params: Promise<{ scanId: string }> },
-) {
-  const requestId = createRequestId();
-  try {
+export const POST = withRoute(
+  "scans.cancel",
+  async (
+    request,
+    { requestId },
+    route: { params: Promise<{ scanId: string }> },
+  ) => {
     const { scanId: rawScanId } = await route.params;
     const scanId = parseUuid(rawScanId, "scanId");
     requireIdempotencyKey(request);
@@ -35,7 +35,5 @@ export async function POST(
     });
 
     return jsonResponse(response, 200, requestId);
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

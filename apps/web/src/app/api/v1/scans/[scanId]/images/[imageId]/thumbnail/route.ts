@@ -9,23 +9,18 @@ import {
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import {
-  HttpError,
-  createRequestId,
-  errorResponse,
-  jsonResponse,
-  parseUuid,
-} from "@/server/http";
+import { HttpError, jsonResponse, parseUuid, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  _request: Request,
-  route: { params: Promise<{ scanId: string; imageId: string }> },
-) {
-  const requestId = createRequestId();
-  try {
+export const GET = withRoute(
+  "scans.images.thumbnail",
+  async (
+    _request,
+    { requestId },
+    route: { params: Promise<{ scanId: string; imageId: string }> },
+  ) => {
     const { scanId: rawScanId, imageId: rawImageId } = await route.params;
     const scanId = parseUuid(rawScanId, "scanId");
     const imageId = parseUuid(rawImageId, "imageId");
@@ -63,7 +58,5 @@ export async function GET(
     const response = jsonResponse(body, 200, requestId);
     response.headers.set("cache-control", "private, no-store");
     return response;
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

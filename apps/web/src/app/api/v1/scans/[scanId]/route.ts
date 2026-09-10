@@ -3,22 +3,18 @@ import { getScanForUser } from "@vinylhound/database";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import {
-  createRequestId,
-  errorResponse,
-  jsonResponse,
-  parseUuid,
-} from "@/server/http";
+import { jsonResponse, parseUuid, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  _request: Request,
-  route: { params: Promise<{ scanId: string }> },
-) {
-  const requestId = createRequestId();
-  try {
+export const GET = withRoute(
+  "scans.get",
+  async (
+    _request,
+    { requestId },
+    route: { params: Promise<{ scanId: string }> },
+  ) => {
     const { scanId: rawScanId } = await route.params;
     const scanId = parseUuid(rawScanId, "scanId");
     const context = getServerContext();
@@ -35,7 +31,5 @@ export async function GET(
     );
     response.headers.set("cache-control", "no-store");
     return response;
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

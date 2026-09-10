@@ -3,14 +3,14 @@ import { getAccountExportForUser } from "@vinylhound/database";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import { createRequestId, errorResponse, jsonResponse } from "@/server/http";
+import { jsonResponse, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const requestId = createRequestId();
-  try {
+export const GET = withRoute(
+  "account.export",
+  async (_request, { requestId }) => {
     const context = getServerContext();
     const userId = await requireUserId(context);
     const result = await getAccountExportForUser(context.database.db, {
@@ -28,7 +28,5 @@ export async function GET() {
       'attachment; filename="vinylhound-account-export.json"',
     );
     return response;
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

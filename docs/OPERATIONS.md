@@ -154,7 +154,23 @@ external monitor can reach them in production auth mode.
 
 Collect JSON-capable application logs from web and worker processes. Retain the
 stable request, scan, outbox message, job, and attempt IDs already emitted by
-the application, but never signed URLs, credentials, or image bytes. Alert on:
+the application, but never signed URLs, credentials, or image bytes. Every
+`apps/web` API route logs one `[web] http_request` line (route, method,
+status, `durationMs`, `requestId`, and `correlationId` if the caller sent one)
+via a shared `withRoute` wrapper (`apps/web/src/server/http.ts`), so this is
+no longer only true of the durable IDs — an inbound `x-request-id` header is
+validated (bounded length/charset, dropped rather than rejected if malformed)
+and forwarded as `correlationId` onto the outbox row, the job payload, and the
+`scan_attempts` row the worker writes, so one caller-supplied trace value can
+be grepped across the HTTP request, the queued job, and the analysis attempt.
+It is untrusted metadata only: never used for lookups, joins, or
+authorization. The upload-complete route additionally logs
+`[web] upload_complete_timing` with `uploadPhaseDurationMs` (readback plus
+validation) and `normalizationPhaseDurationMs` (deriving and storing the
+analysis/thumbnail variants) separated; the worker logs
+`[worker] scan_analysis_timing` with `storageFetchDurationMs` and
+`providerCallDurationMs` split out from the existing bundled
+`scan_attempts.duration_ms`. Alert on:
 
 - readiness failures or sustained 5xx responses;
 - queue age above five minutes, outbox publish failures, and worker restarts;

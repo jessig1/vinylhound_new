@@ -3,13 +3,13 @@ import { deleteAccount } from "@vinylhound/database";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import { createRequestId, errorResponse, jsonResponse } from "@/server/http";
+import { jsonResponse, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 
-export async function DELETE() {
-  const requestId = createRequestId();
-  try {
+export const DELETE = withRoute(
+  "account.delete",
+  async (_request, { requestId }) => {
     const context = getServerContext();
     const userId = await requireUserId(context);
 
@@ -35,7 +35,5 @@ export async function DELETE() {
     );
     response.headers.set("cache-control", "no-store");
     return response;
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

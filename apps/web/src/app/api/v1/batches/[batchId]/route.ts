@@ -7,22 +7,18 @@ import {
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import {
-  createRequestId,
-  errorResponse,
-  jsonResponse,
-  parseUuid,
-} from "@/server/http";
+import { jsonResponse, parseUuid, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  _request: Request,
-  route: { params: Promise<{ batchId: string }> },
-) {
-  const requestId = createRequestId();
-  try {
+export const GET = withRoute(
+  "batches.get",
+  async (
+    _request,
+    { requestId },
+    route: { params: Promise<{ batchId: string }> },
+  ) => {
     const { batchId: rawBatchId } = await route.params;
     const batchId = parseUuid(rawBatchId, "batchId");
     const context = getServerContext();
@@ -65,7 +61,5 @@ export async function GET(
     );
     response.headers.set("cache-control", "no-store");
     return response;
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

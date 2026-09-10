@@ -577,6 +577,7 @@ export async function submitScan(
     scanId: string;
     idempotencyKey: string;
     quotaLimits?: ScanQuotaLimits;
+    correlationId?: string;
   },
 ) {
   return db.transaction(async (transaction) => {
@@ -660,6 +661,7 @@ export async function submitScan(
       attemptNumber: INITIAL_SCAN_ATTEMPT,
       imageIds: images.map((image) => image.id),
       requestedAt: submittedAt.toISOString(),
+      correlationId: input.correlationId,
     });
     const jobId = analyzeScanJobId(scan.id, INITIAL_SCAN_ATTEMPT);
 
@@ -669,6 +671,7 @@ export async function submitScan(
       attemptNumber: INITIAL_SCAN_ATTEMPT,
       idempotencyKey: jobId,
       payload: job,
+      correlationId: job.correlationId ?? null,
     });
 
     const [updated] = await transaction
@@ -688,7 +691,12 @@ export async function submitScan(
 
 export async function retryScan(
   db: Database,
-  input: { userId: string; scanId: string; quotaLimits?: ScanQuotaLimits },
+  input: {
+    userId: string;
+    scanId: string;
+    quotaLimits?: ScanQuotaLimits;
+    correlationId?: string;
+  },
 ) {
   return db.transaction(async (transaction) => {
     const [scan] = await transaction
@@ -764,6 +772,7 @@ export async function retryScan(
       attemptNumber: nextAttemptNumber,
       imageIds: images.map((image) => image.id),
       requestedAt: requestedAt.toISOString(),
+      correlationId: input.correlationId,
     });
     const jobId = analyzeScanJobId(scan.id, nextAttemptNumber);
 
@@ -773,6 +782,7 @@ export async function retryScan(
       attemptNumber: nextAttemptNumber,
       idempotencyKey: jobId,
       payload: job,
+      correlationId: job.correlationId ?? null,
     });
 
     const [updated] = await transaction

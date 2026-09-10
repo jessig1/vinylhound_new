@@ -17,21 +17,21 @@ import {
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
-  createRequestId,
-  errorResponse,
   jsonResponse,
   parseUuid,
   requireIdempotencyKey,
+  withRoute,
 } from "@/server/http";
 
 export const runtime = "nodejs";
 
-export async function POST(
-  request: Request,
-  route: { params: Promise<{ scanId: string; imageId: string }> },
-) {
-  const requestId = createRequestId();
-  try {
+export const POST = withRoute(
+  "scans.uploads.complete",
+  async (
+    request,
+    { requestId, correlationId },
+    route: { params: Promise<{ scanId: string; imageId: string }> },
+  ) => {
     requireIdempotencyKey(request);
     const params = await route.params;
     const scanId = parseUuid(params.scanId, "scanId");
@@ -49,6 +49,7 @@ export async function POST(
       return completedResponse(image, requestId);
     }
 
+    const uploadPhaseStartedAt = Date.now();
     let validated;
     let stored;
     try {
@@ -72,7 +73,9 @@ export async function POST(
       }
       throw error;
     }
+    const uploadPhaseDurationMs = Date.now() - uploadPhaseStartedAt;
 
+    const normalizationPhaseStartedAt = Date.now();
     const normalized = await normalizeImage(stored.bytes);
     await Promise.all([
       context.storage.putObject({
@@ -86,6 +89,8 @@ export async function POST(
         contentType: normalized.thumbnail.mimeType,
       }),
     ]);
+    const normalizationPhaseDurationMs =
+      Date.now() - normalizationPhaseStartedAt;
 
     const completed = await completeImageUpload(context.database.db, {
       ...lookup,
@@ -96,11 +101,17 @@ export async function POST(
       analysisHeight: normalized.analysis.height,
       thumbnailSizeBytes: normalized.thumbnail.sizeBytes,
     });
+    console.info("[web] upload_complete_timing", {
+      scanId,
+      imageId,
+      requestId,
+      correlationId,
+      uploadPhaseDurationMs,
+      normalizationPhaseDurationMs,
+    });
     return completedResponse(completed, requestId);
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);
 
 function completedResponse(
   image: {

@@ -180,6 +180,7 @@ export const outboxMessages = pgTable(
     attemptNumber: integer("attempt_number").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     payload: jsonb("payload").notNull(),
+    correlationId: text("correlation_id"),
     publishAttempts: integer("publish_attempts").default(0).notNull(),
     availableAt: timestamp("available_at", { withTimezone: true })
       .defaultNow()
@@ -217,6 +218,10 @@ export const outboxMessages = pgTable(
     check(
       "outbox_messages_attempt_number_check",
       sql`${table.attemptNumber} > 0`,
+    ),
+    check(
+      "outbox_messages_correlation_id_length_check",
+      sql`${table.correlationId} is null or char_length(${table.correlationId}) between 1 and 200`,
     ),
   ],
 );
@@ -311,6 +316,7 @@ export const scanAttempts = pgTable(
     attemptNumber: integer("attempt_number").notNull(),
     deliveryAttempt: integer("delivery_attempt").default(1).notNull(),
     status: scanAttemptStatusEnum("status").notNull(),
+    correlationId: text("correlation_id"),
     model: text("model").notNull(),
     promptVersion: text("prompt_version").notNull(),
     providerResponseId: text("provider_response_id"),
@@ -350,6 +356,10 @@ export const scanAttempts = pgTable(
       sql`${table.deliveryAttempt} > 0`,
     ),
     check("scan_attempts_model_check", sql`char_length(${table.model}) > 0`),
+    check(
+      "scan_attempts_correlation_id_length_check",
+      sql`${table.correlationId} is null or char_length(${table.correlationId}) between 1 and 200`,
+    ),
     check(
       "scan_attempts_prompt_version_check",
       sql`char_length(${table.promptVersion}) > 0`,

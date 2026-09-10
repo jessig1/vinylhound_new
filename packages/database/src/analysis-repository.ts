@@ -137,6 +137,7 @@ export async function prepareScanAnalysis(
         .update(scanAttempts)
         .set({
           status: "processing",
+          correlationId: input.job.correlationId ?? null,
           model: input.model,
           promptVersion: input.promptVersion,
           providerResponseId: null,
@@ -161,6 +162,7 @@ export async function prepareScanAnalysis(
           attemptNumber: input.job.attemptNumber,
           deliveryAttempt: input.deliveryAttempt,
           status: "processing",
+          correlationId: input.job.correlationId ?? null,
           model: input.model,
           promptVersion: input.promptVersion,
           startedAt,

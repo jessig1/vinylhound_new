@@ -3,18 +3,13 @@ import { createOrGetBatch } from "@vinylhound/database";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import {
-  createRequestId,
-  errorResponse,
-  jsonResponse,
-  requireIdempotencyKey,
-} from "@/server/http";
+import { jsonResponse, requireIdempotencyKey, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request) {
-  const requestId = createRequestId();
-  try {
+export const POST = withRoute(
+  "batches.create",
+  async (request, { requestId }) => {
     const idempotencyKey = requireIdempotencyKey(request);
     const context = getServerContext();
     const userId = await requireUserId(context);
@@ -29,7 +24,5 @@ export async function POST(request: Request) {
     });
 
     return jsonResponse(response, result.created ? 201 : 200, requestId);
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

@@ -4,21 +4,21 @@ import { submitScan } from "@vinylhound/database";
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 import {
-  createRequestId,
-  errorResponse,
   jsonResponse,
   parseUuid,
   requireIdempotencyKey,
+  withRoute,
 } from "@/server/http";
 
 export const runtime = "nodejs";
 
-export async function POST(
-  request: Request,
-  route: { params: Promise<{ scanId: string }> },
-) {
-  const requestId = createRequestId();
-  try {
+export const POST = withRoute(
+  "scans.submit",
+  async (
+    request,
+    { requestId, correlationId },
+    route: { params: Promise<{ scanId: string }> },
+  ) => {
     const { scanId: rawScanId } = await route.params;
     const scanId = parseUuid(rawScanId, "scanId");
     const idempotencyKey = requireIdempotencyKey(request);
@@ -29,6 +29,7 @@ export async function POST(
       userId,
       scanId,
       idempotencyKey,
+      correlationId,
       quotaLimits: {
         dailyAnalysisLimit: context.config.USER_DAILY_ANALYSIS_LIMIT,
         activeScanLimit: context.config.USER_ACTIVE_SCAN_LIMIT,
@@ -44,7 +45,5 @@ export async function POST(
     });
 
     return jsonResponse(response, result.created ? 202 : 200, requestId);
-  } catch (error) {
-    return errorResponse(error, requestId);
-  }
-}
+  },
+);

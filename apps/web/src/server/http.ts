@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { ApiErrorSchema, IdempotencyKeySchema } from "@vinylhound/contracts";
+import {
+  ApiErrorSchema,
+  CORRELATION_ID_HEADER,
+  CorrelationIdSchema,
+  IdempotencyKeySchema,
+} from "@vinylhound/contracts";
 import { CatalogProviderError } from "@vinylhound/catalog";
 import { DatabaseCommandError } from "@vinylhound/database";
 import {
@@ -25,6 +30,74 @@ export class HttpError extends Error {
 
 export function createRequestId() {
   return randomUUID();
+}
+
+/**
+ * Reads the inbound correlation ID, if the caller sent one. This is
+ * untrusted metadata forwarded onto the outbox row, job payload, and worker
+ * attempt purely so a caller-supplied trace value can be grepped end to end
+ * — never used for identity, lookups, or authorization. An absent or
+ * malformed value is dropped rather than rejecting the request.
+ */
+export function parseCorrelationId(request: Request): string | undefined {
+  const header = request.headers.get(CORRELATION_ID_HEADER);
+  if (header === null) {
+    return undefined;
+  }
+  const result = CorrelationIdSchema.safeParse(header);
+  return result.success ? result.data : undefined;
+}
+
+export interface RequestContext {
+  requestId: string;
+  correlationId?: string;
+}
+
+export function logHttpEvent(fields: {
+  route: string;
+  method: string;
+  status: number;
+  durationMs: number;
+  requestId: string;
+  correlationId?: string;
+}) {
+  console.info("[web] http_request", fields);
+}
+
+/**
+ * Wraps a route handler with a shared request ID, an inbound correlation ID
+ * (if any), and structured request/error timing, so every `apps/web` API
+ * route logs one consistent line instead of each repeating its own
+ * try/catch and requestId plumbing.
+ */
+export function withRoute<Rest extends unknown[]>(
+  routeName: string,
+  handler: (
+    request: Request,
+    context: RequestContext,
+    ...rest: Rest
+  ) => Promise<Response>,
+) {
+  return async (request: Request, ...rest: Rest): Promise<Response> => {
+    const requestId = createRequestId();
+    const correlationId = parseCorrelationId(request);
+    const startedAt = Date.now();
+    let response: Response;
+    try {
+      response = await handler(request, { requestId, correlationId }, ...rest);
+    } catch (error) {
+      response = errorResponse(error, requestId);
+    }
+    logHttpEvent({
+      route: routeName,
+      method: request.method,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      requestId,
+      correlationId,
+    });
+    return response;
+  };
 }
 
 export async function parseJson<T>(request: Request, schema: z.ZodType<T>) {
