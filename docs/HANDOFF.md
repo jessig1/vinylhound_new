@@ -15,21 +15,23 @@ the log.
 
 ## Current state — verified 2026-09-10
 
-- **P3.2 Task 1 (guided automatic capture) is implemented; Tasks 2-4 remain
-  open.** `/scan` retains its existing file-upload path and adds an explicitly
+- **P3.2 Tasks 1-2 (guided automatic capture) are implemented; Tasks 3-4
+  remain open.** `/scan` retains its existing file-upload path and adds an explicitly
   opt-in `getUserMedia` live-camera viewfinder requesting the environment-facing
   camera where available. A low-resolution frame sampler waits for a steady
   frame, writes exactly one canvas-generated JPEG as a normal independent
   session record, then enters `disarmed`; it must observe a material frame
   change for two samples before passing through `rearmed` and returning to
   `armed`. The state is also communicated in the UI, so a held cover cannot
-  repeatedly add records. Stopping the live camera and component cleanup stop
-  every media track; permission/unsupported failures surface an error while the
-  upload fallback remains usable. This completes only Task 1's bounded state
-  machine; quota/queue/background/lost-access pause semantics, focused
-  automated camera tests, and the real-device protocol are deliberately left to
-  P3.2 Tasks 2-4. The full repository check (95 unit tests) and production
-  build pass. The existing mobile browser suite was attempted but is blocked
+  repeatedly add records. Task 2 adds a distinct paused state that releases all
+  camera tracks when quota/queue capacity is blocked, the per-session record
+  cap is reached, the tab backgrounds, or a stream/track ends unexpectedly;
+  resume is explicit and file upload remains available. Stopping the live camera
+  and component cleanup also stop every media track; permission/unsupported
+  failures surface an error while the upload fallback remains usable. Focused
+  automated camera tests and the real-device protocol remain for P3.2 Tasks 3-4.
+  The full repository check (95 unit tests) passes. The existing mobile browser
+  suite was attempted previously but is blocked
   before client hydration by the test standalone server returning 404 for every
   `/_next/static/*` asset; its resulting upload/focus failures do not exercise
   this feature and need the e2e build/output-path issue resolved separately.
@@ -1147,13 +1149,16 @@ P3.2's continuous-capture state machine, since today's one-shot `/scan`
 picker hard-caps a session at `MAX_SCANS_PER_BATCH` and cannot reach that
 path.
 
-**P3.2 Task 1 (guided automatic mobile capture) is complete; resume at Task 2.** The `/scan` capture session now has an opt-in live-camera viewfinder and
+**P3.2 Tasks 1-2 (guided automatic mobile capture) are complete; resume at
+Task 3.** The `/scan` capture session now has an opt-in live-camera viewfinder and
 bounded `armed`/`captured`/`disarmed`/`rearmed` state machine. It samples a
 steady frame into a supported JPEG once, then requires material frame change
-before accepting another record; file upload remains intact. Task 2 must add
-quota/queue/background/lost-camera-access pause semantics while preserving the
-fallback. Tasks 3-4 must verify MIME/HEIC/multi-view/focus coverage and add
-stubbed-camera tests plus the real iPhone Safari/Android Chrome protocol. Read
+before accepting another record; file upload remains intact. Live capture now
+pauses and stops its tracks when quota/queue capacity blocks it, a session fills,
+the page backgrounds, or camera access ends; users resume deliberately and can
+always use the file fallback. Tasks 3-4 must verify MIME/HEIC/multi-view/focus
+coverage and add stubbed-camera tests plus the real iPhone Safari/Android Chrome
+protocol. Read
 P3.2's exit criterion and G3 in `docs/PHASE_3_4_PLAN_REVIEW.md` before claiming
 the mobile-device outcome.
 
@@ -2647,3 +2652,11 @@ test:integration` (29/29, 2 new), `npm run build` (28 routes, +2), and
   mid-upload reload/resume/recapture, and cancel-while-queued; all scratch
   verification files and the extra `next dev` instance used for it were
   removed afterward. Checked off task 2 in `docs/ROADMAP.md`.
+
+- **2026-09-10 - Codex.** Implemented P3.2 Task 2. The opt-in live camera now
+  enters a visible paused state and releases its stream/tracks on quota or
+  queue-capacity pressure, the session's record cap, tab backgrounding, and
+  unexpected stream/track termination. It requires an explicit resume and
+  keeps the file-input fallback available. Marked Task 2 complete in
+  `docs/ROADMAP.md`; Tasks 3-4 remain. Verified `npm run check` (95/95),
+  `npm run build`, and `git diff --check`.

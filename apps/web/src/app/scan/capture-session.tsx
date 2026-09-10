@@ -80,7 +80,11 @@ type QuotaState =
       message: string;
     };
 
-type LiveCameraState = "off" | "armed" | "captured" | "disarmed" | "rearmed";
+type LiveCameraState =
+  "off" | "armed" | "captured" | "disarmed" | "rearmed" | "paused";
+
+type CameraPauseReason =
+  "quota" | "session_full" | "background" | "access_lost";
 
 const LIVE_CAPTURE_SAMPLE_MS = 250;
 const LIVE_CAPTURE_STABLE_SAMPLES = 4;
@@ -135,6 +139,8 @@ export function CaptureSession() {
   const [quota, setQuota] = useState<QuotaState>({ status: "unknown" });
   const [cameraState, setCameraState] = useState<LiveCameraState>("off");
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraPauseReason, setCameraPauseReason] =
+    useState<CameraPauseReason | null>(null);
 
   const refreshQuota = useRef(async () => {
     try {
@@ -170,6 +176,30 @@ export function CaptureSession() {
     const interval = setInterval(() => void refreshQuota(), 20_000);
     return () => clearInterval(interval);
   }, [quota.status, sessionRunning, refreshQuota]);
+
+  // A live viewfinder is useful only while the session can accept another
+  // record. Stop the stream as soon as advisory quota/queue pressure appears;
+  // this is intentionally more conservative than the file picker, whose
+  // selected bytes remain a local draft until the user starts the session.
+  useEffect(() => {
+    if (quota.status === "blocked" && cameraStateRef.current !== "off") {
+      pauseLiveCamera("quota");
+    }
+  }, [quota.status]);
+
+  useEffect(() => {
+    const pauseForBackgrounding = () => {
+      if (
+        document.visibilityState === "hidden" &&
+        isLiveCameraActive(cameraStateRef.current)
+      ) {
+        pauseLiveCamera("background");
+      }
+    };
+    document.addEventListener("visibilitychange", pauseForBackgrounding);
+    return () =>
+      document.removeEventListener("visibilitychange", pauseForBackgrounding);
+  }, []);
 
   useEffect(() => {
     recordsRef.current = records;
@@ -272,11 +302,27 @@ export function CaptureSession() {
     capturedCameraFrameRef.current = null;
     stableSamplesRef.current = 0;
     changedSamplesRef.current = 0;
+    setCameraPauseReason(null);
     setLiveCameraState("off");
   }
 
+  function pauseLiveCamera(reason: CameraPauseReason) {
+    stopLiveCamera();
+    setCameraPauseReason(reason);
+    setLiveCameraState("paused");
+  }
+
   async function startLiveCamera() {
-    if (sessionRunning || cameraStateRef.current !== "off") return;
+    if (
+      sessionRunning ||
+      (cameraStateRef.current !== "off" && cameraStateRef.current !== "paused")
+    ) {
+      return;
+    }
+    if (quota.status === "blocked") {
+      pauseLiveCamera("quota");
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError(
         "Live camera capture is not supported in this browser. You can still upload photos.",
@@ -285,6 +331,7 @@ export function CaptureSession() {
     }
     const requestId = ++cameraRequestRef.current;
     setCameraError(null);
+    setCameraPauseReason(null);
     // Mount the viewfinder before permission resolves, so the stream can be
     // attached immediately after the user grants access.
     setLiveCameraState("armed");
@@ -298,6 +345,15 @@ export function CaptureSession() {
         return;
       }
       cameraStreamRef.current = stream;
+      const pauseForLostAccess = () => {
+        if (requestId === cameraRequestRef.current) {
+          pauseLiveCamera("access_lost");
+        }
+      };
+      stream.addEventListener("inactive", pauseForLostAccess, { once: true });
+      for (const track of stream.getVideoTracks()) {
+        track.addEventListener("ended", pauseForLostAccess, { once: true });
+      }
       // A previously granted permission can resolve immediately. Give React a
       // frame to mount the viewfinder that was enabled just before the request.
       await new Promise<void>((resolve) =>
@@ -405,7 +461,7 @@ export function CaptureSession() {
       setCameraError(
         `A capture session can include up to ${MAX_SCANS_PER_BATCH} records. Start or review this session before capturing more.`,
       );
-      setLiveCameraState("disarmed");
+      pauseLiveCamera("session_full");
       return;
     }
     const file = new File(
@@ -822,14 +878,17 @@ export function CaptureSession() {
               type="file"
             />
           </label>
-          {cameraState === "off" ? (
+          {!isLiveCameraActive(cameraState) ? (
             <button
               className="secondary-button"
-              disabled={sessionRunning}
+              disabled={sessionRunning || quota.status === "blocked"}
               onClick={() => void startLiveCamera()}
               type="button"
             >
-              <Icon name="camera" size={18} /> Use live camera
+              <Icon name="camera" size={18} />
+              {cameraState === "paused"
+                ? " Resume live camera"
+                : " Use live camera"}
             </button>
           ) : (
             <button
@@ -842,7 +901,7 @@ export function CaptureSession() {
           )}
         </div>
 
-        {cameraState !== "off" ? (
+        {isLiveCameraActive(cameraState) ? (
           <section className="live-camera" aria-label="Live camera capture">
             <div className="live-camera__viewfinder">
               <video autoPlay muted playsInline ref={cameraVideoRef} />
@@ -864,6 +923,13 @@ export function CaptureSession() {
         {cameraError ? (
           <p className="form-error" role="alert">
             {cameraError}
+          </p>
+        ) : null}
+
+        {cameraState === "paused" && cameraPauseReason ? (
+          <p className="capture-session__quota-banner" role="status">
+            {liveCameraPauseMessage(cameraPauseReason)} You can still upload a
+            photo manually.
           </p>
         ) : null}
 
@@ -1063,6 +1129,8 @@ function liveCameraStateLabel(state: LiveCameraState) {
       return "Rearmed";
     case "off":
       return "Off";
+    case "paused":
+      return "Paused";
   }
 }
 
@@ -1078,7 +1146,26 @@ function liveCameraStateMessage(state: LiveCameraState) {
       return "New framing detected. Ready for the next cover.";
     case "off":
       return "";
+    case "paused":
+      return "Live capture is paused.";
   }
+}
+
+function liveCameraPauseMessage(reason: CameraPauseReason) {
+  switch (reason) {
+    case "quota":
+      return "Live capture is paused until scan capacity is available.";
+    case "session_full":
+      return "Live capture is paused because this session is full.";
+    case "background":
+      return "Live capture paused when this page went to the background.";
+    case "access_lost":
+      return "Live camera access ended.";
+  }
+}
+
+function isLiveCameraActive(state: LiveCameraState) {
+  return state !== "off" && state !== "paused";
 }
 
 function cameraFrameDifference(
