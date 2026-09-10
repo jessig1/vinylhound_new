@@ -47,35 +47,64 @@ rights`). Once authenticated, `gh run view --log-failed` plus
   `/vinylhound/staging/worker`/`worker/worker/<taskId>` (also needed a fresh
   `aws login`, since the maintainer's AWS session had expired exactly as
   documented below) surfaced the real error: `could not connect to postgres:
-Error: timeout expired`, thrown from node-pg-migrate's own connect
-  handler. Root cause: staging's Aurora Serverless v2 cluster
-  (`min_capacity = 0` when inactive, `infra/terraform/environment/
-database.tf:29-31`) has to resume from zero capacity when the workflow sets
-  `environment_active = true`, and that resume can take longer than the
-  single connection attempt's `DATABASE_CONNECT_TIMEOUT_MS` (30s default,
-  `.env.example:18`) — the migration task tries to connect immediately after
-  Terraform's apply returns, with no wait for Aurora to actually be
-  reachable. This is the same class of race already fixed once for
-  production's migration job (commit `5c098b6`, "wait for readable runtime
-  secrets"), just a different resource being asked to become ready.
-  Fixed in `apps/worker/src/migrate.ts`: wrapped the
-  `runDatabaseMigrations` call in a bounded retry (5 attempts, 15s delay
-  between them) rather than touching `run-worker-command.sh`'s own ECS-level
-  retry (which deliberately does not retry real application exit codes, to
-  avoid masking genuine migration bugs in CI feedback — see its comments).
-  This is safe to retry blindly because `runDatabaseMigrations` already runs
-  every migration in one transaction (`singleTransaction: true`,
-  `packages/database/src/migrations.ts`): a failed attempt commits nothing,
-  so a retry after a connection failure is a clean re-attempt, and a retry
-  after a genuine SQL bug in a migration file just fails identically on
-  every attempt and still surfaces after the 5th, only slower. Verified
-  `npm run lint`/`typecheck`/`test` (95/95)/`build` all pass; did not
-  re-trigger a real staging deploy to confirm the fix live (would cost real
-  AWS spend and time) — the fix is verified by matching the documented
-  Aurora Serverless v2 resume-time behavior and the existing precedent
-  pattern, not by reproducing a live pass — the next push's own `Deploy
-staging` run is the real confirmation; check it before assuming this is
-  closed.
+Error: timeout expired`, thrown from node-pg-migrate's own connect handler.
+  First hypothesis (wrong, but not useless — see below): Aurora Serverless
+  v2's ordinary 0-ACU auto-pause/resume taking longer than the migration
+  task's single `DATABASE_CONNECT_TIMEOUT_MS` (30s default,
+  `.env.example:18`). Fixed `apps/worker/src/migrate.ts` to wrap the
+  `runDatabaseMigrations` call in a bounded retry (5 attempts, 15s apart)
+  rather than touching `run-worker-command.sh`'s own ECS-level retry (which
+  deliberately does not retry real application exit codes, to avoid masking
+  genuine migration bugs in CI feedback). Safe to retry blindly because
+  `runDatabaseMigrations` runs every migration in one transaction
+  (`singleTransaction: true`, `packages/database/src/migrations.ts`): a
+  failed attempt commits nothing. Committed `973b9e9` and pushed — **and the
+  retry fix alone did not resolve it**: the rerun still failed all 5 attempts
+  with the identical error over ~4 minutes, which is far longer than
+  Serverless v2's normal resume (confirmed from real RDS event history,
+  below, to be ~15s).
+  That forced the real investigation: `aws rds describe-db-clusters` showed
+  `vinylhound-staging` (and separately, `vinylhound-production`) in AWS
+  `Status: stopped` — a distinct, explicit administrative stop, not
+  serverless auto-pause; a stopped cluster does not respond to connections
+  at all, and nothing auto-resumes it. `aws rds describe-events
+--source-identifier vinylhound-staging --source-type db-cluster --duration
+20160` gave the full picture: many fast (~15s) `Initiated
+pause`/`Successfully resumed` cycles through 2026-09-06/07 confirming normal
+  Serverless v2 behavior is not the problem, then a `DB cluster stopped`
+  event at `2026-09-07T22:09:17Z` — timed exactly to this file's own
+  record of deliberately winding down Phase 2 staging/production
+  infrastructure that day. `deploy-staging.yml` still runs automatically on
+  every push to `main`, so every push since 2026-09-07 was triggering a
+  staging deploy doomed to fail at the migration step, independent of any
+  code change. Nothing in this repository (`infra/terraform`,
+  `.github/workflows`, `scripts/`) issues `stop-db-cluster`/`start-db-cluster`
+  anywhere, confirming the stop was a manual out-of-band action, not pipeline
+  behavior.
+  Asked the maintainer how to proceed (start the cluster now / also add
+  pipeline auto-start / leave it stopped and gate the auto-deploy instead);
+  they chose to just start it. Ran `aws rds start-db-cluster
+--db-cluster-identifier vinylhound-staging`, polled `describe-db-clusters`
+  until `Status: available` (~9.5 minutes: `starting` → `backing-up` →
+  `available` — a full cluster start is much slower than serverless
+  auto-resume), confirmed the writer instance was also `available`, then
+  `gh run rerun 34428899746 --failed` to retry the already-failed run rather
+  than pushing an empty commit. **The rerun completed with a genuine
+  success**: migrations, service deploy, and smoke test all passed. The
+  `migrate.ts` retry fix is still worth keeping — the RDS event history
+  proves ordinary Serverless v2 resume is fast but real, and the retry is
+  cheap insurance against exactly that case recurring — but it was not, on
+  its own, what fixed this pipeline run.
+  This says nothing about whether staging's Aurora should have stayed
+  stopped as a cost decision; the maintainer's own call was to restart it,
+  not to change that policy. Left `deploy-staging.yml`'s automatic
+  every-push trigger unchanged, and did not add pipeline logic to detect and
+  auto-start a stopped cluster — the maintainer explicitly chose the
+  "start it now" option over "also add auto-start to the pipeline," so if
+  staging's Aurora gets stopped again for cost reasons, this exact failure
+  will recur and need the same manual `start-db-cluster` (or a future
+  session should revisit adding that pipeline safeguard, if this pattern
+  repeats).
 
 - **Supabase migration-metadata hardening is pending deployment.** Migration
   014 enables RLS on node-pg-migrate's `public.vinylhound_migrations` table
@@ -1352,15 +1381,32 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   authorized and completed the device-code flow live. The maintainer also
   ran `aws login` themselves when I found the local AWS CLI session was
   still expired (as documented earlier in this file) and needed live
-  CloudWatch access to see the actual migration task's stderr. With both,
-  found and fixed the real bug: staging's Aurora Serverless v2 cold-start
-  from `min_capacity = 0` can outlast the migration task's one connection
-  attempt. Did not attempt to fix or investigate the AWS root credential's
+  CloudWatch access to see the actual migration task's stderr. First fix
+  attempt (retry logic for Serverless v2 cold-start, commit `973b9e9`) was
+  reasonable but wrong — pushed it, watched the rerun fail identically
+  across all 5 retries, and went back to `aws rds describe-db-clusters`/
+  `describe-events` rather than assume the fix worked. Found the real cause:
+  staging's Aurora cluster was administratively `stopped` (not
+  auto-paused) since 2026-09-07, matching this file's own record of that
+  day's deliberate Phase 2 wind-down — a state nothing in this repository's
+  pipeline or Terraform can create or reverse. Asked the maintainer how to
+  proceed; they chose to start the cluster now over adding pipeline
+  auto-start logic or leaving it stopped. Started it
+  (`aws rds start-db-cluster`), waited ~9.5 minutes for `available`, and
+  reran the failed workflow (`gh run rerun --failed`) rather than pushing an
+  empty commit — full success: migrations, deploy, and smoke test all
+  passed. See "Current state" for the complete, corrected account; this
+  entry intentionally does not repeat the wrong first hypothesis as fact.
+  Did not attempt to fix or investigate the AWS root credential's
   scope/hygiene (`arn:aws:iam::138010381178:root` — using the account root
   for day-to-day CLI access is generally worth flagging, but this session's
   task was the pipeline failure, not IAM posture, and root access was the
   maintainer's own established local setup, not something this session
-  changed or was asked to change).
+  changed or was asked to change). Also did not address that
+  `deploy-staging.yml` will keep trying to deploy to staging on every push
+  regardless of whether the maintainer wants staging infrastructure live
+  right now — worth a real conversation, not a unilateral change, if this
+  keeps recurring.
 
 - **2026-09-09 - Codex.** Addressed Supabase's RLS warning for the
   `public.vinylhound_migrations` bookkeeping table with forward-only migration 014. It enables RLS, revokes default `PUBLIC` access, and conditionally
