@@ -225,14 +225,41 @@ is expected to clear soon versus a daily/spend limit that will not clear
 until its window resets; the difference shows up only in the banner's
 message, not in retry behavior.
 
-**Batch rollover** (multiple batches within one continuous capture session,
-so a user is never hard-stopped at 20 records) is deferred to P3.2's
-continuous-capture state machine rather than added here: today's `/scan`
-already refuses to queue more than `MAX_SCANS_PER_BATCH` records in a single
-session client-side, so no session can reach the server-side batch limit in
-normal use, and rollover's natural home is the always-armed capture flow
-P3.2 is designed around rather than a retrofit onto the current one-shot
-upload picker.
+**Batch rollover.** A single batch's `MAX_SCANS_PER_BATCH` (20) ceiling does
+not change and is not a per-session limit: a continuous capture session may
+span more than one batch so a user is never hard-stopped at 20 records.
+Defined behavior, for P3.2's continuous-capture state machine to implement
+(today's one-shot `/scan` picker already refuses to queue more than
+`MAX_SCANS_PER_BATCH` records client-side, so it cannot reach this path and
+none of this is implemented yet):
+
+- The session, not the batch, is the client-side unit of continuity. The
+  client tracks an ordered list of batch IDs for one session instead of a
+  single `batchId`; `createOrGetScan` already rejects a new scan against a
+  full batch with a distinct `batch_scan_limit` error
+  (`packages/database/src/scan-repository.ts:154-158`), which is the signal
+  a rolled-over client reacts to (proactively tracking its own per-batch
+  count to roll over before hitting the limit is also valid — either way,
+  the server's rejection is authoritative and must never be silently
+  retried against the same batch).
+- On rollover, the client calls `POST /batches` for a new batch and directs
+  every subsequent record's `POST /scans` at the new batch ID. No schema,
+  contract, or server change is required: this composes the existing
+  `POST /batches` + `POST /scans` primitives, which already treat a batch as
+  an unordered collection of independently tracked scans (ADR-0006). No
+  batch-of-batches or session-level persisted entity is introduced.
+- Review-later navigation and the persisted `localStorage` queue key on the
+  session's batch list, not one ID: the "review them now" link points at the
+  most recent still-open batch, with earlier rolled-over batches from the
+  same session listed alongside it rather than replaced.
+- Quota headroom is unaffected by rollover: `USER_ACTIVE_SCAN_LIMIT` and
+  `USER_DAILY_ANALYSIS_LIMIT` count a user's scans regardless of which batch
+  they belong to, so a session that rolls over into a second, third, or later
+  batch is still governed by the same active-scan/daily/spend ceilings
+  described above. If headroom is exhausted exactly at a rollover boundary,
+  the existing queue-pressure pause/resume behavior applies unchanged — the
+  session pauses and waits for headroom, then creates the new batch once
+  resumed rather than treating rollover as a separate failure mode.
 
 ## Abandoned uploads
 

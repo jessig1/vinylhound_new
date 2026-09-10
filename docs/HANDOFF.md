@@ -15,6 +15,40 @@ the log.
 
 ## Current state — verified 2026-09-09
 
+- **P3.1 Task 5: reconciling active-scan/batch/daily-attempt/worker-concurrency
+  defaults and defining rollover/pause-resume/exhaustion behavior is
+  complete.** This closes out the partial progress the same-day Task 4
+  session had already left in `docs/ROADMAP.md`: the four defaults'
+  reconciliation, queue-pressure pause/resume, and daily/spend exhaustion
+  behavior were already implemented (`GET /api/v1/quota`, the early admission
+  check inside `createOrGetScan`, abandoned-upload cleanup) and documented in
+  `docs/OPERATIONS.md`'s "Reconciling the defaults" and "Queue-pressure
+  pause/resume" sections — nothing there needed further code or doc changes.
+  The one real gap was batch rollover: the roadmap task asks to _define_ it,
+  and the existing text only recorded a deferral decision ("implementation
+  waits for P3.2") without saying what the behavior actually is. This session
+  wrote that definition into `docs/OPERATIONS.md`'s "Batch rollover" section
+  (no code changed, since implementation genuinely is P3.2's continuous-
+  capture state machine, not reachable from today's one-shot `/scan` picker
+  which already hard-caps a session at `MAX_SCANS_PER_BATCH` client-side):
+  a continuous session tracks an ordered list of batch IDs instead of one,
+  rolls over by calling `POST /batches` again — reacting to the server's
+  already-existing but previously unconsumed `batch_scan_limit` rejection
+  (`packages/database/src/scan-repository.ts:154-158`) or a proactive
+  client-side count, either is valid — and composes the existing
+  `POST /batches`/`POST /scans` primitives (ADR-0006) with no schema or
+  contract change; review-later navigation and the persisted `localStorage`
+  queue key on the session's batch list rather than a single ID; and quota
+  headroom is unaffected by rollover since `USER_ACTIVE_SCAN_LIMIT`/
+  `USER_DAILY_ANALYSIS_LIMIT` count scans regardless of batch, so a rollover
+  at an exhausted-quota boundary uses the same pause/resume behavior as any
+  other quota block rather than a separate failure mode.
+  No verification commands were run beyond reading the affected code
+  (`scan-repository.ts`'s `createOrGetScan`/`batch_scan_limit` path) to confirm
+  the definition matches current behavior — this task changed only
+  `docs/ROADMAP.md` and `docs/OPERATIONS.md`, no application code, contracts,
+  or tests.
+
 - **P3.1 Task 6: structured request/error timing and correlation IDs is
   complete.** Every `apps/web` API route (20 files under
   `apps/web/src/app/api/v1/**`) now shares one `withRoute` wrapper
@@ -830,25 +864,23 @@ matches can be added directly to collection or wishlist; both matched and
 needs-review candidates have direct list actions, while a "This isn't a
 match" choice exposes new scan and manual-entry paths.
 
-P3.1 Task 4 (quota headroom/admission and abandoned-upload cleanup) and
-Task 6 (structured web request/error timing and correlation IDs) are
-complete — see "Current state" for both descriptions. Two P3.1 checkboxes
-remain unchecked: Task 5 (reconciling active-scan/batch/daily-attempt/
-worker-concurrency defaults, queue-pressure pause/resume, and daily/spend
-exhaustion behavior) is partially done — pause/resume and spend-exhaustion
-behavior are already satisfied by Task 4's work, and the defaults
-reconciliation itself is documented in `docs/OPERATIONS.md`, but batch
-rollover is deliberately deferred to P3.2's continuous-capture state machine
-rather than retrofitted here (see "Known gaps and risks") — and Task 7, the
-persistent-spend inventory (`docs/ROADMAP.md`): reconcile development, both
-retained Aurora data planes, storage/backups/logging, capped aggregate AI
+P3.1 Task 4 (quota headroom/admission and abandoned-upload cleanup), Task 5
+(reconciling active-scan/batch/daily-attempt/worker-concurrency defaults and
+defining rollover/pause-resume/exhaustion behavior), and Task 6 (structured
+web request/error timing and correlation IDs) are all now complete — see
+"Current state" for descriptions. One P3.1 checkbox remains unchecked: Task 7,
+the persistent-spend inventory (`docs/ROADMAP.md`): reconcile development,
+both retained Aurora data planes, storage/backups/logging, capped aggregate AI
 usage, and declared staging/production activation hours against the
 $25/month target, carrying known costs and unknowns into P3.5's reconciled
-budget artifact. Task 7 is the more natural next slice to pick up (it needs
-no new implementation decision the way Task 5's rollover does); after both,
-P3.1 is fully complete and P3.2 (guided automatic mobile capture) is next per
-`docs/ROADMAP.md`'s sequence. Pick up Task 5's batch rollover in P3.2 rather
-than retrofitting it here unless the maintainer asks otherwise.
+budget artifact. Task 7 is the sole remaining P3.1 slice; after it, P3.1 is
+fully complete and P3.2 (guided automatic mobile capture) is next per
+`docs/ROADMAP.md`'s sequence. Note that Task 5's batch rollover is a written
+behavioral definition, not an implementation — the actual rollover code
+belongs to P3.2's continuous-capture state machine, since today's one-shot
+`/scan` picker hard-caps a session at `MAX_SCANS_PER_BATCH` and cannot reach
+that path; do not implement it as part of Task 7 or before P3.2 unless the
+maintainer asks otherwise.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
@@ -1054,14 +1086,16 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 ## Known gaps and risks
 
-- **Batch rollover is not implemented.** A capture session cannot yet span
-  more than one batch: `/scan` still hard-caps a session at
-  `MAX_SCANS_PER_BATCH` (20) records client-side (unchanged by P3.1 Task 4),
-  so no session can reach the server's own 20-scan batch limit in normal
-  use. This was a deliberate scope decision, not an oversight — see
-  `docs/ROADMAP.md`'s P3.1 partial-progress note — because rollover's
-  natural home is P3.2's always-armed continuous-capture state machine, not
-  a retrofit onto today's one-shot upload picker.
+- **Batch rollover is defined but not implemented.** A capture session cannot
+  yet span more than one batch: `/scan` still hard-caps a session at
+  `MAX_SCANS_PER_BATCH` (20) records client-side, so no session can reach the
+  server's own 20-scan batch limit in normal use. This is a deliberate scope
+  decision, not an oversight: P3.1 Task 5 wrote the intended behavior into
+  `docs/OPERATIONS.md`'s "Batch rollover" section (an ordered per-session
+  batch-ID list, rollover on the server's `batch_scan_limit` rejection or a
+  proactive count, no schema/contract change), but its implementation
+  belongs to P3.2's always-armed continuous-capture state machine, not a
+  retrofit onto today's one-shot upload picker.
 - **P3.1 Task 4's quota-headroom polling has no Playwright coverage yet.**
   Verified by a scripted browser pass against a real dev server (see
   "Current state") and by database integration tests covering the headroom
@@ -1178,6 +1212,32 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-09 - Claude (continuing the same day).** Closed out P3.1 Task 5
+  — see "Current state" for the full description. The defaults reconciliation,
+  queue-pressure pause/resume, and daily/spend exhaustion behavior were
+  already implemented and documented by the same-day Task 4 session; the only
+  real gap, confirmed by re-reading `createOrGetScan`'s batch-limit check
+  (`packages/database/src/scan-repository.ts:150-159`) and
+  `docs/OPERATIONS.md`'s existing text, was that "batch rollover" had only
+  ever been recorded as a deferral decision, not defined. Wrote the actual
+  behavioral definition into `docs/OPERATIONS.md`'s "Batch rollover" section
+  (ordered per-session batch-ID list; rollover triggered by the server's
+  already-existing, previously-unconsumed `batch_scan_limit` rejection or a
+  proactive client count; composes existing `POST /batches`/`POST /scans`
+  with no schema/contract change; quota headroom counts scans regardless of
+  batch, so rollover doesn't interact with quota exhaustion as a separate
+  case) and checked off Task 5 in `docs/ROADMAP.md`. No application code,
+  contracts, or tests changed — this was scoped as a documentation/definition
+  task per the roadmap's own wording ("Define batch rollover"), consistent
+  with implementation staying deferred to P3.2's continuous-capture state
+  machine, which the one-shot `/scan` picker cannot reach today. Updated the
+  "Known gaps and risks" batch-rollover entry to reflect that it's now
+  defined-but-not-implemented rather than an open scope question, and updated
+  the resume point so Task 7 (persistent-spend inventory) is the sole
+  remaining P3.1 item. Ran no build/test commands, since nothing executable
+  changed; `git status` before editing confirmed a clean tree with no
+  uncommitted work to disturb.
 
 - **2026-09-09 - Claude (continuing the same day).** Implemented P3.1's
   structured request/error timing and correlation-ID checkbox — see "Current
