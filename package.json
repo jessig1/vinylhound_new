@@ -31,6 +31,7 @@
     "test:worker": "npm run test:integration --workspace @vinylhound/worker",
     "test:integration": "npm run test:database && npm run test:storage && npm run test:queue && npm run test:worker",
     "test:e2e": "npm run test:e2e --workspace @vinylhound/web",
+    "test:e2e:matrix": "npm run test:e2e:matrix --workspace @vinylhound/web",
     "eval:ai": "npm run eval --workspace @vinylhound/evals --",
     "eval:ai:vision-matrix": "npm run eval:ai -- --models gpt-5.6-terra,gpt-5.6-sol --details high,auto",
     "build": "npm run build --workspaces --if-present",

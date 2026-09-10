@@ -355,7 +355,7 @@ Daily/spend exhaustion stops capture until the relevant limit permits resumption
 - [x] **Task 2.** Pause on quota/queue pressure, backgrounding, or lost camera access; release
       camera resources on exit. Preserve manual capture/file-input fallback for
       denial, unsupported browsers, and detection failures.
-- [ ] **Task 3.** Keep existing MIME-sniffing, HEIC rejection, multi-view, focus, and browser
+- [x] **Task 3.** Keep existing MIME-sniffing, HEIC rejection, multi-view, focus, and browser
       tests green. Canvas captures use supported JPEG/PNG.
 - [ ] **Task 4.** Automate state-machine tests with stubbed `getUserMedia`. Document a manual
       iPhone Safari and Android Chrome protocol recording device/OS/browser,

@@ -121,7 +121,9 @@ completed before migration 009 falls back to its validated original object
 when no normalized analysis copy exists.
 
 `npm run test:e2e` is the fast mobile-Chromium gate. It runs Playwright against
-a production build served from `.next-e2e` on port 3100, fully isolated from a
+a production build served from `.next-e2e` on port 3100; the harness copies the
+build's static assets into the standalone output so client components hydrate,
+fully isolated from a
 running dev server: a dedicated `vinylhound_e2e` database (created and migrated
 by the global setup), a dedicated queue name, and a synthetic worker
 (`apps/worker/src/e2e-worker.ts`) that exercises the real outbox, queue,

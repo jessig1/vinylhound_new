@@ -15,8 +15,8 @@ the log.
 
 ## Current state — verified 2026-09-10
 
-- **P3.2 Tasks 1-2 (guided automatic capture) are implemented; Tasks 3-4
-  remain open.** `/scan` retains its existing file-upload path and adds an explicitly
+- **P3.2 Tasks 1-3 (guided automatic capture) are implemented; Task 4
+  remains open.** `/scan` retains its existing file-upload path and adds an explicitly
   opt-in `getUserMedia` live-camera viewfinder requesting the environment-facing
   camera where available. A low-resolution frame sampler waits for a steady
   frame, writes exactly one canvas-generated JPEG as a normal independent
@@ -28,13 +28,11 @@ the log.
   cap is reached, the tab backgrounds, or a stream/track ends unexpectedly;
   resume is explicit and file upload remains available. Stopping the live camera
   and component cleanup also stop every media track; permission/unsupported
-  failures surface an error while the upload fallback remains usable. Focused
-  automated camera tests and the real-device protocol remain for P3.2 Tasks 3-4.
-  The full repository check (95 unit tests) passes. The existing mobile browser
-  suite was attempted previously but is blocked
-  before client hydration by the test standalone server returning 404 for every
-  `/_next/static/*` asset; its resulting upload/focus failures do not exercise
-  this feature and need the e2e build/output-path issue resolved separately.
+  failures surface an error while the upload fallback remains usable. P3.2 Task 3
+  repaired the isolated Playwright standalone assembly so it copies `.next-e2e`'s
+  static assets and client components hydrate; the existing MIME-sniffing, HEIC,
+  independent-record, upload, focus, and mobile-browser tests now execute again.
+  Task 4's stubbed-camera state-machine tests and real-device protocol remain.
 
 - **`deploy-staging.yml`'s single job now runs on a native arm64 runner
   instead of `ubuntu-latest` (amd64).** Follow-up to "any other changes that
@@ -1149,16 +1147,16 @@ P3.2's continuous-capture state machine, since today's one-shot `/scan`
 picker hard-caps a session at `MAX_SCANS_PER_BATCH` and cannot reach that
 path.
 
-**P3.2 Tasks 1-2 (guided automatic mobile capture) are complete; resume at
-Task 3.** The `/scan` capture session now has an opt-in live-camera viewfinder and
+**P3.2 Tasks 1-3 (guided automatic mobile capture) are complete; resume at
+Task 4.** The `/scan` capture session now has an opt-in live-camera viewfinder and
 bounded `armed`/`captured`/`disarmed`/`rearmed` state machine. It samples a
 steady frame into a supported JPEG once, then requires material frame change
 before accepting another record; file upload remains intact. Live capture now
 pauses and stops its tracks when quota/queue capacity blocks it, a session fills,
 the page backgrounds, or camera access ends; users resume deliberately and can
-always use the file fallback. Tasks 3-4 must verify MIME/HEIC/multi-view/focus
-coverage and add stubbed-camera tests plus the real iPhone Safari/Android Chrome
-protocol. Read
+always use the file fallback. Task 3 restored the browser-suite's static-asset
+assembly and verified the MIME/HEIC/independent-record/focus coverage. Task 4 must
+add stubbed-camera tests plus the real iPhone Safari/Android Chrome protocol. Read
 P3.2's exit criterion and G3 in `docs/PHASE_3_4_PLAN_REVIEW.md` before claiming
 the mobile-device outcome.
 
@@ -2660,3 +2658,19 @@ test:integration` (29/29, 2 new), `npm run build` (28 routes, +2), and
   keeps the file-input fallback available. Marked Task 2 complete in
   `docs/ROADMAP.md`; Tasks 3-4 remain. Verified `npm run check` (95/95),
   `npm run build`, and `git diff --check`.
+
+- **2026-09-10 - Codex.** Completed P3.2 Task 3. Repaired Playwright's
+  isolated standalone-server assembly: the post-build harness now copies the
+  configured Next static directory into the standalone output, fixing the
+  `/_next/static/*` 404s that had prevented client hydration. The existing
+  mobile Chromium checks now execute the upload MIME-sniffing, HEIC rejection,
+  independent-record/batch, confirmation, and focus paths. Updated stale
+  capture-session wording and batch-route assertions so the browser tests
+  reflect the current UI rather than result ordering. Marked the roadmap task
+  complete and documented the harness behavior. Restored the documented root
+  `test:e2e:matrix` command as a workspace forwarding script. Verified `npm run
+  check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
+  Matrix attempt: both Chromium profiles passed (28 tests); Firefox and WebKit
+  could not launch because their Playwright executables are not installed on this
+  Windows host, rather than due to an application failure. Task 4 owns the
+  required real-device evidence.

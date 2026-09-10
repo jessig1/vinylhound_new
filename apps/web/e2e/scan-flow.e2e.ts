@@ -36,7 +36,7 @@ test("uploads selected cover photos as independently trackable records", async (
     { name: "spine.jpg", mimeType: "image/jpeg", buffer: spineJpeg },
   ]);
 
-  await expect(page.getByText("3 records ready")).toBeVisible();
+  await expect(page.getByText("3 records in this session")).toBeVisible();
   await expect(page.getByText("Record 1")).toBeVisible();
   await expect(page.locator(".view-card select")).toHaveCount(0);
 
@@ -136,7 +136,7 @@ test("groups two front-cover photos into an independently trackable batch", asyn
     { name: "record-b.jpg", mimeType: "image/jpeg", buffer: backJpeg },
   ]);
 
-  await expect(page.getByText("2 records ready")).toBeVisible();
+  await expect(page.getByText("2 records in this session")).toBeVisible();
   await expect(page.locator(".view-card select")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Start capture session" }).click();
@@ -177,6 +177,7 @@ test("identifies a misnamed cover photo and confirms it into the collection", as
   await page.getByRole("button", { name: "Start capture session" }).click();
 
   await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/, { timeout: 30_000 });
+  const finalBatchId = new URL(page.url()).pathname.split("/").at(-1);
   const finalScanId = await page
     .locator(".batch-scan-card")
     .first()
@@ -229,11 +230,11 @@ test("identifies a misnamed cover photo and confirms it into the collection", as
 
   // Scan rows remain navigable at phone widths, including after confirmation.
   await page.goto("/dashboard");
-  await page.locator("a.scan-row").first().click();
-  await expect(page.getByText("Added to your collection")).toBeVisible();
+  await page.locator(`a.scan-row[href="/scans/batch/${finalBatchId}"]`).click();
+  await expect(page.getByRole("heading", { name: "1 record" })).toBeVisible();
   await page.goto("/scans");
-  await page.locator("a.scan-row").first().click();
-  await expect(page.getByText("Added to your collection")).toBeVisible();
+  await page.locator(`a.scan-row[href="/scans/batch/${finalBatchId}"]`).click();
+  await expect(page.getByRole("heading", { name: "1 record" })).toBeVisible();
 });
 
 test("empty library search can be cleared without changing sort", async ({

@@ -45,7 +45,8 @@ export default defineConfig({
     // The application intentionally uses Next's standalone output, for which
     // `next start` is unsupported. The traced server lives beneath the app
     // directory because the monorepo root is the output-file-tracing root.
-    command: "npm run build && node .next-e2e/standalone/apps/web/server.js",
+    command:
+      "npm run build && node scripts/prepare-standalone.mjs && node .next-e2e/standalone/apps/web/server.js",
     url: `http://localhost:${E2E_PORT}`,
     // Playwright exports NODE_ENV=test to child processes, which makes Next
     // build against a non-production React; pin it back explicitly.
