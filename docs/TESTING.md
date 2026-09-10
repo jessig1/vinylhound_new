@@ -144,3 +144,38 @@ It requires the Docker Compose services and a one-time
 `npx playwright install chromium firefox webkit` (Linux/WSL also needs the
 browser's OS shared libraries: `sudo npx playwright install-deps` once per
 machine).
+
+## Guided automatic capture: real-device protocol
+
+The stubbed-camera Playwright checks prove the browser state machine: a held
+frame creates one record, a material frame change rearms it, pausing releases
+the track and explicit resume reacquires it, and a permission denial leaves file
+upload usable. They do not prove camera autofocus, exposure, or browser media
+behavior on a phone.
+
+Before claiming P3.2's device outcome, run this protocol separately on an
+iPhone using Safari and an Android phone using Chrome. Use a non-sensitive test
+cover and record only sanitized device details and aggregate outcomes.
+
+1. Record device model, OS version, browser version, test date, room/lighting,
+   and whether the front cover is matte/glossy or sleeved. Do not record account
+   identifiers, photos, signed URLs, or raw image data.
+2. Start a new `/scan` session, choose **Use live camera**, and present the
+   cover ten times. For each presentation: bring it into the guide, hold until a
+   record appears, remove or substantially change the frame until it rearms,
+   then present it again. Keep the normal target distance and lighting stable.
+3. For each presentation, record capture or miss, elapsed time if notable,
+   whether one record (and only one) was added, and any intervention (refocus,
+   changed distance, glare adjustment, resume, or manual upload fallback).
+4. Background the tab while armed and confirm the camera pauses; return,
+   explicitly resume, and repeat one presentation. Deny camera permission once
+   (or revoke it in browser settings), then confirm the upload control still
+   works.
+5. Save a sanitized result table in the private test record. The exit gate is at
+   least 9 captures from 10 presentations on each target phone, with zero
+   duplicate submissions. A miss is not silently discarded: note the condition
+   and intervention used.
+
+Suggested result columns: `device`, `os`, `browser`, `lighting`, `presentation
+1..10 outcome`, `capture/miss count`, `duplicate count`, `pause/resume result`,
+`fallback result`, and `interventions/notes`.

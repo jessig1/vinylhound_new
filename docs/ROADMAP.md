@@ -357,7 +357,7 @@ Daily/spend exhaustion stops capture until the relevant limit permits resumption
       denial, unsupported browsers, and detection failures.
 - [x] **Task 3.** Keep existing MIME-sniffing, HEIC rejection, multi-view, focus, and browser
       tests green. Canvas captures use supported JPEG/PNG.
-- [ ] **Task 4.** Automate state-machine tests with stubbed `getUserMedia`. Document a manual
+- [x] **Task 4.** Automate state-machine tests with stubbed `getUserMedia`. Document a manual
       iPhone Safari and Android Chrome protocol recording device/OS/browser,
       lighting, captures, misses, duplicates, and interventions.
 
