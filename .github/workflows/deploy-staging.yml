@@ -19,7 +19,13 @@ env:
 jobs:
   deploy:
     name: Build, deploy, and verify
-    runs-on: ubuntu-latest
+    # Native arm64 avoids QEMU-emulated cross-compilation for the
+    # `platforms: linux/arm64` image builds below; every other step here
+    # (Terraform, AWS CLI, curl) is I/O-bound, not CPU-bound, so it runs
+    # the same either way. Free for public repos (GitHub Changelog,
+    # 2025-08-07: "arm64 hosted runners for public repositories are now
+    # generally available").
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     environment: staging
     steps:

@@ -15,6 +15,35 @@ the log.
 
 ## Current state — verified 2026-09-10
 
+- **`deploy-staging.yml`'s single job now runs on a native arm64 runner
+  instead of `ubuntu-latest` (amd64).** Follow-up to "any other changes that
+  would make pipelines faster/more efficient" — this session had already
+  watched the "Build and push web"/"Build and push worker" steps
+  (`platforms: linux/arm64` via `docker/build-push-action`) take several
+  minutes each during earlier verification, because an amd64 runner cross-
+  building for arm64 goes through QEMU emulation. Confirmed via `WebSearch`
+  (GitHub Changelog, 2025-08-07 and 2026-01-29) that `ubuntu-24.04-arm` is
+  GA and free for public repositories (this one) before using the label, to
+  avoid recommending something that would just fail with "no runner
+  matches." This is the only `platforms: linux/arm64` cross-build in the
+  repo's automatic pipeline: `platform.yml`'s container-scan build doesn't
+  set `platforms:` at all (defaults to the runner's own arch, already
+  native amd64, since it only needs a loadable image for Trivy, not a
+  deployable one), and `deploy-production.yml` never builds images itself —
+  it reuses staging's already-pushed, staging-verified digests. Every other
+  step in the same job (Terraform, AWS CLI, curl smoke tests) is I/O-bound
+  against AWS APIs, not CPU-bound, so moving the whole job to arm64 rather
+  than only the two build steps (which YAML can't express — `runs-on` is
+  job-scoped, not step-scoped) costs nothing for the rest of the job.
+  Not yet verified by a real run — the next manual `deploy-staging.yml`
+  dispatch is the actual confirmation that the native build works and is
+  faster; check that before assuming this is closed. Also not yet
+  addressed: Terraform provider-plugin caching (lower priority now that
+  `Platform`'s Terraform job is gated to infra changes only) and whether
+  `platform.yml`'s amd64 CI scan build duplicates work the arm64 deploy
+  build already does — flagged to the maintainer as unverified rather than
+  guessed at.
+
 - **`Platform`'s Terraform validate job now only runs when infrastructure
   actually changed; the container build/Trivy scan job is deliberately
   unchanged and still runs on every push/PR.** The maintainer asked whether
@@ -1449,6 +1478,19 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-10 - Claude (continuing, same day, fourth follow-up).** Asked
+  for pipeline speed/efficiency ideas. Answered as an exploratory question
+  first (recommendation + tradeoff, no changes) per this session's own
+  working style, naming the one concrete thing actually observed this
+  session — QEMU-emulated arm64 builds in `deploy-staging.yml` — over two
+  lower-confidence candidates (Terraform provider caching, possible
+  duplicate CI/deploy build work) that would have needed real measurement
+  before recommending. The maintainer approved the arm64 change; switched
+  `deploy-staging.yml`'s job to `runs-on: ubuntu-24.04-arm`, confirming via
+  `WebSearch` first that the label is GA/free for public repos rather than
+  assuming. See "Current state" for the full reasoning; not yet confirmed
+  by a real dispatch.
 
 - **2026-09-10 - Claude (continuing, same day, third follow-up).** Asked
   whether `Platform` "can be manual or only if there's a change to the
