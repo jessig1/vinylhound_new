@@ -91,9 +91,13 @@ Production retains the same data plane and control metadata while removing
 NAT, EKS/control-plane compute, nodes, ALB, CloudFront distribution, WAF, and
 application DNS.
 
-- Every merge to `main` updates development, then builds digest-addressed ARM64
-  web and worker images, activates staging without services, migrates, deploys,
-  smoke-tests, marks the digests staging-verified, and deactivates staging.
+- Every merge to `main` updates development automatically
+  (`deploy-development.yml`, still push-triggered).
+- Staging and production are both manual `workflow_dispatch` jobs, not
+  triggered by a push to `main`. Run `deploy-staging.yml` deliberately for a
+  commit to build digest-addressed ARM64 web/worker images, activate staging
+  without services, migrate, deploy, smoke-test, mark the digests
+  staging-verified, and deactivate staging.
 - Production is a manual GitHub deployment of a full commit SHA that has
   staging-verified ECR tags. Its TTL is one, two, four, or eight hours. The
   workflow runs migrations as a Kubernetes Job before applying Deployments.

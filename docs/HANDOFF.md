@@ -13,7 +13,42 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-09
+## Current state — verified 2026-09-10
+
+- **Staging and production deploys are now both manual `workflow_dispatch`
+  jobs; only `deploy-development.yml` still triggers automatically on a push
+  to `main`.** Follow-up to the pipeline investigation below, at the
+  maintainer's explicit request ("let's make staging and production manual
+  jobs"). `deploy-staging.yml` previously ran on every push to `main` in
+  addition to `workflow_dispatch`; the `push:` trigger is now removed, so
+  nothing deploys to staging without someone deliberately running the
+  workflow. `deploy-production.yml` was already `workflow_dispatch`-only —
+  unchanged. Practical consequence worth knowing: staging no longer produces
+  a `staging-passed-<sha>` verified image tag automatically per merge: a
+  production deploy (which requires a staging-verified SHA) now needs
+  someone to manually run `deploy-staging.yml` for that commit first, where
+  it previously happened for free on every merge. `docs/OPERATIONS.md`'s
+  "Just-in-time lifecycle" section is updated to describe development,
+  staging, and production as three now-differently-triggered workflows
+  instead of one "every merge" sentence covering development+staging
+  together. No workflow depends on `deploy-staging.yml` via `workflow_run`
+  or similar, so this was a clean, self-contained removal — confirmed by
+  grepping every workflow file for a reference to it before making the
+  change.
+  Also folding in something the previous same-day session should have
+  recorded here but didn't (commit `d6c37fe` shipped with no `docs/
+HANDOFF.md` update, breaking this file's own "update before ending" rule —
+  flagging the miss so it doesn't repeat): both deploy workflows now run a
+  new `scripts/aws/ensure-database-available.sh` right after creating the
+  persistent foundation, which starts an administratively-`stopped` Aurora
+  cluster and waits (up to 20 minutes) for it to become `available` before
+  anything tries to connect — the actual automation of the safeguard the
+  session below manually improvised. New `db_cluster_identifier` Terraform
+  output in both `infra/terraform/environment` and `infra/terraform/
+production` feeds it the real cluster id. Verified live: pushed, watched
+  `Deploy staging` run the new step as a fast no-op against the
+  already-`available` staging cluster, then pass migrations/deploy/smoke
+  test/deactivate end-to-end.
 
 - **Fixed two real, reproducible CI/CD pipeline failures the maintainer
   reported.** (1) The Platform workflow's Trivy container scan
@@ -96,15 +131,11 @@ pause`/`Successfully resumed` cycles through 2026-09-06/07 confirming normal
   cheap insurance against exactly that case recurring — but it was not, on
   its own, what fixed this pipeline run.
   This says nothing about whether staging's Aurora should have stayed
-  stopped as a cost decision; the maintainer's own call was to restart it,
-  not to change that policy. Left `deploy-staging.yml`'s automatic
-  every-push trigger unchanged, and did not add pipeline logic to detect and
-  auto-start a stopped cluster — the maintainer explicitly chose the
-  "start it now" option over "also add auto-start to the pipeline," so if
-  staging's Aurora gets stopped again for cost reasons, this exact failure
-  will recur and need the same manual `start-db-cluster` (or a future
-  session should revisit adding that pipeline safeguard, if this pattern
-  repeats).
+  stopped as a cost decision; the maintainer's own call at the time was to
+  restart it, not to change that policy. **Superseded later the same
+  session** — see "Current state" for the auto-start safeguard added
+  afterward, and for staging/production being converted to manual-only
+  triggers.
 
 - **Supabase migration-metadata hardening is pending deployment.** Migration
   014 enables RLS on node-pg-migrate's `public.vinylhound_migrations` table
@@ -1364,6 +1395,27 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-10 - Claude (continuing, same day).** Two follow-up requests
+  after the pipeline investigation below. First, "add an auto start option":
+  automated the manual `aws rds start-db-cluster` recovery from earlier in
+  the day into `scripts/aws/ensure-database-available.sh`, wired into both
+  `deploy-staging.yml` and `deploy-production.yml` (production carries the
+  identical `stopped`-cluster risk, confirmed during the earlier
+  investigation, so it got the same fix even though only staging had
+  actually failed). Verified live via a real push and a watched `Deploy
+staging` run. Missed updating this file for that commit (`d6c37fe`) before
+  moving on — caught and backfilled into "Current state" this entry, along
+  with a note not to repeat that. Second, "let's make staging and production
+  manual jobs": removed `deploy-staging.yml`'s `push: branches: [main]`
+  trigger, leaving only `workflow_dispatch` — `deploy-production.yml` was
+  already manual-only. Confirmed no other workflow references
+  `deploy-staging.yml` (no `workflow_run` chaining) before removing the
+  trigger, and updated `docs/OPERATIONS.md`'s lifecycle section to describe
+  development as the only push-triggered environment now. Flagged to the
+  maintainer that production deploys need a staging-verified SHA, which
+  staging no longer produces automatically per merge — someone now has to
+  run `deploy-staging.yml` by hand first.
 
 - **2026-09-10 - Claude (continuing).** The maintainer reported the GitHub
   Actions pipeline was failing and asked me to review and fix it. Found two
