@@ -15,6 +15,68 @@ the log.
 
 ## Current state — verified 2026-09-09
 
+- **Fixed two real, reproducible CI/CD pipeline failures the maintainer
+  reported.** (1) The Platform workflow's Trivy container scan
+  (`.github/workflows/platform.yml`, `exit-code: "1"` on CRITICAL/HIGH) was
+  failing on all three images (web, worker, worker-lambda) with a CRITICAL
+  finding: CVE-2026-75604 / GHSA-2xp9-vwfh-vxw4, an unauthenticated RCE in
+  Next.js's Image Optimization API, present because `next` was pinned at
+  `16.3.2` in `apps/web/package.json`. All three images carry it despite only
+  `web` using Next.js, because npm workspaces hoists every workspace's
+  dependencies into one root `node_modules` and each `Dockerfile.*` copies it
+  wholesale (`COPY --from=build .../node_modules ./node_modules`) rather than
+  a per-app pruned subset — worth knowing if a future single-workspace CVE
+  shows up failing all three scans again. Bumped to `16.3.4`
+  (`apps/web/package.json`, `package-lock.json`); rebuilt all three images
+  locally and re-ran the exact `aquasecurity/trivy-action` scan CI uses to
+  confirm: web/worker clean, worker-lambda's sole remaining finding
+  (CVE-2026-14456, OpenSSL in AWS's Lambda base image) is the pre-existing,
+  still-valid `.trivyignore` waiver (`exp:2026-10-05`), not a new failure.
+  Committed `13b9d5e`; Platform/CI/Security all pass on it.
+  (2) `Deploy staging`'s "Run database migrations" step
+  (`.github/workflows/deploy-staging.yml:155`, which runs
+  `scripts/aws/run-worker-command.sh migrate`, an ECS Fargate task
+  invocation) was failing deterministically across the last several commits
+  — reproducible, not flaky. GitHub's own Actions log only shows the ECS
+  task's exit code, not its application output, and downloading full logs
+  via the REST API requires an authenticated token (`gh auth login`, device
+  flow — the maintainer authorized this live in-session; a prior
+  unauthenticated attempt correctly failed with `403 Must have admin
+rights`). Once authenticated, `gh run view --log-failed` plus
+  `aws logs get-log-events` against
+  `/vinylhound/staging/worker`/`worker/worker/<taskId>` (also needed a fresh
+  `aws login`, since the maintainer's AWS session had expired exactly as
+  documented below) surfaced the real error: `could not connect to postgres:
+Error: timeout expired`, thrown from node-pg-migrate's own connect
+  handler. Root cause: staging's Aurora Serverless v2 cluster
+  (`min_capacity = 0` when inactive, `infra/terraform/environment/
+database.tf:29-31`) has to resume from zero capacity when the workflow sets
+  `environment_active = true`, and that resume can take longer than the
+  single connection attempt's `DATABASE_CONNECT_TIMEOUT_MS` (30s default,
+  `.env.example:18`) — the migration task tries to connect immediately after
+  Terraform's apply returns, with no wait for Aurora to actually be
+  reachable. This is the same class of race already fixed once for
+  production's migration job (commit `5c098b6`, "wait for readable runtime
+  secrets"), just a different resource being asked to become ready.
+  Fixed in `apps/worker/src/migrate.ts`: wrapped the
+  `runDatabaseMigrations` call in a bounded retry (5 attempts, 15s delay
+  between them) rather than touching `run-worker-command.sh`'s own ECS-level
+  retry (which deliberately does not retry real application exit codes, to
+  avoid masking genuine migration bugs in CI feedback — see its comments).
+  This is safe to retry blindly because `runDatabaseMigrations` already runs
+  every migration in one transaction (`singleTransaction: true`,
+  `packages/database/src/migrations.ts`): a failed attempt commits nothing,
+  so a retry after a connection failure is a clean re-attempt, and a retry
+  after a genuine SQL bug in a migration file just fails identically on
+  every attempt and still surfaces after the 5th, only slower. Verified
+  `npm run lint`/`typecheck`/`test` (95/95)/`build` all pass; did not
+  re-trigger a real staging deploy to confirm the fix live (would cost real
+  AWS spend and time) — the fix is verified by matching the documented
+  Aurora Serverless v2 resume-time behavior and the existing precedent
+  pattern, not by reproducing a live pass — the next push's own `Deploy
+staging` run is the real confirmation; check it before assuming this is
+  closed.
+
 - **Supabase migration-metadata hardening is pending deployment.** Migration
   014 enables RLS on node-pg-migrate's `public.vinylhound_migrations` table
   and revokes `PUBLIC`, `anon`, and `authenticated` privileges. The latter two
@@ -1273,6 +1335,32 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-10 - Claude (continuing).** The maintainer reported the GitHub
+  Actions pipeline was failing and asked me to review and fix it. Found two
+  distinct real failures — see "Current state" for full descriptions and
+  evidence. Fixed the Platform workflow's Trivy CRITICAL finding (Next.js
+  RCE, CVE-2026-75604) by bumping `next` to `16.3.4`; verified locally
+  against the exact CI scan before pushing (commit `13b9d5e`), and confirmed
+  green on GitHub afterward. Diagnosing `Deploy staging`'s migration failure
+  needed actual AWS/GitHub log access I didn't have — the GitHub REST API's
+  log-download endpoint refuses unauthenticated requests
+  (`403 Must have admin rights`) regardless of the repository being public,
+  and a `WebFetch` of the run's web page confirmed the same ("Sign in to
+  view logs"). Installed `gh` CLI (via `winget`, not previously present on
+  this machine) and ran `gh auth login --web`; the maintainer explicitly
+  authorized and completed the device-code flow live. The maintainer also
+  ran `aws login` themselves when I found the local AWS CLI session was
+  still expired (as documented earlier in this file) and needed live
+  CloudWatch access to see the actual migration task's stderr. With both,
+  found and fixed the real bug: staging's Aurora Serverless v2 cold-start
+  from `min_capacity = 0` can outlast the migration task's one connection
+  attempt. Did not attempt to fix or investigate the AWS root credential's
+  scope/hygiene (`arn:aws:iam::138010381178:root` — using the account root
+  for day-to-day CLI access is generally worth flagging, but this session's
+  task was the pipeline failure, not IAM posture, and root access was the
+  maintainer's own established local setup, not something this session
+  changed or was asked to change).
 
 - **2026-09-09 - Codex.** Addressed Supabase's RLS warning for the
   `public.vinylhound_migrations` bookkeeping table with forward-only migration 014. It enables RLS, revokes default `PUBLIC` access, and conditionally
