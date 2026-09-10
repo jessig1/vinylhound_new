@@ -15,6 +15,25 @@ the log.
 
 ## Current state — verified 2026-09-10
 
+- **P3.2 Task 1 (guided automatic capture) is implemented; Tasks 2-4 remain
+  open.** `/scan` retains its existing file-upload path and adds an explicitly
+  opt-in `getUserMedia` live-camera viewfinder requesting the environment-facing
+  camera where available. A low-resolution frame sampler waits for a steady
+  frame, writes exactly one canvas-generated JPEG as a normal independent
+  session record, then enters `disarmed`; it must observe a material frame
+  change for two samples before passing through `rearmed` and returning to
+  `armed`. The state is also communicated in the UI, so a held cover cannot
+  repeatedly add records. Stopping the live camera and component cleanup stop
+  every media track; permission/unsupported failures surface an error while the
+  upload fallback remains usable. This completes only Task 1's bounded state
+  machine; quota/queue/background/lost-access pause semantics, focused
+  automated camera tests, and the real-device protocol are deliberately left to
+  P3.2 Tasks 2-4. The full repository check (95 unit tests) and production
+  build pass. The existing mobile browser suite was attempted but is blocked
+  before client hydration by the test standalone server returning 404 for every
+  `/_next/static/*` asset; its resulting upload/focus failures do not exercise
+  this feature and need the e2e build/output-path issue resolved separately.
+
 - **`deploy-staging.yml`'s single job now runs on a native arm64 runner
   instead of `ubuntu-latest` (amd64).** Follow-up to "any other changes that
   would make pipelines faster/more efficient" — this session had already
@@ -1128,17 +1147,15 @@ P3.2's continuous-capture state machine, since today's one-shot `/scan`
 picker hard-caps a session at `MAX_SCANS_PER_BATCH` and cannot reach that
 path.
 
-**P3.2 (guided automatic mobile capture) is next per `docs/ROADMAP.md`'s
-sequence** — not yet started. Its four tasks: an opt-in live-camera framing
-state machine (armed/captured/disarmed/rearmed) that cannot repeatedly submit
-a held cover; pausing on quota/queue pressure, backgrounding, or lost camera
-access with manual fallback preserved; keeping existing MIME-sniffing/HEIC/
-multi-view/browser tests green with canvas captures using supported JPEG/PNG;
-and automated state-machine tests plus a manual iPhone Safari/Android Chrome
-protocol. Read P3.2's full task list and exit criterion in `docs/ROADMAP.md`
-before scoping it, and check `docs/PHASE_3_4_PLAN_REVIEW.md`'s G3 (P3.2's
-exit criterion is not automatable on the stated target platform) for a known
-gap the plan review already flagged.
+**P3.2 Task 1 (guided automatic mobile capture) is complete; resume at Task 2.** The `/scan` capture session now has an opt-in live-camera viewfinder and
+bounded `armed`/`captured`/`disarmed`/`rearmed` state machine. It samples a
+steady frame into a supported JPEG once, then requires material frame change
+before accepting another record; file upload remains intact. Task 2 must add
+quota/queue/background/lost-camera-access pause semantics while preserving the
+fallback. Tasks 3-4 must verify MIME/HEIC/multi-view/focus coverage and add
+stubbed-camera tests plus the real iPhone Safari/Android Chrome protocol. Read
+P3.2's exit criterion and G3 in `docs/PHASE_3_4_PLAN_REVIEW.md` before claiming
+the mobile-device outcome.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
@@ -1470,6 +1487,20 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-10 - Codex.** Implemented P3.2 Task 1's opt-in automatic
+  live-camera framing in `capture-session.tsx`. The environment-facing camera
+  is requested only after the user activates it; a small canvas sampler
+  captures a stable frame as JPEG once, creates the same independent session
+  record used by the file picker, then disarms until a material frame change
+  re-arms it. This prevents a stationary cover from creating duplicate records.
+  The existing file picker is unchanged and remains the fallback when camera
+  support or permission fails. Camera tracks are stopped on the explicit stop
+  action and component teardown. Marked P3.2 Task 1 complete in the roadmap;
+  Tasks 2-4 intentionally remain open. Verified the full repository check (95
+  unit tests) and a production build. The existing mobile suite is currently
+  blocked before hydration because its standalone server 404s its `/_next/static`
+  assets, so it cannot verify the unchanged upload fallback yet.
 
 - **2026-09-10 - Claude (continuing, same day, closing).** Maintainer said
   "we can stop here and close out 3.1." Verified the tree was clean and all

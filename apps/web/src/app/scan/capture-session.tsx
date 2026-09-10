@@ -80,6 +80,14 @@ type QuotaState =
       message: string;
     };
 
+type LiveCameraState = "off" | "armed" | "captured" | "disarmed" | "rearmed";
+
+const LIVE_CAPTURE_SAMPLE_MS = 250;
+const LIVE_CAPTURE_STABLE_SAMPLES = 4;
+const LIVE_CAPTURE_CHANGE_SAMPLES = 2;
+const LIVE_CAPTURE_STABLE_DELTA = 7;
+const LIVE_CAPTURE_CHANGE_DELTA = 18;
+
 /**
  * A capture session's selected files are a client-side draft: the browser
  * loses them on refresh. What survives in `localStorage` is the queue's
@@ -96,6 +104,17 @@ export function CaptureSession() {
   const queueRef = useRef<string[]>([]);
   const activeCountRef = useRef(0);
   const abortControllers = useRef<Record<string, AbortController>>({});
+  const cameraVideoRef = useRef<HTMLVideoElement>(null);
+  const cameraCanvasRef = useRef<HTMLCanvasElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cameraRequestRef = useRef(0);
+  const cameraStateRef = useRef<LiveCameraState>("off");
+  const priorCameraFrameRef = useRef<Uint8ClampedArray | null>(null);
+  const capturedCameraFrameRef = useRef<Uint8ClampedArray | null>(null);
+  const stableSamplesRef = useRef(0);
+  const changedSamplesRef = useRef(0);
+  const submittedCountRef = useRef(0);
   // Tracks how many records in this session have not yet been submitted.
   // React's setState updater form does not run synchronously here (these
   // calls happen inside awaited async work, outside any React event
@@ -114,6 +133,8 @@ export function CaptureSession() {
   );
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [quota, setQuota] = useState<QuotaState>({ status: "unknown" });
+  const [cameraState, setCameraState] = useState<LiveCameraState>("off");
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
   const refreshQuota = useRef(async () => {
     try {
@@ -154,8 +175,13 @@ export function CaptureSession() {
     recordsRef.current = records;
   }, [records]);
 
+  useEffect(() => {
+    submittedCountRef.current = submittedCount;
+  }, [submittedCount]);
+
   useEffect(
     () => () => {
+      stopLiveCamera();
       for (const record of recordsRef.current) {
         if (record.image) URL.revokeObjectURL(record.image.preview);
       }
@@ -225,6 +251,171 @@ export function CaptureSession() {
     pendingCountRef.current += files.length;
     setRecords((current) => [...current, ...files.map(createIdleRecord)]);
     setGlobalError(null);
+  }
+
+  function setLiveCameraState(next: LiveCameraState) {
+    cameraStateRef.current = next;
+    setCameraState(next);
+  }
+
+  function stopLiveCamera() {
+    cameraRequestRef.current += 1;
+    if (cameraTimerRef.current) {
+      clearInterval(cameraTimerRef.current);
+      cameraTimerRef.current = null;
+    }
+    for (const track of cameraStreamRef.current?.getTracks() ?? []) {
+      track.stop();
+    }
+    cameraStreamRef.current = null;
+    priorCameraFrameRef.current = null;
+    capturedCameraFrameRef.current = null;
+    stableSamplesRef.current = 0;
+    changedSamplesRef.current = 0;
+    setLiveCameraState("off");
+  }
+
+  async function startLiveCamera() {
+    if (sessionRunning || cameraStateRef.current !== "off") return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError(
+        "Live camera capture is not supported in this browser. You can still upload photos.",
+      );
+      return;
+    }
+    const requestId = ++cameraRequestRef.current;
+    setCameraError(null);
+    // Mount the viewfinder before permission resolves, so the stream can be
+    // attached immediately after the user grants access.
+    setLiveCameraState("armed");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: "environment" } },
+      });
+      if (requestId !== cameraRequestRef.current) {
+        for (const track of stream.getTracks()) track.stop();
+        return;
+      }
+      cameraStreamRef.current = stream;
+      // A previously granted permission can resolve immediately. Give React a
+      // frame to mount the viewfinder that was enabled just before the request.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      if (requestId !== cameraRequestRef.current) return;
+      const video = cameraVideoRef.current;
+      if (!video) {
+        stopLiveCamera();
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+      if (requestId !== cameraRequestRef.current) return;
+      cameraTimerRef.current = setInterval(
+        inspectLiveCameraFrame,
+        LIVE_CAPTURE_SAMPLE_MS,
+      );
+    } catch {
+      if (requestId !== cameraRequestRef.current) return;
+      stopLiveCamera();
+      setCameraError(
+        "We couldn't open the camera. Check permission, then try again or upload a photo instead.",
+      );
+    }
+  }
+
+  function inspectLiveCameraFrame() {
+    const video = cameraVideoRef.current;
+    const canvas = cameraCanvasRef.current;
+    if (
+      !video ||
+      !canvas ||
+      video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+      !video.videoWidth ||
+      !video.videoHeight
+    ) {
+      return;
+    }
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return;
+    canvas.width = 96;
+    canvas.height = 96;
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const frame = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const state = cameraStateRef.current;
+
+    if (state === "disarmed") {
+      const capturedFrame = capturedCameraFrameRef.current;
+      if (
+        capturedFrame &&
+        cameraFrameDifference(frame, capturedFrame) >= LIVE_CAPTURE_CHANGE_DELTA
+      ) {
+        changedSamplesRef.current += 1;
+        if (changedSamplesRef.current >= LIVE_CAPTURE_CHANGE_SAMPLES) {
+          priorCameraFrameRef.current = frame;
+          stableSamplesRef.current = 0;
+          changedSamplesRef.current = 0;
+          setLiveCameraState("rearmed");
+          window.setTimeout(() => {
+            if (cameraStateRef.current === "rearmed")
+              setLiveCameraState("armed");
+          }, LIVE_CAPTURE_SAMPLE_MS);
+        }
+      } else {
+        changedSamplesRef.current = 0;
+      }
+      return;
+    }
+    if (state !== "armed") return;
+
+    const priorFrame = priorCameraFrameRef.current;
+    priorCameraFrameRef.current = frame;
+    if (!priorFrame) return;
+    if (cameraFrameDifference(frame, priorFrame) <= LIVE_CAPTURE_STABLE_DELTA) {
+      stableSamplesRef.current += 1;
+      if (stableSamplesRef.current >= LIVE_CAPTURE_STABLE_SAMPLES) {
+        stableSamplesRef.current = 0;
+        capturedCameraFrameRef.current = frame;
+        setLiveCameraState("captured");
+        void captureLiveCameraFrame();
+      }
+    } else {
+      stableSamplesRef.current = 0;
+    }
+  }
+
+  async function captureLiveCameraFrame() {
+    const video = cameraVideoRef.current;
+    const canvas = cameraCanvasRef.current;
+    if (!video || !canvas) return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.9),
+    );
+    if (!blob || cameraStateRef.current !== "captured") return;
+    if (
+      recordsRef.current.length + submittedCountRef.current >=
+      MAX_SCANS_PER_BATCH
+    ) {
+      setCameraError(
+        `A capture session can include up to ${MAX_SCANS_PER_BATCH} records. Start or review this session before capturing more.`,
+      );
+      setLiveCameraState("disarmed");
+      return;
+    }
+    const file = new File(
+      [blob],
+      `live-cover-${new Date().toISOString().replaceAll(":", "-")}.jpg`,
+      { type: "image/jpeg" },
+    );
+    pendingCountRef.current += 1;
+    setRecords((current) => [...current, createIdleRecord(file)]);
+    setLiveCameraState("disarmed");
   }
 
   function attachRecapture(
@@ -631,7 +822,50 @@ export function CaptureSession() {
               type="file"
             />
           </label>
+          {cameraState === "off" ? (
+            <button
+              className="secondary-button"
+              disabled={sessionRunning}
+              onClick={() => void startLiveCamera()}
+              type="button"
+            >
+              <Icon name="camera" size={18} /> Use live camera
+            </button>
+          ) : (
+            <button
+              className="secondary-button"
+              onClick={stopLiveCamera}
+              type="button"
+            >
+              Stop live camera
+            </button>
+          )}
         </div>
+
+        {cameraState !== "off" ? (
+          <section className="live-camera" aria-label="Live camera capture">
+            <div className="live-camera__viewfinder">
+              <video autoPlay muted playsInline ref={cameraVideoRef} />
+              <span
+                className={`live-camera__state live-camera__state--${cameraState}`}
+              >
+                {liveCameraStateLabel(cameraState)}
+              </span>
+            </div>
+            <p aria-live="polite">{liveCameraStateMessage(cameraState)}</p>
+            <canvas
+              aria-hidden="true"
+              className="live-camera__canvas"
+              ref={cameraCanvasRef}
+            />
+          </section>
+        ) : null}
+
+        {cameraError ? (
+          <p className="form-error" role="alert">
+            {cameraError}
+          </p>
+        ) : null}
 
         {records.length ? (
           <div className="capture-session__queue">
@@ -815,6 +1049,53 @@ function dropProgress(
   return Object.fromEntries(
     Object.entries(current).filter(([id]) => id !== clientId),
   );
+}
+
+function liveCameraStateLabel(state: LiveCameraState) {
+  switch (state) {
+    case "armed":
+      return "Armed";
+    case "captured":
+      return "Captured";
+    case "disarmed":
+      return "Waiting for a new cover";
+    case "rearmed":
+      return "Rearmed";
+    case "off":
+      return "Off";
+  }
+}
+
+function liveCameraStateMessage(state: LiveCameraState) {
+  switch (state) {
+    case "armed":
+      return "Hold a front cover steady in the frame. It will be added once, then the camera waits for a change.";
+    case "captured":
+      return "Cover captured. Keep moving to the next cover before another capture.";
+    case "disarmed":
+      return "This cover is already captured. Move it out of frame or show a different cover to rearm.";
+    case "rearmed":
+      return "New framing detected. Ready for the next cover.";
+    case "off":
+      return "";
+  }
+}
+
+function cameraFrameDifference(
+  first: Uint8ClampedArray,
+  second: Uint8ClampedArray,
+) {
+  const stride = 16;
+  let total = 0;
+  let samples = 0;
+  for (let index = 0; index < first.length; index += stride) {
+    total +=
+      Math.abs(first[index] - second[index]) +
+      Math.abs(first[index + 1] - second[index + 1]) +
+      Math.abs(first[index + 2] - second[index + 2]);
+    samples += 3;
+  }
+  return total / samples;
 }
 
 function createIdleRecord(file: File): SessionRecord {

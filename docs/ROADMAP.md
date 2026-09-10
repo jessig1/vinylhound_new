@@ -350,7 +350,7 @@ Daily/spend exhaustion stops capture until the relevant limit permits resumption
 
 ### P3.2 — Guided automatic mobile capture
 
-- [ ] **Task 1.** Add opt-in live camera framing and a bounded state machine: armed, captured,
+- [x] **Task 1.** Add opt-in live camera framing and a bounded state machine: armed, captured,
       disarmed, rearmed after removal/change. A held cover cannot repeatedly submit.
 - [ ] **Task 2.** Pause on quota/queue pressure, backgrounding, or lost camera access; release
       camera resources on exit. Preserve manual capture/file-input fallback for
