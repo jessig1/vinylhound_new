@@ -10,6 +10,10 @@ output "ecs_cluster_name" {
   value = aws_ecs_cluster.main.name
 }
 
+output "db_cluster_identifier" {
+  value = aws_rds_cluster.main.cluster_identifier
+}
+
 output "private_subnet_ids" {
   value = values(aws_subnet.private)[*].id
 }

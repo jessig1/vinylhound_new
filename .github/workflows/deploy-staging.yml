@@ -152,6 +152,11 @@ jobs:
           TF_VAR_deployment_version: ${{ github.sha }}
           TF_VAR_expires_at: staging-pipeline
         run: terraform -chdir=infra/terraform/environment apply -auto-approve
+      - name: Ensure database is available
+        if: steps.configuration.outputs.configured == 'true'
+        run: >-
+          bash scripts/aws/ensure-database-available.sh
+          "$(terraform -chdir=infra/terraform/environment output -raw db_cluster_identifier)"
       - name: Run database migrations
         id: migrate
         if: steps.configuration.outputs.configured == 'true'

@@ -104,6 +104,10 @@ jobs:
       - name: Create persistent foundation
         env: { TF_VAR_environment_active: "false" }
         run: terraform -chdir=infra/terraform/production apply -auto-approve
+      - name: Ensure database is available
+        run: >-
+          bash scripts/aws/ensure-database-available.sh
+          "$(terraform -chdir=infra/terraform/production output -raw db_cluster_identifier)"
       - name: Verify runtime secrets
         run: |
           terraform -chdir=infra/terraform/production output -json runtime_secret_arns | jq -r '.[]' |

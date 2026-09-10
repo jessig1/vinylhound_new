@@ -10,6 +10,10 @@ output "eks_cluster_name" {
   value = var.environment_active ? aws_eks_cluster.main[0].name : null
 }
 
+output "db_cluster_identifier" {
+  value = aws_rds_cluster.main.cluster_identifier
+}
+
 output "image_bucket" {
   value = aws_s3_bucket.images.id
 }

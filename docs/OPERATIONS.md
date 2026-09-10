@@ -99,6 +99,17 @@ application DNS.
   workflow runs migrations as a Kubernetes Job before applying Deployments.
 - An hourly workflow reads the SSM activation/expiry markers and deactivates an
   expired production runtime.
+- Both deploy workflows run `scripts/aws/ensure-database-available.sh` right
+  after creating the persistent foundation, before anything tries to connect.
+  It distinguishes Aurora Serverless v2's normal 0-ACU auto-pause (stays
+  `available`, resumes in seconds on the next connection — no action needed)
+  from an explicit administrative `stopped` cluster (a distinct AWS state
+  that ignores connection attempts entirely and only leaves via
+  `start-db-cluster`, which this script issues before polling for
+  `available`, up to 20 minutes). A full stop can happen outside this
+  repository's own automation — e.g. a manual cost-saving action — so this
+  exists to make deploys self-heal from that state rather than fail at the
+  migration step with a bare connection-timeout error.
 - Before production deactivation, delete the web HPA, scale web to zero, and
   run `npm run ops:drain-check` through the worker deployment until PostgreSQL
   and SQS are drained. Manual forced teardown is allowed only as an explicit
