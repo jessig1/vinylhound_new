@@ -288,9 +288,82 @@ Kubernetes HPAs for web and worker pods and CloudWatch alarms for SQS age/DLQ;
 EKS control-plane logs retain API, audit, and authenticator events. Lambda and
 staging logs retain seven days; production logs retain thirty days.
 
-Development has a $10 monthly budget notification and production has $25
-thresholds at 40%, 60%, 80%, and 100%. Deployment checks account month-to-date
-AWS spend and refuses normal production activation at $20. A production
-operator can use the explicit break-glass input only after reviewing active
-resources and the requested TTL. Budget data is delayed and is not a hard cap;
-the hourly TTL teardown remains the primary cost control.
+Development has a $10 monthly budget notification, staging $20
+(`infra/terraform/environment/monitoring.tf:125-128`, previously undocumented
+here), and production $25 — all three at 40%, 60%, 80%, and 100% thresholds.
+Deployment checks account month-to-date AWS spend and refuses normal
+production activation at $20. A production operator can use the explicit
+break-glass input only after reviewing active resources and the requested
+TTL. Budget data is delayed and is not a hard cap; the hourly TTL teardown
+remains the primary cost control.
+
+## Persistent spend inventory (pre-P3.5)
+
+P3.1 Task 7 inventories what is billed today, independent of whether staging
+or production is active, before P3.2 onward adds any billable resource. This
+is a known-costs-and-unknowns list, not a reconciled budget; P3.5 Task 1
+produces the actual reconciliation (development, both Aurora data planes,
+storage/backups/logging, capped AI usage, and declared staging/production
+activation hours against the $25 total).
+
+**Always billed, regardless of environment activation:**
+
+- **Development runtime** — always-live API Gateway + Next.js Lambda,
+  SQS-driven analysis Lambda, and EventBridge outbox publisher
+  (`infra/terraform/development/main.tf`); pay-per-request, near-zero at
+  current traffic but uncapped by design (no TTL teardown applies to
+  development).
+- **Aurora Serverless v2 storage** in both staging and production
+  (`infra/terraform/environment/database.tf:29-31`,
+  `infra/terraform/production/foundation.tf:177-179`) — `min_capacity = 0`
+  means compute suspends to near-zero when inactive, but allocated storage is
+  billed continuously in both environments even while `environment_active =
+false`.
+- **S3 image buckets** in all three environments, versioned with a
+  noncurrent-version expiry (14 days in development, per
+  `infra/terraform/development/main.tf:51-65`; 35 days in both staging,
+  `infra/terraform/environment/storage.tf:52-60`, and production,
+  `infra/terraform/production/foundation.tf:139-146`). Storage cost grows
+  with usage and is never torn down by the TTL sweep.
+- **Secrets Manager** — one secret in development
+  (`infra/terraform/development/main.tf:107`), four each in staging (database
+  URL in `infra/terraform/environment/database.tf:53`; Clerk/OpenAI keys in
+  `infra/terraform/environment/storage.tf:69-79`) and production
+  (`infra/terraform/production/foundation.tf:194-210`) — nine secrets total,
+  each with Secrets Manager's flat per-secret monthly fee regardless of
+  activation state.
+- **CloudWatch Logs** — retained continuously per environment (development 7
+  days, `infra/terraform/development/main.tf:183`; staging 7 days/production
+  30 days, `infra/terraform/environment/ecs.tf:25`; production EKS
+  control-plane logs 30 days, `infra/terraform/production/eks.tf:21,26`).
+  P3.1 Task 6's new per-request structured logging (`[web] http_request`,
+  `[web] upload_complete_timing`, `[worker] scan_analysis_timing`) adds log
+  volume on top of this baseline; the volume increase has not been measured.
+- **VPC/subnet foundation and Route 53 DNS** in staging and production persist
+  by design (ADR-0016) independent of `environment_active`.
+
+**Confirmed NOT persistent** (conditional on `environment_active`, verified
+in Terraform): NAT gateway
+(`infra/terraform/environment/network.tf:49-68`,
+`infra/terraform/production/foundation.tf:66-81`), ECS tasks/ALB (staging),
+and EKS/internal ALB/CloudFront VPC origin/WAF (production) — all `count =
+local.active_count`, so the hourly TTL sweep actually removes their cost, not
+just their availability.
+
+**Unknowns to carry into P3.5's reconciled budget artifact:**
+
+- Where the development database is actually hosted and billed — it is
+  external to these Terraform roots ("managed externally," this file's AWS
+  topology section) and its cost is outside this inventory entirely.
+- Actual Aurora storage cost at current data volume, in both staging and
+  production, has not been measured against a real AWS Cost Explorer report.
+- Actual S3 storage cost at current object counts/sizes across all three
+  buckets has not been measured.
+- How many staging and production activation-hours per month P3.2 onward will
+  actually need; today's usage is ad hoc rehearsal, not a steady cadence.
+- The added CloudWatch Logs ingestion/storage cost from Task 6's new
+  structured logging lines.
+- Actual aggregate OpenAI spend against the $20 `USER_MONTHLY_SPEND_LIMIT_USD`
+  per-user default, which alone is 80% of the $25 total monthly target
+  (`docs/PHASE_3_4_PLAN_REVIEW.md:60-66` already flags this tension) — no
+  multi-user usage data exists yet to reconcile it against actual traffic.

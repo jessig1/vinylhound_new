@@ -15,6 +15,48 @@ the log.
 
 ## Current state — verified 2026-09-09
 
+- **P3.1 Task 7: persistent-spend inventory is complete, and P3.1 is now
+  fully complete (all 7 tasks checked in `docs/ROADMAP.md`).** This session
+  first re-verified Task 6 against the code rather than trusting the prior
+  session's writeup: confirmed `withRoute` (`apps/web/src/server/http.ts`) is
+  used by all 20 `apps/web/src/app/api/v1/**` routes and that `correlation_id`
+  columns exist on both `outbox_messages` and `scan_attempts`
+  (`packages/database/src/schema.ts:183,319`) — the claim held.
+  For Task 7, added a new "Persistent spend inventory (pre-P3.5)" section to
+  `docs/OPERATIONS.md`, grounded in the actual Terraform rather than
+  estimates: what is billed today independent of `environment_active`
+  (development's always-live Lambda/API Gateway runtime; Aurora storage in
+  both staging and production despite `min_capacity = 0` compute,
+  `infra/terraform/environment/database.tf:29-31`,
+  `infra/terraform/production/foundation.tf:177-179`; versioned S3 buckets in
+  all three environments; nine Secrets Manager secrets total; and continuous
+  CloudWatch Logs retention, now also carrying Task 6's new structured-log
+  volume) versus what the hourly TTL sweep genuinely removes (NAT gateway,
+  ECS/ALB, EKS/internal ALB/CloudFront/WAF — all Terraform
+  `count = local.active_count`). It also names the unknowns P3.5 Task 1 must
+  resolve to reconcile the $25 total (actual Aurora/S3 storage cost, the
+  development database's external hosting cost, real staging/production
+  activation-hour cadence, Task 6's added log volume, and actual aggregate
+  OpenAI spend against the $20 per-user default). This is deliberately an
+  inventory, not the reconciliation — no code changed, matching the roadmap's
+  own scoping of Task 7 versus P3.5 Task 1.
+  While building it, found and fixed one real doc gap: staging's own $20
+  budget alarm (`infra/terraform/environment/monitoring.tf:125-128`) existed
+  in Terraform but was never mentioned in `docs/OPERATIONS.md`'s budget
+  paragraph, which previously named only development's $10 and production's
+  $25.
+  Verified on the current tree (not just re-stated from docs): `npm run
+lint` and `npm run typecheck` clean; `npm run test` 95/95 unit tests;
+  `npm run build` succeeds (all 25 web routes present, worker/evals compile);
+  `npm run test:integration` 42/42 (database 34, storage 1, queue 1, worker 6) against the already-running local Compose stack. `npm run check`'s
+  `format:check` step fails only on `apps/web/next-env.d.ts`, a generated
+  file with no working-tree diff (`git status` confirms it matches the last
+  commit, `095b0c4`) — pre-existing and untouched by this session, not fixed
+  here since CLAUDE.md's Windows notes warn against "fixing" line-ending/
+  generated-file noise. `docs/OPERATIONS.md` itself needed one
+  `prettier --write` pass after the initial edit (prose line wrapping).
+  Committed, tagged `phase-3-p3.1`, and pushed to `origin/main`.
+
 - **P3.1 Task 5: reconciling active-scan/batch/daily-attempt/worker-concurrency
   defaults and defining rollover/pause-resume/exhaustion behavior is
   complete.** This closes out the partial progress the same-day Task 4
@@ -864,23 +906,29 @@ matches can be added directly to collection or wishlist; both matched and
 needs-review candidates have direct list actions, while a "This isn't a
 match" choice exposes new scan and manual-entry paths.
 
-P3.1 Task 4 (quota headroom/admission and abandoned-upload cleanup), Task 5
-(reconciling active-scan/batch/daily-attempt/worker-concurrency defaults and
-defining rollover/pause-resume/exhaustion behavior), and Task 6 (structured
-web request/error timing and correlation IDs) are all now complete — see
-"Current state" for descriptions. One P3.1 checkbox remains unchecked: Task 7,
-the persistent-spend inventory (`docs/ROADMAP.md`): reconcile development,
-both retained Aurora data planes, storage/backups/logging, capped aggregate AI
-usage, and declared staging/production activation hours against the
-$25/month target, carrying known costs and unknowns into P3.5's reconciled
-budget artifact. Task 7 is the sole remaining P3.1 slice; after it, P3.1 is
-fully complete and P3.2 (guided automatic mobile capture) is next per
-`docs/ROADMAP.md`'s sequence. Note that Task 5's batch rollover is a written
-behavioral definition, not an implementation — the actual rollover code
-belongs to P3.2's continuous-capture state machine, since today's one-shot
-`/scan` picker hard-caps a session at `MAX_SCANS_PER_BATCH` and cannot reach
-that path; do not implement it as part of Task 7 or before P3.2 unless the
-maintainer asks otherwise.
+**P3.1 is now fully complete — all 7 tasks checked in `docs/ROADMAP.md`,**
+committed and tagged `phase-3-p3.1` on `origin/main`. Task 4 (quota
+headroom/admission and abandoned-upload cleanup), Task 5 (reconciling
+active-scan/batch/daily-attempt/worker-concurrency defaults and defining
+rollover/pause-resume/exhaustion behavior), Task 6 (structured web
+request/error timing and correlation IDs), and Task 7 (the persistent-spend
+inventory) are all complete — see "Current state" for descriptions. Note that
+Task 5's batch rollover is a written behavioral definition, not an
+implementation — the actual rollover code belongs to P3.2's continuous-capture
+state machine, since today's one-shot `/scan` picker hard-caps a session at
+`MAX_SCANS_PER_BATCH` and cannot reach that path.
+
+**P3.2 (guided automatic mobile capture) is next per `docs/ROADMAP.md`'s
+sequence** — not yet started. Its four tasks: an opt-in live-camera framing
+state machine (armed/captured/disarmed/rearmed) that cannot repeatedly submit
+a held cover; pausing on quota/queue pressure, backgrounding, or lost camera
+access with manual fallback preserved; keeping existing MIME-sniffing/HEIC/
+multi-view/browser tests green with canvas captures using supported JPEG/PNG;
+and automated state-machine tests plus a manual iPhone Safari/Android Chrome
+protocol. Read P3.2's full task list and exit criterion in `docs/ROADMAP.md`
+before scoping it, and check `docs/PHASE_3_4_PLAN_REVIEW.md`'s G3 (P3.2's
+exit criterion is not automatable on the stated target platform) for a known
+gap the plan review already flagged.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
@@ -1212,6 +1260,28 @@ analysis-handler.ts`'s new timing lines end to end with a real (or synthetic)
   pricing changes or a new model is adopted.
 
 ## Session log
+
+- **2026-09-09 - Claude (continuing the same day).** Asked to verify Task 6
+  was genuinely complete (not just trust the prior session's writeup), then
+  do Task 7, then review all of P3.1 before committing/tagging/pushing.
+  Re-verified Task 6 directly against the code (`withRoute` used by all 20 API
+  routes; `correlation_id` columns present on both tables) rather than
+  re-reading the prior session's own description of itself. Completed Task 7
+  by writing a real, Terraform-grounded persistent-spend inventory into
+  `docs/OPERATIONS.md` — see "Current state" for the full description —
+  rather than a generic cost checklist, and along the way found/fixed a real
+  doc gap (staging's undocumented $20 budget alarm). Reviewed Phase 3.1 as a
+  whole: all 7 roadmap checkboxes now checked, and ran the full local
+  verification suite fresh on this tree (lint, typecheck, 95/95 unit tests,
+  build, 42/42 integration tests against the already-running Compose stack)
+  rather than relying solely on prior sessions' recorded results, since the
+  task explicitly asked for a review before committing. Everything passed
+  except a pre-existing, untouched `next-env.d.ts` formatting warning (no
+  working-tree diff on that file — a generated-file artifact predating this
+  session, deliberately not "fixed" per this repo's Windows line-ending
+  guidance in `CLAUDE.md`). Committed the two doc changes, tagged
+  `phase-3-p3.1`, and pushed both to `origin/main`. Updated the resume point
+  to point at P3.2 (guided automatic mobile capture), not yet started.
 
 - **2026-09-09 - Claude (continuing the same day).** Closed out P3.1 Task 5
   — see "Current state" for the full description. The defaults reconciliation,

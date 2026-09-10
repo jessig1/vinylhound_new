@@ -294,7 +294,7 @@ and so cannot reach this path, unchanged by this task.
       with queued jobs. Treat inbound IDs as untrusted metadata, never identity;
       exclude secrets, signed URLs, and image bytes. Time upload and normalization
       separately and reuse existing worker/attempt metrics.
-- [ ] **Task 7.** Inventory persistent spend before adding billable resources; carry known
+- [x] **Task 7.** Inventory persistent spend before adding billable resources; carry known
       costs and unknowns into P3.5's reconciled budget artifact.
 
 Task 6 completed 2026-09-09: every `apps/web` API route now shares one
@@ -320,6 +320,27 @@ no user/business identity and run frequently enough from load balancers that
 per-hit structured logging would add log volume disproportionate to their
 purpose, per the $25/month budget ceiling
 (`docs/PHASE_3_4_PLAN_REVIEW.md`'s instrumentation guidance).
+
+Task 7 completed 2026-09-09: `docs/OPERATIONS.md`'s new "Persistent spend
+inventory (pre-P3.5)" section lists, with Terraform citations, what is billed
+today independent of `environment_active` (development's always-live
+Lambda/API Gateway runtime, Aurora storage in both staging and production
+despite `min_capacity = 0` compute, versioned S3 buckets, nine Secrets
+Manager secrets across three environments, and continuous CloudWatch Logs
+retention — the last now also carrying Task 6's new structured-logging
+volume) versus what the TTL sweep genuinely removes (NAT gateway, ECS/ALB,
+EKS/internal ALB/CloudFront/WAF — all Terraform `count = local.active_count`).
+It also names the unknowns P3.5 Task 1 must resolve to reconcile the $25
+total (actual Aurora/S3 storage cost, development database hosting cost since
+it is external to these Terraform roots, real staging/production
+activation-hour cadence, Task 6's added log volume, and actual aggregate
+OpenAI spend against the $20 per-user default that alone is 80% of the total
+target). This is deliberately an inventory, not the reconciliation itself —
+no new spend controls or code changed. In the course of building it, this
+session found and fixed one real doc gap: staging's own $20 budget alarm
+(`infra/terraform/environment/monitoring.tf:125-128`) existed in Terraform
+but was never mentioned in `docs/OPERATIONS.md`'s budget paragraph, which
+previously named only development's $10 and production's $25.
 
 Exit: ten covers queue independently and persisted progress survives navigation
 and refresh, with stored thumbnails and later review. Tests hit active/batch
