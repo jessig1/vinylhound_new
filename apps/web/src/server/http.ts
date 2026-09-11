@@ -173,8 +173,14 @@ export function errorResponse(error: unknown, requestId: string) {
     return createError(status, error.code, error.message, requestId);
   }
   if (error instanceof CatalogProviderError) {
+    const status =
+      error.category === "rate_limit"
+        ? 429
+        : error.category === "not_found"
+          ? 404
+          : 502;
     return createError(
-      error.category === "rate_limit" ? 429 : 502,
+      status,
       `catalog_${error.category}`,
       error.message,
       requestId,

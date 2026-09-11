@@ -12,6 +12,7 @@ const navigation: { href: string; label: string; icon: IconName }[] = [
   { href: "/dashboard", label: "Home", icon: "home" },
   { href: "/collection", label: "Collection", icon: "collection" },
   { href: "/wishlist", label: "Wishlist", icon: "heart" },
+  { href: "/discover", label: "Discover", icon: "search" },
 ];
 
 function useDisplayName() {
@@ -133,6 +134,14 @@ export function DashboardShell({
         >
           <Icon name="collection" />
           <span>Collection</span>
+        </Link>
+        <Link
+          className={pathname === "/discover" ? "is-active" : ""}
+          href="/discover"
+          aria-current={pathname === "/discover" ? "page" : undefined}
+        >
+          <Icon name="search" />
+          <span>Discover</span>
         </Link>
         <Link
           className="mobile-nav__scan"

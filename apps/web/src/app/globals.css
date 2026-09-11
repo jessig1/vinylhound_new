@@ -2282,6 +2282,74 @@ a.album-card:focus-visible {
   flex: 0 0 auto;
   color: var(--orange-dark);
 }
+.discover-search-form {
+  margin-bottom: 28px;
+}
+.discover-search-form .primary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.discover-groups {
+  display: grid;
+  gap: 22px;
+  margin-bottom: 28px;
+}
+.discover-group,
+.discover-detail {
+  padding: 25px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: 0 12px 35px rgb(40 35 28 / 5%);
+}
+.discover-detail__facts {
+  display: grid;
+  gap: 12px 20px;
+  margin: 18px 0;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.discover-detail__facts dt {
+  margin-bottom: 3px;
+  color: #5e5b53;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.discover-detail__facts dd {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.discover-tracklist {
+  margin: 20px 0;
+}
+.discover-tracklist h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+.discover-tracklist ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.discover-tracklist li {
+  display: grid;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #ece9df;
+  font-size: 0.82rem;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+}
+.discover-tracklist__position {
+  color: var(--muted);
+  font-weight: 700;
+}
+.discover-tracklist__length {
+  color: var(--muted);
+}
 .confirm-button {
   width: 100%;
   margin-top: 2px;
@@ -2512,7 +2580,7 @@ button:disabled,
     border-top: 1px solid #383a35;
     background: var(--nav);
     color: #aeb1a8;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
   }
   .mobile-nav > a {
     display: flex;

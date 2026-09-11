@@ -368,7 +368,7 @@ emulation does not prove real-camera behavior.
 
 ### P3.3 — Discovery and saved music without scanning
 
-- [ ] **Task 1.** Add independent catalog search/details with provider provenance and clear
+- [x] **Task 1.** Add independent catalog search/details with provider provenance and clear
       release-concept versus pressing uncertainty. Keep MusicBrainz behind its
       port; another provider requires an ADR.
 - [ ] **Task 2.** Define contracts/domain rules before persistence/UI for release favorites
@@ -382,6 +382,62 @@ emulation does not prove real-camera behavior.
       version compatibility fixtures in `packages/contracts`, building on
       `scan.analyze.v1`. Add catalog/usage coverage and CI compatibility checks;
       workspace version `0.1.0` is not a compatibility guarantee.
+
+Task 1 completed 2026-09-11: a new `/discover` page searches the MusicBrainz
+catalog directly by artist/title with no scan involved, reusing the existing
+`GET /catalog/releases` search endpoint (already independent of any scan; the
+scan review screen's "Search MusicBrainz" step and `/discover` are two
+separate callers of the same endpoint). Results are grouped client-side by
+`reference.releaseGroupId` so multiple pressings of one album render under a
+single album heading instead of as unrelated rows. A new `GET
+/catalog/releases/{releaseId}` endpoint and `CatalogProvider.getReleaseDetails`
+port method fetch one pressing's full detail — track listing, full label/
+format data, and `releaseGroupTitle` (the release group's own title, shown
+explicitly when it diverges from the selected pressing's title) — from
+MusicBrainz's release lookup (`inc=labels+recordings+artist-credits+
+release-groups+media`), sharing the adapter's existing one-request-per-second
+limiter and 24-hour cache with search. `reference.releaseGroupId` (the album
+concept) and `reference.releaseId` (this specific pressing) stay the
+machine-readable distinction; the detail panel also states in copy that a
+cover or title match never proves the pressing on hand. The page is read-only
+— no add/save action — since catalog-to-wishlist placement is Task 3. Fixed a
+real, previously-latent bug found while verifying against live MusicBrainz
+data: `@vinylhound/catalog` was missing from `next.config.ts`'s
+`transpilePackages`, which caused `CatalogProviderError` thrown inside the
+package to fail its `instanceof` check in `apps/web/src/server/http.ts`'s
+`errorResponse` (webpack bundled two non-identical copies of the class across
+the module graph) and surface as a bare `500 internal_error` instead of the
+correct status — this silently affected every pre-existing
+`CatalogProviderError` category (`rate_limit`, `provider_unavailable`,
+`invalid_response`), not just the new `not_found` case added for a missing
+release ID. Verified `format:check`/`lint`/`typecheck`/`test` individually
+rather than via the chained `npm run check`, since `format:check` fails only
+on the generated `apps/web/next-env.d.ts` (no working-tree diff against its
+last commit — a pre-existing Windows CRLF-checkout artifact, not from this
+session). Results: 103/103 unit tests, +10 net new:
+`packages/contracts/src/catalog.test.ts` for the new
+`CatalogReleaseDetailSchema`/`GetCatalogReleaseResponseSchema`, plus new
+`getReleaseDetails` cases in `packages/catalog/src/
+musicbrainz-catalog.test.ts` covering success, an unknown-release 404 mapped
+to `not_found`, and a non-UUID id rejected without a request), `npm run
+build`, and a real isolated dev-server pass against live MusicBrainz (search,
+details, 404, and 400 paths all confirmed with real HTTP responses before the
+`transpilePackages` fix, then reconfirmed after). `npm run
+test:e2e` (mobile Chromium): a new `e2e/discover.e2e.ts` stubs
+`/api/v1/catalog/releases*` (matching `scan-flow.e2e.ts`'s existing
+convention of never hitting real MusicBrainz in CI) to prove the
+grouped-by-album rendering, the concept-vs-pressing copy when a pressing's
+title diverges from its release group, the tracklist, the MusicBrainz
+provenance link, a zero-results state, and zero axe WCAG 2 A/AA violations;
+`/discover` was also added to `accessibility.e2e.ts`'s audited-route and
+360px-viewport lists. Desktop sidebar and mobile bottom nav both gained a
+"Discover" entry (`apps/web/src/app/dashboard-shell.tsx`); the mobile nav's
+CSS grid moved from 5 to 6 columns, reverified at 360px with no horizontal
+overflow. Found and left alone: `e2e/live-camera.e2e.ts`'s first test ("live
+camera captures once while held, rearms after change, and resumes after a
+pause") fails consistently and reproduces identically on a clean, unmodified
+`main` (confirmed via `git stash`) — a pre-existing flake unrelated to this
+task, not something Task 1 introduced or is scoped to fix.
 
 Exit: separate browser tests complete search/details, favorite/unfavorite,
 playlist editing, and reviewed wishlist addition without a scan. Integration

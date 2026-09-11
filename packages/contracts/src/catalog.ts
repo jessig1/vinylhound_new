@@ -44,6 +44,32 @@ export const SearchCatalogReleasesResponseSchema = z
   })
   .strict();
 
+export const CatalogTrackSchema = z
+  .object({
+    position: z.string().trim().min(1).max(20),
+    title: z.string().trim().min(1).max(255),
+    lengthMs: z.number().int().positive().nullable(),
+  })
+  .strict();
+
+/**
+ * A single pressing's full detail. `reference.releaseGroupId` identifies the
+ * album concept shared by every pressing; `reference.releaseId` identifies
+ * this specific pressing. `releaseGroupTitle` is the release group's own
+ * title so the UI can show when a pressing's title diverges from the concept
+ * it belongs to (reissue subtitles, regional retitling, and similar).
+ */
+export const CatalogReleaseDetailSchema = CatalogReleaseCandidateSchema.extend({
+  releaseGroupTitle: z.string().trim().min(1).max(255),
+  tracks: z.array(CatalogTrackSchema).max(200),
+}).strict();
+
+export const GetCatalogReleaseResponseSchema = z
+  .object({
+    release: CatalogReleaseDetailSchema,
+  })
+  .strict();
+
 export type CatalogProvider = z.infer<typeof CatalogProviderSchema>;
 export type CatalogReference = z.infer<typeof CatalogReferenceSchema>;
 export type CatalogReleaseCandidate = z.infer<
@@ -51,4 +77,9 @@ export type CatalogReleaseCandidate = z.infer<
 >;
 export type SearchCatalogReleasesResponse = z.infer<
   typeof SearchCatalogReleasesResponseSchema
+>;
+export type CatalogTrack = z.infer<typeof CatalogTrackSchema>;
+export type CatalogReleaseDetail = z.infer<typeof CatalogReleaseDetailSchema>;
+export type GetCatalogReleaseResponse = z.infer<
+  typeof GetCatalogReleaseResponseSchema
 >;

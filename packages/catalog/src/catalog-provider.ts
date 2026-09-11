@@ -1,4 +1,7 @@
-import type { CatalogReleaseCandidate } from "@vinylhound/contracts";
+import type {
+  CatalogReleaseCandidate,
+  CatalogReleaseDetail,
+} from "@vinylhound/contracts";
 
 export interface SearchCatalogReleasesInput {
   artist: string;
@@ -10,10 +13,11 @@ export interface CatalogProvider {
   searchReleases(
     input: SearchCatalogReleasesInput,
   ): Promise<CatalogReleaseCandidate[]>;
+  getReleaseDetails(releaseId: string): Promise<CatalogReleaseDetail>;
 }
 
 export type CatalogProviderErrorCategory =
-  "rate_limit" | "provider_unavailable" | "invalid_response";
+  "rate_limit" | "provider_unavailable" | "invalid_response" | "not_found";
 
 export class CatalogProviderError extends Error {
   constructor(

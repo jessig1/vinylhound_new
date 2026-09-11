@@ -230,18 +230,32 @@ items always contain zero copies. Every item also carries `coverImage`
 scan it was confirmed from, which the client exchanges for a short-lived read
 URL through `GET /scans/{scanId}/images/{imageId}/thumbnail`.
 
-## Catalog endpoint
+## Catalog endpoints
 
-| Method | Path                                              | Purpose                            |
-| ------ | ------------------------------------------------- | ---------------------------------- |
-| GET    | `/catalog/releases?artist={artist}&title={title}` | Search reviewable vinyl candidates |
+| Method | Path                                              | Purpose                                     |
+| ------ | ------------------------------------------------- | ------------------------------------------- |
+| GET    | `/catalog/releases?artist={artist}&title={title}` | Search reviewable vinyl candidates          |
+| GET    | `/catalog/releases/{releaseId}`                   | Fetch one pressing's full detail and tracks |
 
-The server-side MusicBrainz adapter adds `format:vinyl`, sends a meaningful
-User-Agent, serializes requests at one per second, retries transient 429/503
-responses, and caches normalized results for 24 hours. Results include
-release-group/release MBIDs, source/fetch provenance, date, country, labels,
-barcode, formats, packaging, status, and provider score. The review screen only
-persists a reference after the user selects a result.
+Both require an authenticated user but are otherwise independent of any scan —
+the scan review screen's "Search MusicBrainz" step and the standalone
+`/discover` page both call the search endpoint directly. The server-side
+MusicBrainz adapter adds `format:vinyl` to search queries, sends a meaningful
+User-Agent, serializes every request (search and detail) at one per second
+through a shared limiter, retries transient 429/503 responses, and caches
+normalized results for 24 hours. A detail lookup for an unknown release ID
+returns `404 catalog_not_found`.
+
+Search results include release-group/release MBIDs, source/fetch provenance,
+date, country, labels, barcode, formats, packaging, status, and provider
+score. A release detail response additionally includes `releaseGroupTitle`
+(the album concept's own title, which can diverge from this pressing's title)
+and its track listing — `reference.releaseGroupId` identifies the album
+concept shared by every pressing, while `reference.releaseId` identifies this
+specific pressing; a cover or title match never by itself proves which
+pressing is on hand. The scan review screen only persists a reference after
+the user selects a result; `/discover` is read-only today and does not save
+anything (P3.3 Task 3 adds catalog-to-wishlist placement without a scan).
 
 ## Queue contract
 

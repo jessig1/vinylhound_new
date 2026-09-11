@@ -15,6 +15,62 @@ the log.
 
 ## Current state — verified 2026-09-11
 
+- **P3.3 Task 1 — independent catalog search/details — is complete.**
+  `/discover` lets a user search MusicBrainz by artist/title with no scan
+  involved, reusing the pre-existing `GET /api/v1/catalog/releases` search
+  endpoint (the scan review screen's "Search MusicBrainz" step and
+  `/discover` are two independent callers of the same route — it never
+  needed a scan in the first place, it just had no standalone UI before this
+  session). Results group client-side by `reference.releaseGroupId` so
+  multiple pressings of one album render under a single album heading. A new
+  `GET /api/v1/catalog/releases/{releaseId}` endpoint and
+  `CatalogProvider.getReleaseDetails` port method (`packages/catalog`) fetch
+  one pressing's full detail — track listing, full label/format data, and
+  `releaseGroupTitle` (shown explicitly when it diverges from the selected
+  pressing's own title) — sharing the MusicBrainz adapter's existing
+  one-request-per-second limiter and 24-hour cache with search.
+  `reference.releaseGroupId` (album concept) versus `reference.releaseId`
+  (this specific pressing) is the machine-readable release-concept/pressing
+  distinction the roadmap asked for; the detail panel also states in copy
+  that a cover or title match never proves the pressing on hand. `/discover`
+  is read-only — no add/save action, since catalog-to-wishlist placement is
+  P3.3 Task 3.
+  **Found and fixed a real, previously-latent bug while verifying against
+  live MusicBrainz data**: `@vinylhound/catalog` was missing from
+  `apps/web/next.config.ts`'s `transpilePackages` (every other first-party
+  workspace package used by `apps/web` was already listed; catalog was
+  simply omitted when it was added). This caused `CatalogProviderError`
+  thrown inside the package to fail its `instanceof` check in
+  `apps/web/src/server/http.ts`'s `errorResponse` — webpack bundled two
+  non-identical copies of the class across the server module graph — and
+  surface as a bare `500 internal_error` instead of the correct status. This
+  silently affected every pre-existing `CatalogProviderError` category
+  (`rate_limit`, `provider_unavailable`, `invalid_response`) too, not just
+  the new `not_found` case added for a missing release ID; it was simply
+  never exercised end-to-end through a real web route before. Confirmed live
+  against the real MusicBrainz API on an isolated dev-server instance both
+  before the fix (unknown release ID → wrong `500`) and after (→ correct
+  `404 catalog_not_found`), alongside real search/detail/400 paths.
+  Verified: `npm run check` (103/103 unit tests, +10 net new across
+  `packages/contracts/src/catalog.test.ts` and
+  `packages/catalog/src/musicbrainz-catalog.test.ts`), `npm run build`, and
+  `npm run test:e2e` (mobile Chromium, 18/19 — see the one pre-existing
+  unrelated flake noted below) including a new `apps/web/e2e/discover.e2e.ts`
+  that stubs `/api/v1/catalog/releases*` (matching `scan-flow.e2e.ts`'s
+  existing convention of never hitting real MusicBrainz in CI) and zero axe
+  WCAG 2 A/AA violations on the new page. Desktop sidebar and mobile bottom
+  nav both gained a "Discover" entry; the mobile nav's CSS grid moved from 5
+  to 6 columns, reverified at a 360px viewport with no horizontal overflow.
+  **Pre-existing, unrelated flake found during verification, not fixed
+  here**: `e2e/live-camera.e2e.ts`'s first test ("live camera captures once
+  while held, rearms after change, and resumes after a pause") fails
+  consistently and reproduces identically on a clean, unmodified `main`
+  (confirmed via `git stash` before restoring this session's changes) — it
+  predates this session and is not something Task 1 touched or is scoped to
+  fix; whoever picks up P3.2-adjacent work next should know it's currently
+  red on `main`, not just flaky in this session.
+  Full detail is in `docs/ROADMAP.md`'s P3.3 section.
+
 - **P3.2 — guided automatic mobile capture — is closed.** `/scan` retains its existing file-upload path and adds an explicitly
   opt-in `getUserMedia` live-camera viewfinder requesting the environment-facing
   camera where available. A low-resolution frame sampler waits for a steady
@@ -1158,9 +1214,29 @@ path.
 **P3.2 is closed (2026-09-11), maintainer-confirmed.** All four tasks are
 checked in `docs/ROADMAP.md`; automated coverage, the documented iPhone Safari
 and Android Chrome protocol, and the private sanitized results meet its exit
-criterion. Start **P3.3 Task 1** next: independent catalog search/details via
-the existing MusicBrainz port, with clear release-concept versus pressing
-uncertainty.
+criterion.
+
+**P3.3 Task 1 is complete (2026-09-11, this session)** — see "Current state"
+above and `docs/ROADMAP.md`'s P3.3 section for full detail. Start **P3.3
+Task 2** next: define contracts/domain rules (before persistence/UI) for
+release favorites and user-owned ordered playlists of saved release
+references, including favorite/unfavorite and playlist
+create/rename/reorder/remove/delete. Note the roadmap's own scoping:
+playlists organize music, streaming playback is out of scope. Task 1's new
+`CatalogReleaseDetailSchema`/`GetCatalogReleaseResponseSchema`
+(`packages/contracts/src/catalog.ts`) and `GET /catalog/releases/{releaseId}`
+are available for Task 2/3 to build on if a favorite or playlist entry needs
+to resolve full release detail, but nothing in Task 1 assumes or blocks a
+particular persistence shape for favorites/playlists — that design work is
+exactly what Task 2 asks for.
+
+Before starting Task 2, be aware of one pre-existing, unrelated issue
+surfaced during Task 1's verification: `e2e/live-camera.e2e.ts`'s first test
+fails consistently on a clean `main` (confirmed via `git stash`) — it is not
+something Task 1 introduced, but it means `npm run test:e2e` will currently
+show 1 failure out of the suite regardless of what Task 2 changes. Don't
+mistake it for a regression from Task 2's own work; if it needs fixing, that
+is P3.2-adjacent, not P3.3 work.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
@@ -2720,3 +2796,43 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   handoff, preserving only the sanitized private results rather than device
   identifiers or image data. Next milestone: P3.3 Task 1, independent catalog
   discovery/search through the existing MusicBrainz port.
+
+- **2026-09-11 - Claude.** Completed P3.3 Task 1. Added a standalone
+  `/discover` page that searches MusicBrainz by artist/title independently of
+  any scan (reusing the pre-existing `GET /catalog/releases` endpoint), grouped
+  client-side by `reference.releaseGroupId` so multiple pressings of one album
+  render under one album heading. Added `GET /catalog/releases/{releaseId}`
+  and a new `CatalogProvider.getReleaseDetails` port method
+  (`packages/catalog`) for a pressing's full detail — track listing, full
+  label/format data, and `releaseGroupTitle` shown explicitly when it diverges
+  from the pressing's own title — sharing the MusicBrainz adapter's existing
+  rate limiter and cache with search. New contracts:
+  `CatalogReleaseDetailSchema`, `GetCatalogReleaseResponseSchema`, and a
+  `not_found` `CatalogProviderError` category mapped to HTTP 404. The page is
+  read-only (no add/save action); that is P3.3 Task 3. Found and fixed a real,
+  previously-latent bug while verifying against live MusicBrainz: catalog
+  errors were silently surfacing as bare `500 internal_error` instead of their
+  correct status because `@vinylhound/catalog` was missing from
+  `next.config.ts`'s `transpilePackages`, causing `CatalogProviderError`'s
+  `instanceof` check to fail across a duplicated webpack module boundary —
+  this affected every pre-existing error category, not just the new one.
+  Confirmed the fix live before/after against the real MusicBrainz API on an
+  isolated dev-server instance. Verified `format:check`/`lint`/`typecheck`/
+  `test` (103/103 unit tests) individually rather than via the chained
+  `npm run check`, since `format:check` fails only on `apps/web/next-env.d.ts`
+  — a generated file with no working-tree diff against its last commit,
+  a Windows CRLF-checkout artifact already noted as pre-existing and
+  deliberately untouched in an earlier P3.1 session entry — which would
+  otherwise short-circuit the chain before lint/typecheck/test run. Also
+  verified `npm run build`, and `npm run test:e2e` (mobile Chromium, 18/19 — the one
+  failure, `live-camera.e2e.ts`'s first test, was confirmed via `git stash` to
+  fail identically on unmodified `main`, a pre-existing flake unrelated to
+  this task). Added `apps/web/e2e/discover.e2e.ts` (stubs catalog responses,
+  matching `scan-flow.e2e.ts`'s existing convention) and added `/discover` to
+  `accessibility.e2e.ts`'s WCAG and 360px-viewport checks — zero violations.
+  Added a "Discover" entry to both the desktop sidebar and mobile bottom nav
+  (`dashboard-shell.tsx`), moving the mobile nav's CSS grid from 5 to 6
+  columns, reverified at 360px with no overflow. Checked off P3.3 Task 1 in
+  `docs/ROADMAP.md`. Next: P3.3 Task 2 (favorites/playlists contracts and
+  domain rules) — see "Resume point" above for scope notes and the
+  pre-existing `live-camera.e2e.ts` flake to not mistake for a regression.

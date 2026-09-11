@@ -25,6 +25,7 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   serverExternalPackages: ["sharp"],
   transpilePackages: [
+    "@vinylhound/catalog",
     "@vinylhound/config",
     "@vinylhound/contracts",
     "@vinylhound/database",

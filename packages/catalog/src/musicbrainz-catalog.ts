@@ -2,7 +2,9 @@ import { z } from "zod";
 
 import {
   CatalogReleaseCandidateSchema,
+  CatalogReleaseDetailSchema,
   type CatalogReleaseCandidate,
+  type CatalogReleaseDetail,
 } from "@vinylhound/contracts";
 
 import {
@@ -56,6 +58,54 @@ const MusicBrainzSearchResponseSchema = z
   .object({ releases: z.array(MusicBrainzReleaseSchema) })
   .passthrough();
 
+const MusicBrainzTrackSchema = z
+  .object({
+    title: z.string().min(1),
+    number: z.string().min(1).optional(),
+    length: z.number().int().positive().nullable().optional(),
+  })
+  .passthrough();
+
+const MusicBrainzReleaseDetailSchema = z
+  .object({
+    id: z.string().uuid(),
+    title: z.string().min(1),
+    date: z.string().optional(),
+    country: z.string().optional(),
+    barcode: z.string().nullable().optional(),
+    packaging: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    "artist-credit": z.array(ArtistCreditSchema).min(1),
+    "release-group": z
+      .object({ id: z.string().uuid(), title: z.string().min(1) })
+      .passthrough(),
+    "label-info": z
+      .array(
+        z
+          .object({
+            "catalog-number": z.string().nullable().optional(),
+            label: z
+              .object({ name: z.string().min(1) })
+              .passthrough()
+              .nullable()
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    media: z
+      .array(
+        z
+          .object({
+            format: z.string().nullable().optional(),
+            tracks: z.array(MusicBrainzTrackSchema).optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
 export interface MusicBrainzCatalogOptions {
   userAgent: string;
   baseUrl?: string;
@@ -82,16 +132,21 @@ export function createMusicBrainzCatalog(
     now,
     sleep,
   );
-  const cache = new Map<
+  const searchCache = new Map<
     string,
     { expiresAt: number; value: CatalogReleaseCandidate[] }
   >();
+  const detailsCache = new Map<
+    string,
+    { expiresAt: number; value: CatalogReleaseDetail }
+  >();
+  const cacheTtlMs = options.cacheTtlMs ?? 24 * 60 * 60 * 1_000;
 
   return {
     async searchReleases(input) {
       const normalizedInput = normalizeInput(input);
       const cacheKey = JSON.stringify(normalizedInput);
-      const cached = cache.get(cacheKey);
+      const cached = searchCache.get(cacheKey);
       if (cached && cached.expiresAt > now()) return cached.value;
 
       const query = [
@@ -126,11 +181,65 @@ export function createMusicBrainzCatalog(
         const candidate = toCandidate(release, fetchedAt);
         return candidate ? [candidate] : [];
       });
-      cache.set(cacheKey, {
-        expiresAt: now() + (options.cacheTtlMs ?? 24 * 60 * 60 * 1_000),
+      searchCache.set(cacheKey, {
+        expiresAt: now() + cacheTtlMs,
         value: results,
       });
       return results;
+    },
+
+    async getReleaseDetails(releaseId) {
+      const parsedId = z.string().uuid().safeParse(releaseId);
+      if (!parsedId.success) {
+        throw new CatalogProviderError(
+          "not_found",
+          false,
+          "The requested release does not exist.",
+        );
+      }
+      const cached = detailsCache.get(parsedId.data);
+      if (cached && cached.expiresAt > now()) return cached.value;
+
+      const url = new URL(
+        `${baseUrl.replace(/\/$/, "")}/release/${parsedId.data}`,
+      );
+      url.searchParams.set(
+        "inc",
+        "labels+recordings+artist-credits+release-groups+media",
+      );
+      url.searchParams.set("fmt", "json");
+
+      const payload = await requestJsonWithRetry({
+        url,
+        userAgent: options.userAgent,
+        request,
+        limiter,
+        sleep,
+        timeoutMs: options.timeoutMs ?? 10_000,
+      });
+      const parsed = MusicBrainzReleaseDetailSchema.safeParse(payload);
+      if (!parsed.success) {
+        throw new CatalogProviderError(
+          "invalid_response",
+          false,
+          "The catalog response did not match the expected schema.",
+        );
+      }
+
+      const fetchedAt = new Date(now()).toISOString();
+      const detail = toDetail(parsed.data, fetchedAt);
+      if (!detail) {
+        throw new CatalogProviderError(
+          "invalid_response",
+          false,
+          "The catalog response did not match the expected schema.",
+        );
+      }
+      detailsCache.set(parsedId.data, {
+        expiresAt: now() + cacheTtlMs,
+        value: detail,
+      });
+      return detail;
     },
   };
 }
@@ -199,6 +308,68 @@ function toCandidate(
   return candidate.success ? candidate.data : null;
 }
 
+function toDetail(
+  release: z.infer<typeof MusicBrainzReleaseDetailSchema>,
+  fetchedAt: string,
+): CatalogReleaseDetail | null {
+  const labels = (release["label-info"] ?? [])
+    .flatMap((entry) =>
+      entry.label
+        ? [
+            {
+              name: entry.label.name,
+              catalogNumber: entry["catalog-number"] ?? null,
+            },
+          ]
+        : [],
+    )
+    .slice(0, 20);
+  const media = release.media ?? [];
+  const formats = [
+    ...new Set(
+      media.flatMap((medium) => (medium.format ? [medium.format] : [])),
+    ),
+  ].slice(0, 20);
+  const tracks = media
+    .flatMap((medium, mediumIndex) =>
+      (medium.tracks ?? []).map((track, trackIndex) => ({
+        position: track.number ?? String(trackIndex + 1),
+        title: track.title,
+        lengthMs: track.length ?? null,
+        mediumIndex,
+      })),
+    )
+    .sort((a, b) => a.mediumIndex - b.mediumIndex)
+    .map(({ position, title, lengthMs }) => ({ position, title, lengthMs }))
+    .slice(0, 200);
+  const detail = CatalogReleaseDetailSchema.safeParse({
+    reference: {
+      provider: "musicbrainz",
+      releaseGroupId: release["release-group"].id,
+      releaseId: release.id,
+      sourceUrl: `https://musicbrainz.org/release/${release.id}`,
+      fetchedAt,
+    },
+    artist: release["artist-credit"]
+      .map((credit) => `${credit.name}${credit.joinphrase ?? ""}`)
+      .join(""),
+    title: release.title,
+    releaseDate: release.date ?? null,
+    country: release.country ?? null,
+    labels,
+    barcode: release.barcode || null,
+    formats,
+    packaging: release.packaging ?? null,
+    status: release.status ?? null,
+    // A direct by-ID lookup is not a ranked search result; 100 signals an
+    // exact identity match rather than a fuzzy-match confidence score.
+    score: 100,
+    releaseGroupTitle: release["release-group"].title,
+    tracks,
+  });
+  return detail.success ? detail.data : null;
+}
+
 async function requestJsonWithRetry(input: {
   url: URL;
   userAgent: string;
@@ -240,6 +411,13 @@ async function requestJsonWithRetry(input: {
           : 2 ** (attempt - 1) * 1_000,
       );
       continue;
+    }
+    if (response.status === 404) {
+      throw new CatalogProviderError(
+        "not_found",
+        false,
+        "The requested release does not exist.",
+      );
     }
     throw new CatalogProviderError(
       response.status === 429 ? "rate_limit" : "provider_unavailable",

@@ -101,4 +101,93 @@ describe("MusicBrainz catalog", () => {
     expect(request).toHaveBeenCalledTimes(3);
     expect(sleeps).toEqual([1_000, 1_000]);
   });
+
+  it("fetches a release's full detail with tracks, release-group provenance, and caches it", async () => {
+    const request = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: releaseId,
+            title: "Kind of Blue",
+            date: "1959-08-17",
+            country: "US",
+            barcode: null,
+            packaging: "Cardboard/Paper Sleeve",
+            status: "Official",
+            "artist-credit": [{ name: "Miles Davis" }],
+            "release-group": { id: releaseGroupId, title: "Kind of Blue" },
+            "label-info": [
+              { "catalog-number": "CS 8163", label: { name: "Columbia" } },
+            ],
+            media: [
+              {
+                format: '12" Vinyl',
+                tracks: [
+                  { number: "A1", title: "So What", length: 562_000 },
+                  {
+                    number: "A2",
+                    title: "Freddie Freeloader",
+                    length: 590_000,
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const catalog = createMusicBrainzCatalog({
+      userAgent: "VinylHound/0.1.0 (https://vinylhound.test)",
+      fetch: request as typeof fetch,
+      now: () => Date.parse("2026-08-31T12:00:00.000Z"),
+    });
+
+    const first = await catalog.getReleaseDetails(releaseId);
+    const second = await catalog.getReleaseDetails(releaseId);
+
+    expect(second).toEqual(first);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(first).toMatchObject({
+      artist: "Miles Davis",
+      title: "Kind of Blue",
+      releaseGroupTitle: "Kind of Blue",
+      reference: {
+        provider: "musicbrainz",
+        releaseId,
+        releaseGroupId,
+      },
+      tracks: [
+        { position: "A1", title: "So What", lengthMs: 562_000 },
+        { position: "A2", title: "Freddie Freeloader", lengthMs: 590_000 },
+      ],
+    });
+  });
+
+  it("reports a missing release as not_found without retrying", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 404 }));
+    const catalog = createMusicBrainzCatalog({
+      userAgent: "VinylHound/0.1.0 (https://vinylhound.test)",
+      fetch: request as typeof fetch,
+      now: () => 0,
+    });
+
+    await expect(catalog.getReleaseDetails(releaseId)).rejects.toMatchObject({
+      category: "not_found",
+      retryable: false,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a non-UUID release id without making a request", async () => {
+    const request = vi.fn();
+    const catalog = createMusicBrainzCatalog({
+      userAgent: "VinylHound/0.1.0 (https://vinylhound.test)",
+      fetch: request as typeof fetch,
+    });
+
+    await expect(catalog.getReleaseDetails("not-a-uuid")).rejects.toMatchObject(
+      { category: "not_found" },
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
 });
