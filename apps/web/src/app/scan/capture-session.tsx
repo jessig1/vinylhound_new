@@ -45,6 +45,7 @@ type SessionRecord = {
   submitKey: string;
   uploadKey: string;
   completeKey: string;
+  batchId: string | null;
   scanId: string | null;
   imageId: string | null;
   imageCompleted: boolean;
@@ -60,6 +61,7 @@ type PersistedRecord = {
   submitKey: string;
   uploadKey: string;
   completeKey: string;
+  batchId: string | null;
   scanId: string | null;
   imageId: string | null;
   imageCompleted: boolean;
@@ -67,7 +69,9 @@ type PersistedRecord = {
 
 type PersistedSession = {
   batchKey: string;
-  batchId: string | null;
+  // `batchId` is retained only to restore drafts written before rollover.
+  batchId?: string | null;
+  batchIds?: string[];
   records: PersistedRecord[];
 };
 
@@ -83,8 +87,7 @@ type QuotaState =
 type LiveCameraState =
   "off" | "armed" | "captured" | "disarmed" | "rearmed" | "paused";
 
-type CameraPauseReason =
-  "quota" | "session_full" | "background" | "access_lost";
+type CameraPauseReason = "quota" | "background" | "access_lost";
 
 const LIVE_CAPTURE_SAMPLE_MS = 250;
 const LIVE_CAPTURE_STABLE_SAMPLES = 4;
@@ -105,7 +108,7 @@ export function CaptureSession() {
   const router = useRouter();
   const recordsRef = useRef<SessionRecord[]>([]);
   const batchKeyRef = useRef(`capture-session-${crypto.randomUUID()}`);
-  const queueRef = useRef<string[]>([]);
+  const queueRef = useRef<Array<{ clientId: string; batchId: string }>>([]);
   const activeCountRef = useRef(0);
   const abortControllers = useRef<Record<string, AbortController>>({});
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
@@ -113,6 +116,8 @@ export function CaptureSession() {
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const cameraTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cameraRequestRef = useRef(0);
+  const rolloverRef = useRef<Promise<string> | null>(null);
+  const batchIdsRef = useRef<string[]>([]);
   const cameraStateRef = useRef<LiveCameraState>("off");
   const priorCameraFrameRef = useRef<Uint8ClampedArray | null>(null);
   const capturedCameraFrameRef = useRef<Uint8ClampedArray | null>(null);
@@ -129,6 +134,7 @@ export function CaptureSession() {
 
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchIds, setBatchIds] = useState<string[]>([]);
   const [rehydrated, setRehydrated] = useState(false);
   const [sessionRunning, setSessionRunning] = useState(false);
   const [submittedCount, setSubmittedCount] = useState(0);
@@ -224,10 +230,18 @@ export function CaptureSession() {
     if (!persisted || persisted.records.length === 0) return;
     batchKeyRef.current = persisted.batchKey;
     pendingCountRef.current = persisted.records.length;
-    setBatchId(persisted.batchId);
+    const restoredBatchIds = persisted.batchIds?.length
+      ? persisted.batchIds
+      : persisted.batchId
+        ? [persisted.batchId]
+        : [];
+    batchIdsRef.current = restoredBatchIds;
+    setBatchIds(restoredBatchIds);
+    setBatchId(restoredBatchIds.at(-1) ?? null);
     setRecords(
       persisted.records.map((record) => ({
         ...record,
+        batchId: record.batchId ?? restoredBatchIds.at(-1) ?? null,
         image: null,
         status: record.imageCompleted ? "idle" : "needs-recapture",
         stage: null,
@@ -238,10 +252,10 @@ export function CaptureSession() {
   }, []);
 
   useEffect(() => {
-    if (!batchId) return;
+    if (!batchIds.length) return;
     persistSession({
       batchKey: batchKeyRef.current,
-      batchId,
+      batchIds,
       records: records.map(
         ({
           clientId,
@@ -250,6 +264,7 @@ export function CaptureSession() {
           submitKey,
           uploadKey,
           completeKey,
+          batchId: recordBatchId,
           scanId,
           imageId,
           imageCompleted,
@@ -260,24 +275,19 @@ export function CaptureSession() {
           submitKey,
           uploadKey,
           completeKey,
+          batchId: recordBatchId,
           scanId,
           imageId,
           imageCompleted,
         }),
       ),
     });
-  }, [records, batchId]);
+  }, [records, batchIds]);
 
   function addIndependentRecords(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (!files.length || sessionRunning) return;
-    if (records.length + submittedCount + files.length > MAX_SCANS_PER_BATCH) {
-      setGlobalError(
-        `A capture session can include up to ${MAX_SCANS_PER_BATCH} records.`,
-      );
-      return;
-    }
     pendingCountRef.current += files.length;
     setRecords((current) => [...current, ...files.map(createIdleRecord)]);
     setGlobalError(null);
@@ -454,16 +464,6 @@ export function CaptureSession() {
       canvas.toBlob(resolve, "image/jpeg", 0.9),
     );
     if (!blob || cameraStateRef.current !== "captured") return;
-    if (
-      recordsRef.current.length + submittedCountRef.current >=
-      MAX_SCANS_PER_BATCH
-    ) {
-      setCameraError(
-        `A capture session can include up to ${MAX_SCANS_PER_BATCH} records. Start or review this session before capturing more.`,
-      );
-      pauseLiveCamera("session_full");
-      return;
-    }
     const file = new File(
       [blob],
       `live-cover-${new Date().toISOString().replaceAll(":", "-")}.jpg`,
@@ -529,7 +529,9 @@ export function CaptureSession() {
       (item) => item.clientId === clientId,
     );
     if (!record) return;
-    queueRef.current = queueRef.current.filter((id) => id !== clientId);
+    queueRef.current = queueRef.current.filter(
+      (item) => item.clientId !== clientId,
+    );
     abortControllers.current[clientId]?.abort();
     delete abortControllers.current[clientId];
     if (record.image) URL.revokeObjectURL(record.image.preview);
@@ -574,6 +576,8 @@ export function CaptureSession() {
     persistSession(null);
     batchKeyRef.current = `capture-session-${crypto.randomUUID()}`;
     setBatchId(null);
+    batchIdsRef.current = [];
+    setBatchIds([]);
     await Promise.allSettled(
       toCancel.map((record) =>
         requestJson(`/api/v1/scans/${record.scanId}/cancel`, {
@@ -590,18 +594,7 @@ export function CaptureSession() {
     try {
       let targetBatchId = batchId;
       if (!targetBatchId) {
-        const created = CreateBatchResponseSchema.parse(
-          await requestJson("/api/v1/batches", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "idempotency-key": batchKeyRef.current,
-            },
-            body: JSON.stringify({}),
-          }),
-        );
-        targetBatchId = created.batchId;
-        setBatchId(targetBatchId);
+        targetBatchId = await createNextBatch();
       }
       const idleIds = recordsRef.current
         .filter((record) => record.status === "idle")
@@ -616,8 +609,39 @@ export function CaptureSession() {
     }
   }
 
+  async function createNextBatch() {
+    if (rolloverRef.current) return rolloverRef.current;
+    const creation = (async () => {
+      const batchIndex = batchIdsRef.current.length;
+      const created = CreateBatchResponseSchema.parse(
+        await requestJson("/api/v1/batches", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            // The position makes a retried rollover idempotent without
+            // conflating it with the preceding batch in this session.
+            "idempotency-key": `${batchKeyRef.current}-${batchIndex}`,
+          },
+          body: JSON.stringify({}),
+        }),
+      );
+      batchIdsRef.current = [...batchIdsRef.current, created.batchId];
+      setBatchIds(batchIdsRef.current);
+      setBatchId(created.batchId);
+      return created.batchId;
+    })();
+    rolloverRef.current = creation;
+    try {
+      return await creation;
+    } finally {
+      rolloverRef.current = null;
+    }
+  }
+
   function enqueueRecords(clientIds: string[], targetBatchId: string) {
-    const eligible = clientIds.filter((id) => !queueRef.current.includes(id));
+    const eligible = clientIds.filter(
+      (id) => !queueRef.current.some((item) => item.clientId === id),
+    );
     if (!eligible.length) return;
     setRecords((current) =>
       current.map((record) =>
@@ -626,25 +650,27 @@ export function CaptureSession() {
           : record,
       ),
     );
-    queueRef.current.push(...eligible);
-    pump(targetBatchId);
+    queueRef.current.push(
+      ...eligible.map((clientId) => ({ clientId, batchId: targetBatchId })),
+    );
+    pump();
   }
 
-  function pump(targetBatchId: string) {
+  function pump() {
     while (
       activeCountRef.current < UPLOAD_CONCURRENCY &&
       queueRef.current.length > 0
     ) {
-      const clientId = queueRef.current.shift();
-      if (!clientId) break;
+      const queued = queueRef.current.shift();
+      if (!queued) break;
       activeCountRef.current += 1;
       setSessionRunning(true);
-      void processRecord(clientId, targetBatchId).finally(() => {
+      void processRecord(queued.clientId, queued.batchId).finally(() => {
         activeCountRef.current -= 1;
         if (activeCountRef.current === 0 && queueRef.current.length === 0) {
           setSessionRunning(false);
         }
-        pump(targetBatchId);
+        pump();
       });
     }
   }
@@ -670,7 +696,12 @@ export function CaptureSession() {
 
       let scanId = record.scanId;
       if (!scanId) {
+        const recordBatchId = targetBatchId;
         updateRecord(clientId, (item) => ({ ...item, stage: "preparing" }));
+        updateRecord(clientId, (item) => ({
+          ...item,
+          batchId: recordBatchId,
+        }));
         const scan = CreateScanResponseSchema.parse(
           await requestJson("/api/v1/scans", {
             method: "POST",
@@ -680,7 +711,7 @@ export function CaptureSession() {
             },
             body: JSON.stringify({
               source: "batch_upload",
-              batchId: targetBatchId,
+              batchId: recordBatchId,
             }),
             signal: controller.signal,
           }),
@@ -756,10 +787,13 @@ export function CaptureSession() {
       setUploadProgress((current) => dropProgress(current, clientId));
       if (pendingCountRef.current === 0) {
         persistSession(null);
-        router.push(`/scans/batch/${targetBatchId}`);
+        router.push(
+          `/scans/batch/${batchIdsRef.current.at(-1) ?? targetBatchId}`,
+        );
       }
     } catch (caught) {
       if (controller.signal.aborted) return;
+      let failure: unknown = caught;
       if (
         caught instanceof ApiRequestError &&
         caught.code === "quota_exceeded"
@@ -769,13 +803,27 @@ export function CaptureSession() {
         // silently retrying, so the user sees why and when it may clear.
         void refreshQuota();
       }
+      if (
+        caught instanceof ApiRequestError &&
+        caught.code === "batch_scan_limit"
+      ) {
+        try {
+          // The server is authoritative: several concurrent records can all
+          // discover a full batch, but they share one idempotent rollover.
+          updateRecord(clientId, (item) => ({ ...item, batchId: null }));
+          enqueueRecords([clientId], await createNextBatch());
+          return;
+        } catch (rolloverError) {
+          failure = rolloverError;
+        }
+      }
       updateRecord(clientId, (item) => ({
         ...item,
         status: "failed",
         stage: null,
         error:
-          caught instanceof Error
-            ? caught.message
+          failure instanceof Error
+            ? failure.message
             : "This record could not be uploaded.",
       }));
     } finally {
@@ -846,6 +894,19 @@ export function CaptureSession() {
           submitted so far.{" "}
           <Link href={`/scans/batch/${batchId}`}>Review them now</Link> — the
           rest will keep going here.
+          {batchIds.length > 1 ? (
+            <>
+              {" "}
+              Earlier batches:{" "}
+              {batchIds.slice(0, -1).map((id, index) => (
+                <span key={id}>
+                  {index ? ", " : ""}
+                  <Link href={`/scans/batch/${id}`}>Batch {index + 1}</Link>
+                </span>
+              ))}
+              .
+            </>
+          ) : null}
         </p>
       ) : null}
 
@@ -990,7 +1051,7 @@ export function CaptureSession() {
         ) : null}
         <small>
           JPEG, PNG, WebP, or GIF · Up to 10 MB each · {MAX_SCANS_PER_BATCH}{" "}
-          records per session
+          records per batch; sessions continue into a new batch automatically
         </small>
       </section>
 
@@ -1155,8 +1216,6 @@ function liveCameraPauseMessage(reason: CameraPauseReason) {
   switch (reason) {
     case "quota":
       return "Live capture is paused until scan capacity is available.";
-    case "session_full":
-      return "Live capture is paused because this session is full.";
     case "background":
       return "Live capture paused when this page went to the background.";
     case "access_lost":
@@ -1194,6 +1253,7 @@ function createIdleRecord(file: File): SessionRecord {
     submitKey: `submit-${crypto.randomUUID()}`,
     uploadKey: `upload-${crypto.randomUUID()}`,
     completeKey: `complete-${crypto.randomUUID()}`,
+    batchId: null,
     scanId: null,
     imageId: null,
     imageCompleted: false,
@@ -1398,7 +1458,12 @@ function isPersistedSession(value: unknown): value is PersistedSession {
   const session = value as Partial<PersistedSession>;
   return (
     typeof session.batchKey === "string" &&
-    (session.batchId === null || typeof session.batchId === "string") &&
+    (session.batchId === undefined ||
+      session.batchId === null ||
+      typeof session.batchId === "string") &&
+    (session.batchIds === undefined ||
+      (Array.isArray(session.batchIds) &&
+        session.batchIds.every((id) => typeof id === "string"))) &&
     Array.isArray(session.records) &&
     session.records.every(isPersistedRecord)
   );

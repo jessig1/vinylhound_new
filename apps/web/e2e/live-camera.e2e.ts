@@ -98,7 +98,9 @@ test("live camera captures once while held, rearms after change, and resumes aft
   await expect(page.getByText("1 record in this session")).toBeVisible({
     timeout: 5_000,
   });
-  await expect(page.locator(".live-camera__state")).toHaveText("Waiting");
+  await expect(page.locator(".live-camera__state")).toHaveText(
+    "Waiting for a new cover",
+  );
 
   // A steady cover remains disarmed, so the sampler cannot add another record.
   await page.waitForTimeout(1_000);
@@ -113,7 +115,7 @@ test("live camera captures once while held, rearms after change, and resumes aft
     timeout: 5_000,
   });
   const states = await page.evaluate(() => window.liveCameraHarness.states);
-  expect(states).toContain("Re-armed");
+  expect(states).toContain("Rearmed");
 
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", {
@@ -123,7 +125,9 @@ test("live camera captures once while held, rearms after change, and resumes aft
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect(
-    page.getByText("Live camera paused while the app was in the background."),
+    page.getByText(
+      "Live capture paused when this page went to the background.",
+    ),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Resume live camera" }),

@@ -243,10 +243,8 @@ message, not in retry behavior.
 **Batch rollover.** A single batch's `MAX_SCANS_PER_BATCH` (20) ceiling does
 not change and is not a per-session limit: a continuous capture session may
 span more than one batch so a user is never hard-stopped at 20 records.
-Defined behavior, for P3.2's continuous-capture state machine to implement
-(today's one-shot `/scan` picker already refuses to queue more than
-`MAX_SCANS_PER_BATCH` records client-side, so it cannot reach this path and
-none of this is implemented yet):
+Implemented by P3.2's continuous-capture state machine. The original
+one-shot picker limit was removed so this path is reachable:
 
 - The session, not the batch, is the client-side unit of continuity. The
   client tracks an ordered list of batch IDs for one session instead of a

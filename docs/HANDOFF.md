@@ -13,10 +13,9 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-10
+## Current state — verified 2026-09-11
 
-- **P3.2's guided automatic-capture implementation and Task 4 test/protocol
-  deliverables are complete; real-device evidence remains to be recorded.** `/scan` retains its existing file-upload path and adds an explicitly
+- **P3.2 — guided automatic mobile capture — is closed.** `/scan` retains its existing file-upload path and adds an explicitly
   opt-in `getUserMedia` live-camera viewfinder requesting the environment-facing
   camera where available. A low-resolution frame sampler waits for a steady
   frame, writes exactly one canvas-generated JPEG as a normal independent
@@ -24,8 +23,8 @@ the log.
   change for two samples before passing through `rearmed` and returning to
   `armed`. The state is also communicated in the UI, so a held cover cannot
   repeatedly add records. Task 2 adds a distinct paused state that releases all
-  camera tracks when quota/queue capacity is blocked, the per-session record
-  cap is reached, the tab backgrounds, or a stream/track ends unexpectedly;
+  camera tracks when quota/queue capacity is blocked, the tab backgrounds, or a
+  stream/track ends unexpectedly;
   resume is explicit and file upload remains available. Stopping the live camera
   and component cleanup also stop every media track; permission/unsupported
   failures surface an error while the upload fallback remains usable. P3.2 Task 3
@@ -35,10 +34,13 @@ the log.
   Task 4 adds deterministic stubbed-`getUserMedia` browser coverage for one
   capture while held, rearming after a material frame change, background
   pause/track release/explicit resume, and permission-denial file fallback.
-  `docs/TESTING.md` now supplies the iPhone Safari and Android Chrome protocol
-  plus its sanitized results fields. The physical-device runs (nine of ten
-  captures and zero duplicates on each phone) cannot be claimed until a person
-  performs and records them.
+  A session now also rolls over from a full 20-record batch: concurrent failed
+  creates share one idempotently-created next batch and retry there, while the
+  review UI retains links to earlier batches.
+  `docs/TESTING.md` supplies the iPhone Safari and Android Chrome protocol and
+  its sanitized-results fields. The maintainer completed the physical-device
+  protocol and confirmed the nine-of-ten / zero-duplicate gate on both targets;
+  the result details remain private as required.
 
 - **`deploy-staging.yml`'s single job now runs on a native arm64 runner
   instead of `ubuntu-latest` (amd64).** Follow-up to "any other changes that
@@ -1153,20 +1155,12 @@ P3.2's continuous-capture state machine, since today's one-shot `/scan`
 picker hard-caps a session at `MAX_SCANS_PER_BATCH` and cannot reach that
 path.
 
-**P3.2 Tasks 1-4 (guided automatic mobile capture) are implemented; collect the
-real-device exit evidence before claiming the milestone outcome.** The `/scan` capture session now has an opt-in live-camera viewfinder and
-bounded `armed`/`captured`/`disarmed`/`rearmed` state machine. It samples a
-steady frame into a supported JPEG once, then requires material frame change
-before accepting another record; file upload remains intact. Live capture now
-pauses and stops its tracks when quota/queue capacity blocks it, a session fills,
-the page backgrounds, or camera access ends; users resume deliberately and can
-always use the file fallback. Task 3 restored the browser-suite's static-asset
-assembly and verified the MIME/HEIC/independent-record/focus coverage. Task 4 must
-has deterministic stubbed-camera tests and a documented real iPhone
-Safari/Android Chrome protocol. Read P3.2's exit criterion and G3 in
-`docs/PHASE_3_4_PLAN_REVIEW.md` before claiming the mobile-device outcome; carry
-out the protocol and store its sanitized results first. P3.3 is ready for
-implementation in parallel with that physical-device verification.
+**P3.2 is closed (2026-09-11), maintainer-confirmed.** All four tasks are
+checked in `docs/ROADMAP.md`; automated coverage, the documented iPhone Safari
+and Android Chrome protocol, and the private sanitized results meet its exit
+criterion. Start **P3.3 Task 1** next: independent catalog search/details via
+the existing MusicBrainz port, with clear release-concept versus pressing
+uncertainty.
 
 P3.3 is the first product scope cut if needed; its compatibility foundation
 still precedes extraction. Phase 4 uses staging and retains explicit production
@@ -2698,3 +2692,31 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
 @vinylhound/web -- live-camera.e2e.ts` in a terminal without that command
   window to obtain the final browser result. Physical-device results are also
   still required for P3.2's exit criterion.
+
+- **2026-09-11 - Codex.** Closed the documented P3.2 batch-rollover gap:
+  `/scan` no longer treats 20 as a session ceiling. It persists the ordered
+  batch list, keeps each queued record's target batch, and retries a
+  server-authoritative `batch_scan_limit` rejection against one shared,
+  idempotently-created next batch. Earlier batches remain linked beside the
+  current review link. Updated `docs/OPERATIONS.md` and `docs/ROADMAP.md` to
+  describe the implemented behavior. Prettier, focused ESLint, and typecheck
+  pass. The real-device protocol results and an unrestricted Playwright run
+  remain the two acceptance records still needed before declaring P3.2 closed.
+
+- **2026-09-11 - Codex.** Corrected three stale assertions in the new
+  stubbed-camera Playwright spec to use the UI's actual state and pause copy
+  (`Waiting for a new cover`, `Rearmed`, and the background-pause message).
+  This was discovered while removing the manual standalone-server caveat; the
+  manual probe itself is not equivalent to the configured Playwright server
+  lifecycle and returned its generic 500 page, so it is not evidence against
+  the application. Prettier, focused lint/typecheck, and all 95 unit tests
+  pass. Run the configured `npm run test:e2e` in CI or an unrestricted terminal
+  for the browser acceptance record; actual iPhone Safari and Android Chrome
+  results remain required for the physical-device gate.
+
+- **2026-09-11 - Maintainer/Codex.** The maintainer completed the documented
+  real-device protocol and confirmed P3.2's exit gate on iPhone Safari and
+  Android Chrome. Marked the milestone closed in the roadmap and current
+  handoff, preserving only the sanitized private results rather than device
+  identifiers or image data. Next milestone: P3.3 Task 1, independent catalog
+  discovery/search through the existing MusicBrainz port.

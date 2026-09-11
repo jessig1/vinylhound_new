@@ -284,10 +284,9 @@ either proactively or on the server's distinct `batch_scan_limit` rejection
 any client), and composes existing `POST /batches`/`POST /scans` primitives
 with no schema or contract change. Quota headroom counts scans regardless of
 batch, so rollover does not interact with quota exhaustion as a separate
-failure mode. This is a behavioral definition for P3.2's continuous-capture
-state machine to implement, not an implementation itself — today's one-shot
-`/scan` picker still hard-caps a session at `MAX_SCANS_PER_BATCH` client-side
-and so cannot reach this path, unchanged by this task.
+failure mode. P3.2's continuous-capture state machine implements this behavior:
+the client creates a new batch after the server authoritatively reports a full
+one, while the session itself remains continuous.
 
 - [x] **Task 6.** Add structured web request/error timing and validated correlation IDs
       across HTTP, outbox/job payloads, and worker attempts. Preserve compatibility
@@ -361,10 +360,11 @@ Daily/spend exhaustion stops capture until the relevant limit permits resumption
       iPhone Safari and Android Chrome protocol recording device/OS/browser,
       lighting, captures, misses, duplicates, and interventions.
 
-Exit: automated tests prove no duplicate while held, rearming, pause/resume, and
-fallback. Each target phone captures at least nine of ten deliberate cover
-presentations with zero duplicate submissions. Record sanitized device results;
-browser emulation does not prove real-camera behavior.
+Exit — **met 2026-09-11**: automated tests prove no duplicate while held,
+rearming, pause/resume, and fallback. The maintainer completed the documented
+iPhone Safari and Android Chrome protocol; its sanitized device results are
+retained privately and meet the nine-of-ten / zero-duplicate gate. Browser
+emulation does not prove real-camera behavior.
 
 ### P3.3 — Discovery and saved music without scanning
 
