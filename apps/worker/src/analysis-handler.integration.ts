@@ -25,7 +25,7 @@ import {
 } from "@vinylhound/database";
 import type { ObjectStorage } from "@vinylhound/storage";
 
-import { createScanAnalysisHandler } from "./analysis-handler.js";
+import { createScanAnalysisHandler } from "./analysis-handler.ts";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {

@@ -13,7 +13,7 @@ import type {
   ObjectStorage,
   PutObjectRequest,
   StoredObject,
-} from "./index.js";
+} from "./index.ts";
 
 export interface S3ObjectStorageOptions {
   endpoint?: string;

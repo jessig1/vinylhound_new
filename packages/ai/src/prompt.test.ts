@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ALBUM_IDENTIFICATION_INSTRUCTIONS,
   ALBUM_IDENTIFICATION_PROMPT_VERSION,
-} from "./prompt.js";
+} from "./prompt.ts";
 
 describe("album identification prompt", () => {
   it("prioritizes a best-effort artist/title result", () => {

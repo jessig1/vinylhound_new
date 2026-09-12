@@ -41,6 +41,15 @@ Dependencies should point inward: apps may depend on packages; provider packages
 - Use signed, short-lived upload/read URLs and validate MIME type, decoded file type, and size server-side.
 - Do not log secrets, full signed URLs, or raw image bytes.
 
+## Import conventions
+
+Relative imports inside `packages/**` and `apps/worker/**` name the TypeScript
+file they resolve to — `import { x } from "./catalog.ts"`, not `./catalog.js`.
+Bundlers resolve that literally (Turbopack has no equivalent of webpack's
+`resolve.extensionAlias`), and `rewriteRelativeImportExtensions` rewrites it
+back to `./catalog.js` when `tsc` emits the worker's Node ESM output. A `.js`
+specifier will fail to resolve in `apps/web`. See ADR-0020.
+
 ## Change expectations
 
 - Update contracts before implementations when an API or job payload changes.

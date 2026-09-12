@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CORRELATION_ID_MAX_LENGTH, CorrelationIdSchema } from "./common.js";
+import { CORRELATION_ID_MAX_LENGTH, CorrelationIdSchema } from "./common.ts";
 
 describe("CorrelationIdSchema", () => {
   it("accepts a bounded alphanumeric identifier", () => {

@@ -2,11 +2,11 @@ import { eq } from "drizzle-orm";
 
 import type { AccountExportResponse } from "@vinylhound/contracts";
 
-import type { Database } from "./database.js";
+import type { Database } from "./database.ts";
 import {
   DatabaseCommandError,
   deriveImageObjectKey,
-} from "./scan-repository.js";
+} from "./scan-repository.ts";
 import {
   batches,
   imageAssets,
@@ -16,7 +16,7 @@ import {
   scanConfirmations,
   scans,
   users,
-} from "./schema.js";
+} from "./schema.ts";
 
 export async function getAccountExportForUser(
   db: Database,

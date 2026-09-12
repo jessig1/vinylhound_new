@@ -4,7 +4,7 @@ import {
   DevelopmentWebConfigSchema,
   QueueWorkerConfigSchema,
   ServerConfigSchema,
-} from "./index.js";
+} from "./index.ts";
 
 describe("ServerConfigSchema", () => {
   it("defaults album identification to Sol with high image detail", () => {

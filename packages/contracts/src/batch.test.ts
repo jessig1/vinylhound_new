@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { GetBatchResponseSchema } from "./batch.js";
+import { GetBatchResponseSchema } from "./batch.ts";
 
 describe("GetBatchResponseSchema", () => {
   it("accepts a batch with mixed-status scans and no candidate yet", () => {

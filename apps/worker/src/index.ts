@@ -18,8 +18,8 @@ import {
 import { createS3ObjectStorage } from "@vinylhound/storage";
 import { writeFile } from "node:fs/promises";
 
-import { createScanAnalysisHandler } from "./analysis-handler.js";
-import { startQueueMetricsPublisher } from "./metrics.js";
+import { createScanAnalysisHandler } from "./analysis-handler.ts";
+import { startQueueMetricsPublisher } from "./metrics.ts";
 
 const shutdownSignals = ["SIGINT", "SIGTERM"] as const;
 const config = loadQueueWorkerConfig();

@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
-import { normalizeImage } from "./image-normalization.js";
+import { normalizeImage } from "./image-normalization.ts";
 
 async function createPng(width: number, height: number) {
   return sharp({

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { estimateTokenUsageCostUsd } from "./provider-pricing.js";
+import { estimateTokenUsageCostUsd } from "./provider-pricing.ts";
 
 describe("provider pricing", () => {
   it("uses the most specific family price for versioned model identifiers", () => {

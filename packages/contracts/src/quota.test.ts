@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { GetQuotaHeadroomResponseSchema } from "./quota.js";
+import { GetQuotaHeadroomResponseSchema } from "./quota.ts";
 
 describe("GetQuotaHeadroomResponseSchema", () => {
   it("accepts an admissible headroom snapshot with no blocking reason", () => {

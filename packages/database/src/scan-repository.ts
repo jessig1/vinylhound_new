@@ -26,7 +26,7 @@ import {
 } from "@vinylhound/contracts";
 import { estimateTokenUsageCostUsd } from "@vinylhound/domain";
 
-import type { Database } from "./database.js";
+import type { Database } from "./database.ts";
 import {
   batches,
   imageAssets,
@@ -35,7 +35,7 @@ import {
   scanConfirmations,
   scans,
   users,
-} from "./schema.js";
+} from "./schema.ts";
 
 export type DatabaseCommandErrorCode =
   | "batch_scan_limit"

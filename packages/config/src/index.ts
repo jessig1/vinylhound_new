@@ -104,10 +104,24 @@ export const DevelopmentWebConfigSchema = z
       .default("00000000-0000-4000-8000-000000000001"),
     CLERK_SECRET_KEY: OptionalNonEmptyStringSchema,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: OptionalNonEmptyStringSchema,
+    // Discovery (Spotify) is optional: unset credentials disable /discover
+    // rather than failing boot, so tests and CI run without them exactly as
+    // they do without an OpenAI key. Server-side only — never a NEXT_PUBLIC_.
+    SPOTIFY_CLIENT_ID: OptionalNonEmptyStringSchema,
+    SPOTIFY_CLIENT_SECRET: OptionalNonEmptyStringSchema,
     ...OperationsConfigShape,
   })
   .superRefine((value, ctx) => {
     validateInfrastructureConfig(value, ctx);
+    if (
+      Boolean(value.SPOTIFY_CLIENT_ID) !== Boolean(value.SPOTIFY_CLIENT_SECRET)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SPOTIFY_CLIENT_ID"],
+        message: "Spotify client ID and secret must be provided together.",
+      });
+    }
     if (value.AUTH_MODE !== value.NEXT_PUBLIC_AUTH_MODE) {
       ctx.addIssue({
         code: "custom",

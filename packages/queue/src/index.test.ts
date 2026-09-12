@@ -5,7 +5,7 @@ import {
 } from "@aws-sdk/client-sqs";
 import { describe, expect, it, vi } from "vitest";
 
-import { createSqsScanQueue, parseSqsAnalyzeScanMessage } from "./index.js";
+import { createSqsScanQueue, parseSqsAnalyzeScanMessage } from "./index.ts";
 
 const job = {
   jobVersion: 1 as const,

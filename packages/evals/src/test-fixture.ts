@@ -2,7 +2,7 @@ import type {
   EvaluationCase,
   EvaluationManifest,
   RunnableEvaluationCase,
-} from "./manifest.js";
+} from "./manifest.ts";
 
 export function evaluationCase(
   overrides: Partial<EvaluationCase> = {},

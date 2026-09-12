@@ -15,7 +15,192 @@ the log.
 
 ## Current state — verified 2026-09-11
 
+- **`apps/web` now builds and runs on Turbopack; the `--webpack` pin and the
+  `next.config.ts` webpack hook are deleted (ADR-0020).**
+  The root cause of the pin: workspace packages export raw TypeScript
+  (`"exports": "./src/index.ts"`) whose relative imports named the _emitted_
+  file (`./catalog.js`), which is what the worker's `NodeNext` output
+  requires. In a bundler that file does not exist — only `./catalog.ts` does
+  — and webpack papered over it with a `resolve.extensionAlias` hook.
+  **Turbopack has no `extensionAlias` equivalent** (its surface is
+  `resolveAlias`, `resolveExtensions`, `rules`, `root`), so running Turbopack
+  produced a module-not-found error for nearly every cross-file import in
+  every package. Confirmed by probe, not assumed.
+  Fixed by inverting which extension the source names: relative imports in
+  `packages/**` and `apps/worker/**` now say `./catalog.ts`, which both
+  bundlers resolve literally with no configuration, and the root
+  `tsconfig.json` sets `allowImportingTsExtensions` +
+  `rewriteRelativeImportExtensions` so `tsc` rewrites them back to
+  `./catalog.js` on emit. 126 specifiers across 60 files, rewritten by script
+  that only touched a specifier when a real `.ts`/`.tsx` sibling existed, so
+  no genuine `.js` asset could be broken — zero were skipped, meaning every
+  one had a TS sibling.
+  **The load-bearing check is the worker's emitted output**, because a
+  regression there would surface at production runtime rather than at compile
+  time. Both emit paths were inspected directly, not inferred:
+  `apps/worker/dist` and the in-place output of
+  `tsconfig.worker-runtime.json` (which `Dockerfile.worker` runs and copies)
+  contain only `.js` relative specifiers, with no `.ts` leakage.
+  Verified: `lint`, `typecheck`, `test` (122/122), `build` (banner confirms
+  "Next.js 16.3.4 (Turbopack)", plus worker and evals via `tsc`), `test:e2e`
+  (22/23 — the one failure is still the pre-existing `live-camera` flake, and
+  that suite builds and serves the standalone production output, so Turbopack
+  standalone is covered). A Turbopack dev server also served real requests:
+  library read 200, MusicBrainz catalog search returning live pressing data
+  200, catalog unknown-MBID 404, discovery malformed-id 404, discovery search
+  503 — zero module-not-found errors. One transient 502 from MusicBrainz
+  during that run did not reproduce across three retries; it was their rate
+  limit, not a regression.
+  **New convention, recorded in `AGENTS.md`:** relative imports in packages
+  and the worker name `.ts`. A `.js` specifier will now fail to resolve in
+  `apps/web` rather than degrade quietly, so new code has to follow it.
+  Not done: packages still ship raw TypeScript. Moving them to compiled
+  `exports: "./dist/index.js"` would remove the need for both compiler
+  options and for `transpilePackages`, and is the cleaner long-term boundary,
+  but it is a build-pipeline change across nine packages touching Docker, CI
+  and e2e — flagged in ADR-0020 as deserving its own ADR rather than folded
+  in here.
+
+- **Live verification against real Spotify found one blocker and two real
+  defects. The blocker is external and unfixed in code.**
+  **Blocker:** Spotify answers `GET /v1/search` with `403 "Active premium
+subscription required for the owner of the app. When the subscription
+status changes, it can take a few hours before requests are allowed
+again."` The client-credentials token mints fine (status 200,
+  `expires_in` 3600), so the credentials in `.env` are valid — Spotify is
+  refusing _data_ requests because the account that owns the app in the
+  developer dashboard has no active Premium subscription. **No code change
+  fixes this.** The options are: put Premium on the account that owns the
+  app, move the app to an account that has it, or change discovery provider
+  (Deezer has a free public API; MusicBrainz plus Cover Art Archive is the
+  other option, at the cost of the 1 req/s ceiling that motivated ADR-0019).
+  Until one of those happens `/discover` will show Spotify's refusal text and
+  the rest of the app is unaffected, exactly as the optional-provider design
+  intends.
+  **Defect 1, pre-existing and not mine — `instanceof` across the
+  `@vinylhound/catalog` boundary was broken again.** Every error thrown
+  inside that package was misclassified as `500 internal_error`. This was
+  _not_ limited to the new discovery code: `GET
+/catalog/releases/{unknown-mbid}` returned 500 instead of `404
+catalog_not_found`, which is precisely the bug the P3.3 Task 1 session
+  believed it had fixed by adding `@vinylhound/catalog` to
+  `transpilePackages`. That fix evidently did not hold. Diagnosis was clean:
+  `HttpError`, defined locally in `http.ts`, mapped correctly to 400, while
+  both package-defined error classes fell through to 500 — so the defect is
+  error _identity_, not the branches. Fixed durably by not depending on
+  module identity at all: `CatalogProviderError` and `DiscoveryProviderError`
+  each carry a branded `errorKind` field, and `http.ts` now uses the exported
+  `isCatalogProviderError` / `isDiscoveryProviderError` guards instead of
+  `instanceof`. **Prefer those guards over `instanceof` for these classes
+  anywhere they cross a package boundary.** The underlying duplication is
+  still there and is worth understanding separately — it could bite any
+  other cross-package `instanceof` — but error mapping no longer depends on
+  it. Verified live: `/catalog/releases/{unknown}` and
+  `/discovery/artists/{malformed}` both return 404, catalog search still 200.
+  **Defect 2 — a 403 was reported as a generic failure.** The adapter mapped
+  every non-401/404/429 status to `provider_unavailable` with the fixed text
+  "Spotify could not answer the request", discarding the body. That turned a
+  one-sentence diagnosis into a long one. Non-ok responses now have their
+  reason read (JSON `error.message`, `error_description`, or raw text, capped
+  at 300 characters); 401 and 403 map to `not_configured` (503) carrying
+  Spotify's own words, and other failures include the upstream status.
+  `/discover` shows the server's message rather than fixed
+  "add credentials" copy, which would have pointed at the wrong fix here
+  since credentials _are_ configured.
+  Also added: `errorResponse`'s catch-all now logs name/message/constructor/
+  top stack frame before returning 500. A 500 with no server-side log is what
+  made this take as long as it did.
+  Verified after the fixes: `npm run lint`, `npm run typecheck`, `npm test`
+  (122/122, +2), `npm run build`, `npm run test:e2e` (22/23 — the one failure
+  is still the pre-existing `live-camera` flake). Live checks were run on an
+  isolated dev server (`NEXT_DIST_DIR=.next-diag npx next dev --webpack
+--port 3123`), leaving the maintainer's server on 3000 untouched.
+  **Note for anyone starting an isolated dev server:** the project's script is
+  `next dev --webpack`. A bare `npx next dev` picks Turbopack (the Next 16
+  default), which errors out because `next.config.ts` has a `webpack` config
+  and no `turbopack` config. Migrating that config, or setting `turbopack:
+{}` deliberately, is unfinished business worth its own look.
+
+- **`/discover` now runs on Spotify as a separate discovery provider;
+  MusicBrainz stays the catalog provider for scan review and pressing
+  identity (ADR-0019). P3.3 Task 1 is revised and Task 3 is complete.**
+  The maintainer asked to rebuild discovery to match the previous VinylHound
+  implementation (jessig1/vinylhound-frontend, jessig1/vinylhound-backend),
+  whose search was one free-text box returning Artists/Albums/Tracks with
+  artwork and a click-through to artist discography and album tracklist.
+  That UX is now in place at `/discover`, `/discover/artists/{id}` and
+  `/discover/albums/{id}`: 350ms debounce, minimum 2 characters, `?q=` URL
+  state so a search is shareable and back-navigable, and an `AbortController`
+  per search so a slow response can never overwrite a newer one.
+  **This is deliberately not a provider swap.** Spotify has no pressing
+  entity — no catalog number, country, format, packaging or release status —
+  so replacing MusicBrainz would have emptied exactly the fields scan review
+  collects. Spotify is the better browse provider (relevance, inline artwork,
+  artist-first navigation, no 1 req/s ceiling); MusicBrainz is the one that
+  models physical editions. The split is structural, not conventional:
+  `CatalogProvider` vs `DiscoveryProvider` ports, `catalog.ts` vs
+  `discovery.ts` contracts, `/catalog/*` vs `/discovery/*` routes.
+  **The honesty of a Spotify-sourced record is enforced by schema, not by
+  convention.** `CatalogReferenceSchema` gained a nullable `releaseId`:
+  required for MusicBrainz, rejected as non-null for Spotify. Null states
+  that the provider models no pressing. `resolveReviewedRelease` — extracted
+  from `confirmScan` into `packages/database/src/release-resolution.ts` and
+  now shared by both save paths — uses a provider reference for release
+  identity only when it names a pressing, so a Spotify record dedupes on
+  normalized attributes like a hand-entered one and two real pressings stay
+  two releases. Catalog number, country, format, packaging and release status
+  are saved null, never guessed; only `label` and the UPC/EAN `barcode` carry
+  over. `/discover` says this in words on the save control too.
+  Task 3's placement is `POST /library` (`PlaceLibraryReleaseSchema`),
+  idempotent by identity rather than by key: upsert on
+  `(user_id, release_id)`, `collection` outranks `wishlist`, and an owned copy
+  is created only when the item has none yet. No `scan_confirmations` row and
+  a null `confirmedFromScanId`, because no scan was reviewed. Account export
+  and deletion needed no change and were checked, not assumed: placement
+  writes only to the user-scoped `library_items`/`library_copies` that export
+  already selects by `userId` and that cascade from the `users` delete.
+  Persistence needed one additive migration,
+  `015_spotify_discovery_provider.sql` (`ALTER TYPE catalog_provider ADD
+VALUE 'spotify'`). `catalog_references.external_id` was already
+  `varchar(255)` with a `(provider, entity_type, external_id)` unique index,
+  so Spotify's 22-character base-62 IDs needed no column change and cannot
+  collide with MBIDs. **This migration has not been run against a database
+  yet** — `npm run db:migrate` needs `docker compose up -d`, which was not
+  started this session. Run it before exercising save-from-discover locally;
+  every unit/e2e check below is infrastructure-free and did not need it.
+  Discovery is optional per deployment: with `SPOTIFY_CLIENT_ID`/
+  `SPOTIFY_CLIENT_SECRET` unset, `context.discovery` is null, the routes
+  answer `503 discovery_not_configured`, and `/discover` explains itself.
+  Scanning, review, confirmation and the library are unaffected, so CI and a
+  fresh clone keep working with no credentials. Credentials are server-side
+  only, never `NEXT_PUBLIC_*`.
+  Verified: `npm run lint`, `npm run typecheck`, `npm test` (120/120, +17 net
+  new), `npm run build`, `npm run test:e2e` (mobile Chromium, 22/23 — the one
+  failure is the same pre-existing `e2e/live-camera.e2e.ts` flake that
+  reproduces on clean `main`). `e2e/discover.e2e.ts` was rewritten to stub
+  `/api/v1/discovery/*` and covers the three-section search, `?q=` state, the
+  search → artist → album walk, saving to the library while asserting no
+  pressing field is invented and the reference claims no pressing, the
+  unconfigured-deployment message, and the empty-result state — zero axe
+  WCAG 2 A/AA violations on both the search and album pages. `format:check`
+  still fails only on generated `apps/web/next-env.d.ts` (no working-tree
+  diff against its last commit; pre-existing Windows CRLF artifact).
+  **Not done and worth knowing:** the discovery token/response cache is an
+  in-process `Map`, so it does not coordinate across `apps/web` replicas —
+  the same limitation the MusicBrainz limiter has, and the reason ADR-0019
+  flags moving it to the Redis already in the stack. `/discover` has not been
+  exercised against the real Spotify API; every test uses a stubbed `fetch`,
+  so the adapter's mapping is proven against Spotify's documented shapes but
+  not yet against live responses. Doing that needs real client credentials in
+  `.env`.
+
 - **P3.3 Task 1 — independent catalog search/details — is complete.**
+  **Superseded in part by the Spotify rebuild above:** the MusicBrainz
+  `GET /catalog/releases` search and `GET /catalog/releases/{releaseId}`
+  detail endpoints described here are unchanged and still back the scan
+  review screen's "Search MusicBrainz" step, but `/discover` no longer calls
+  them — it is a Spotify surface now. The `transpilePackages` bug and its fix
+  below remain accurate and load-bearing.
   `/discover` lets a user search MusicBrainz by artist/title with no scan
   involved, reusing the pre-existing `GET /api/v1/catalog/releases` search
   endpoint (the scan review screen's "Search MusicBrainz" step and
@@ -1102,6 +1287,45 @@ DELETE` intended only to inspect response headers while manually verifying
 
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
+
+**Current, 2026-09-11: P3.3 Task 1 (revised onto Spotify) and Task 3 are
+done. Next is P3.3 Task 2 — favorites and user-owned ordered playlists.**
+Define the contracts and domain rules before persistence or UI, as Task 1/3
+did: favorite/unfavorite plus playlist create/rename/reorder/remove/delete
+over saved release references. Playlists organize music; streaming playback
+is out of scope even though the discovery provider is now Spotify — do not
+let the provider change quietly widen that scope. After Task 2, Task 4
+(explicit HTTP/event version conventions and previous-deployed-version
+compatibility fixtures) is the last of P3.3.
+
+Both pre-flight items are now done: the maintainer applied migration 015, and
+`/discover` has been exercised against the real Spotify API. That run found the
+403 Premium blocker and the two defects described in "Current state" — the
+error-mapping and 403-reporting fixes are in; the 403 itself is **still open
+and is the one thing standing between `/discover` and working**.
+
+**The decision that needs making before more discovery work:** whether to put
+Spotify Premium on the account that owns the app, or change discovery
+provider. Everything else in the discovery stack — port, contracts, routes,
+adapter, UI, save-to-library — is provider-shaped but not provider-locked at
+the port boundary, so a swap is an adapter plus a contract loosening (the
+discovery contracts currently assume Spotify's 22-character IDs and
+`album_type`), not a rewrite.
+
+Also still true: the discovery cache is per-process and does not coordinate
+across `apps/web` replicas, and `e2e/live-camera.e2e.ts`'s first test is red
+on clean `main` and unrelated to any of this.
+
+Housekeeping note: `npm run test:e2e` rewrites the generated
+`apps/web/next-env.d.ts` to reference `./.next-e2e/types/...` instead of
+`./.next/dev/types/...`. That is a real working-tree change, not the CRLF
+artifact, and should be reverted (`git checkout -- apps/web/next-env.d.ts`)
+rather than committed; `npm run dev` regenerates the dev variant anyway.
+
+---
+
+**Superseded history below.** The resume point that follows describes P3.1/
+P3.2 and is kept for context only; both are closed.
 
 **P3.1 is closed out (2026-09-10), maintainer-confirmed.** All 7 tasks are
 checked in `docs/ROADMAP.md`, tagged `phase-3-p3.1`. Start P3.2 (guided
@@ -2836,3 +3060,92 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   `docs/ROADMAP.md`. Next: P3.3 Task 2 (favorites/playlists contracts and
   domain rules) — see "Resume point" above for scope notes and the
   pre-existing `live-camera.e2e.ts` flake to not mistake for a regression.
+
+- **2026-09-11 - Claude.** Rebuilt `/discover` on Spotify as a separate
+  discovery provider, keeping MusicBrainz as the catalog provider (ADR-0019).
+  The maintainer asked for the discovery experience from the previous
+  VinylHound implementation (jessig1/vinylhound-frontend and
+  vinylhound-backend); I reviewed both repositories and reported what their
+  search actually was — one debounced free-text box over a concurrent
+  multi-provider fan-out, returning Artists/Albums/Tracks with thumbnails and
+  clicking through artist → discography → album → tracklist, with a monotonic
+  request counter discarding stale responses. The maintainer chose to split
+  providers by role rather than swap, and asked for free-text search, artwork,
+  artist discography, and save-to-library in one pass.
+  Delivered: new `DiscoveryProvider` port and `createSpotifyDiscovery` adapter
+  (client-credentials token with single-flight refresh, hour-long response
+  cache, per-market discography collapse, null/placeholder filtering);
+  `packages/contracts/src/discovery.ts`; `GET /discovery/search`,
+  `/discovery/artists/{id}`, `/discovery/albums/{id}`; `POST /library` for
+  scanless placement (P3.3 Task 3); `/discover`, `/discover/artists/{id}`,
+  `/discover/albums/{id}` with debounce, `?q=` URL state, per-search
+  `AbortController`, and artwork; migration 015 adding `'spotify'` to the
+  `catalog_provider` enum.
+  The judgement call worth recording: Spotify has no pressing entity, so a
+  straight swap would have emptied the scan-review fields that distinguish
+  vinyl pressings. Rather than let that degrade silently, `releaseId` on
+  `CatalogReferenceSchema` became nullable — required for MusicBrainz,
+  rejected as non-null for Spotify — and release identity now falls back to
+  normalized attributes whenever a reference names no pressing. That made the
+  product rule ("a cover match identifies a release concept, not a pressing")
+  enforceable by schema instead of by convention, and it is asserted in both
+  the contract tests and the e2e save test. Extracting `resolveReviewedRelease`
+  out of `confirmScan` into `release-resolution.ts` kept the two save paths
+  from drifting.
+  Verified `npm run lint`, `npm run typecheck`, `npm test` (120/120, +17 net
+  new), `npm run build`, and `npm run test:e2e` (22/23; the one failure is the
+  pre-existing `live-camera` flake that reproduces on clean `main`).
+  `format:check` still fails only on generated `next-env.d.ts`. Two things I
+  did **not** do, both flagged in the resume point: migration 015 has not been
+  applied to any database (no `docker compose up` this session), and nothing
+  has been exercised against the real Spotify API — every test stubs `fetch`,
+  so the adapter is proven against documented response shapes only. Task 1's
+  session found a real latent bug exactly at that step, so it is worth doing
+  before trusting this end to end.
+
+- **2026-09-11 - Claude (same day, follow-up).** The maintainer added real
+  Spotify credentials, ran migration 015, restarted, and hit
+  `500 Internal Server Error` on search. Diagnosed on an isolated dev server
+  to avoid disturbing theirs. Three findings, in the order they mattered.
+  First, the 500 was **not** the new code: `GET /catalog/releases/{unknown}`
+  also returned 500 instead of 404, meaning error identity across the
+  `@vinylhound/catalog` boundary was broken for `CatalogProviderError` too —
+  the same bug the Task 1 session believed `transpilePackages` had fixed.
+  `HttpError` (local to `http.ts`) mapped fine, which isolated it to module
+  identity rather than the branches. Replaced `instanceof` with branded
+  `errorKind` guards (`isCatalogProviderError`, `isDiscoveryProviderError`)
+  so classification no longer depends on how a bundler lays out the graph.
+  Second, with mapping fixed the real answer appeared: Spotify returns
+  **403 "Active premium subscription required for the owner of the app"**.
+  The token mints fine, so the credentials are valid — Spotify refuses data
+  requests unless the owning developer account has Premium. That is external
+  and unfixed; the maintainer has to add Premium, move the app, or change
+  provider.
+  Third, the adapter had been discarding Spotify's explanation, mapping every
+  unexpected status to a fixed "could not answer the request". Non-ok
+  responses now carry their reason, 401/403 map to `not_configured` (503),
+  and `/discover` prints the server's message instead of "add credentials"
+  copy that would have pointed at the wrong fix. Also made `errorResponse`
+  log unclassified errors before returning 500 — its silence is most of why
+  this took as long as it did.
+  Verified `lint`, `typecheck`, `test` (122/122), `build`, `test:e2e` (22/23,
+  same pre-existing `live-camera` flake), plus live checks confirming
+  catalog 404, discovery 404, catalog search 200, and discovery search
+  returning 503 with Spotify's own text. Left the maintainer's dev server on
+  port 3000 running throughout; cleaned up the isolated instance and its
+  `.next-diag` directory.
+
+- **2026-09-11 - Claude (third pass).** Fixed the outstanding webpack pin
+  (ADR-0020). Established by probe that Turbopack cannot resolve the
+  packages' `./foo.js` specifiers and has no `extensionAlias` equivalent in
+  its config surface, then that it _does_ resolve explicit `./foo.ts` — which
+  made the fix possible. Presented the options to the maintainer, who chose
+  the full migration. Rewrote 126 relative specifiers across 60 files via a
+  script that only acted where a real `.ts`/`.tsx` sibling existed, enabled
+  `allowImportingTsExtensions` + `rewriteRelativeImportExtensions` at the
+  tsconfig root so the worker's Node ESM emit is unchanged, deleted the
+  `webpack()` hook, and dropped `--webpack` from the dev/build scripts.
+  Verified the worker emit directly rather than trusting the compiler flag,
+  since that failure mode would only appear at production runtime. Full suite
+  green apart from the pre-existing `live-camera` flake. Recorded the new
+  import convention in `AGENTS.md` so Codex picks it up.

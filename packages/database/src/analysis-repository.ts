@@ -11,12 +11,12 @@ import type {
 } from "@vinylhound/contracts";
 import { estimateTokenUsageCostUsd } from "@vinylhound/domain";
 
-import type { Database } from "./database.js";
-import { getScanConfirmationForUser } from "./confirmation-repository.js";
+import type { Database } from "./database.ts";
+import { getScanConfirmationForUser } from "./confirmation-repository.ts";
 import {
   DatabaseCommandError,
   deriveImageObjectKey,
-} from "./scan-repository.js";
+} from "./scan-repository.ts";
 import {
   imageAssets,
   libraryItems,
@@ -24,7 +24,7 @@ import {
   scanCandidates,
   scanConfirmations,
   scans,
-} from "./schema.js";
+} from "./schema.ts";
 
 export interface PrepareScanAnalysisInput {
   job: AnalyzeScanJob;

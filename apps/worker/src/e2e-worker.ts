@@ -13,7 +13,7 @@ import {
 } from "@vinylhound/queue";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 
-import { createScanAnalysisHandler } from "./analysis-handler.js";
+import { createScanAnalysisHandler } from "./analysis-handler.ts";
 
 // End-to-end test worker: runs the real outbox publisher, queue consumer,
 // storage reads, and persistence with a deterministic identifier instead of

@@ -2809,3 +2809,199 @@ button:disabled,
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Discovery (Spotify) browse surface: search field, result cards, and the
+   artist/album pages reached from them. */
+.discover-search-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+.discover-search-field:focus-within {
+  border-color: #b6ad97;
+  box-shadow: 0 0 0 3px rgb(182 173 151 / 22%);
+}
+.discover-search-field svg {
+  flex: none;
+  color: var(--muted);
+}
+.discover-search-field input {
+  width: 100%;
+  padding: 13px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.95rem;
+}
+.discover-search-field input:focus {
+  outline: none;
+}
+.discover-search-field input::-webkit-search-cancel-button {
+  display: none;
+}
+.discover-search-clear {
+  flex: none;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.discover-search-clear:hover {
+  background: #efece3;
+  color: var(--ink);
+}
+
+.discovery-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.discovery-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  color: inherit;
+  text-decoration: none;
+}
+a.discovery-card:hover,
+a.discovery-card:focus-visible {
+  border-color: var(--line);
+  background: var(--surface);
+}
+.discovery-card__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.discovery-card__body strong {
+  overflow: hidden;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.discovery-card__body small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.discovery-card__meta {
+  text-transform: capitalize;
+}
+
+.discovery-art {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  border-radius: 9px;
+  aspect-ratio: 1;
+}
+.discovery-art--circle {
+  border-radius: 50%;
+}
+.discovery-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.discovery-art__fallback {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 1.6rem;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+}
+
+.discovery-track-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.discovery-track-list .discovery-card {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+}
+.discovery-track-list .discovery-art {
+  width: 44px;
+}
+.discovery-track-list__length {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.discover-artist-header,
+.discover-album-header {
+  display: grid;
+  align-items: center;
+  gap: 22px;
+  margin-bottom: 26px;
+  grid-template-columns: 132px minmax(0, 1fr);
+}
+.discover-artist-header h1,
+.discover-album-header h1 {
+  margin: 4px 0 6px;
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  line-height: 1.05;
+}
+.discover-album-header__artist {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+.discover-album-header__artist a {
+  color: inherit;
+}
+
+.discover-save__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.discover-save__actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.form-success {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: #3f6b46;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+@media (width <= 640px) {
+  .discovery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  }
+  .discover-artist-header,
+  .discover-album-header {
+    gap: 16px;
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+}

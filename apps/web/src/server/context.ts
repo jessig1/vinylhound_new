@@ -3,7 +3,10 @@ import path from "node:path";
 import { loadEnvConfig } from "@next/env";
 
 import { loadDevelopmentWebConfig } from "@vinylhound/config";
-import { createMusicBrainzCatalog } from "@vinylhound/catalog";
+import {
+  createMusicBrainzCatalog,
+  createSpotifyDiscovery,
+} from "@vinylhound/catalog";
 import {
   createDatabase,
   databaseOptionsFromConfig,
@@ -40,6 +43,16 @@ function createServerContext() {
     catalog: createMusicBrainzCatalog({
       userAgent: `VinylHound/0.1.0 (${config.APP_URL})`,
     }),
+    // Null whenever Spotify credentials are unset. Discovery is an additive
+    // browse surface, so the app boots and scanning keeps working without it;
+    // the routes answer 503 and /discover explains itself (ADR-0019).
+    discovery:
+      config.SPOTIFY_CLIENT_ID && config.SPOTIFY_CLIENT_SECRET
+        ? createSpotifyDiscovery({
+            clientId: config.SPOTIFY_CLIENT_ID,
+            clientSecret: config.SPOTIFY_CLIENT_SECRET,
+          })
+        : null,
   };
 }
 

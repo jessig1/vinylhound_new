@@ -9,6 +9,15 @@
     "esModuleInterop": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    // Relative imports inside packages name the TypeScript file they actually
+    // resolve to (`./foo.ts`). Bundlers resolve that literally, which is what
+    // lets `apps/web` consume package source under Turbopack — Turbopack has
+    // no equivalent of webpack's `resolve.extensionAlias`, so the old
+    // `./foo.js` specifiers could not be resolved there at all (ADR-0020).
+    // `rewriteRelativeImportExtensions` rewrites them back to `./foo.js` on
+    // emit, so the worker's compiled Node ESM output stays valid.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "paths": {
       "@/*": ["./apps/web/src/*"]
     },

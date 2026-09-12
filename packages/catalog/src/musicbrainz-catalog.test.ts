@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createMusicBrainzCatalog } from "./musicbrainz-catalog.js";
+import { createMusicBrainzCatalog } from "./musicbrainz-catalog.ts";
 
 const releaseId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const releaseGroupId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";

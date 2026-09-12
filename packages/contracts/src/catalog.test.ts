@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CatalogReferenceSchema,
   CatalogReleaseDetailSchema,
   GetCatalogReleaseResponseSchema,
-} from "./catalog.js";
+} from "./catalog.ts";
 
 const reference = {
   provider: "musicbrainz",
@@ -74,5 +75,78 @@ describe("GetCatalogReleaseResponseSchema", () => {
     expect(GetCatalogReleaseResponseSchema.parse({ release: detail })).toEqual({
       release: detail,
     });
+  });
+});
+
+describe("CatalogReferenceSchema across providers", () => {
+  const spotifyReference = {
+    provider: "spotify" as const,
+    releaseGroupId: "1weenld61qoidwYuZ1GESA",
+    releaseId: null,
+    sourceUrl: "https://open.spotify.com/album/1weenld61qoidwYuZ1GESA",
+    fetchedAt: "2026-09-11T12:00:00.000Z",
+  };
+
+  it("accepts a MusicBrainz reference naming both a release group and a pressing", () => {
+    expect(CatalogReferenceSchema.parse(reference)).toMatchObject({
+      provider: "musicbrainz",
+      releaseId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+  });
+
+  it("requires a MusicBrainz reference to carry the pressing it models", () => {
+    expect(
+      CatalogReferenceSchema.safeParse({ ...reference, releaseId: null })
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects a MusicBrainz reference whose identifiers are not MBIDs", () => {
+    expect(
+      CatalogReferenceSchema.safeParse({
+        ...reference,
+        releaseGroupId: "1weenld61qoidwYuZ1GESA",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a Spotify reference that identifies an album concept only", () => {
+    expect(CatalogReferenceSchema.parse(spotifyReference)).toMatchObject({
+      provider: "spotify",
+      releaseId: null,
+    });
+  });
+
+  it("refuses to let a Spotify reference claim a pressing", () => {
+    expect(
+      CatalogReferenceSchema.safeParse({
+        ...spotifyReference,
+        releaseId: "1weenld61qoidwYuZ1GESA",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a Spotify reference whose album ID is not a Spotify ID", () => {
+    expect(
+      CatalogReferenceSchema.safeParse({
+        ...spotifyReference,
+        releaseGroupId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still accepts references persisted before Spotify existed", () => {
+    // Rows written by earlier deployments carry exactly this shape; widening
+    // the provider must not invalidate them.
+    expect(
+      CatalogReferenceSchema.safeParse({
+        provider: "musicbrainz",
+        releaseGroupId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        releaseId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        sourceUrl:
+          "https://musicbrainz.org/release/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        fetchedAt: "2026-08-31T12:00:00.000Z",
+      }).success,
+    ).toBe(true);
   });
 });

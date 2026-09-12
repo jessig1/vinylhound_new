@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AccountExportResponseSchema,
   DeleteAccountResponseSchema,
-} from "./account.js";
+} from "./account.ts";
 
 describe("AccountExportResponseSchema", () => {
   it("accepts an export with no data beyond the account itself", () => {

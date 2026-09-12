@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
-import { validateImage } from "./image-validation.js";
+import { validateImage } from "./image-validation.ts";
 
 async function createPng() {
   return sharp({
