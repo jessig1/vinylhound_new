@@ -10,19 +10,31 @@ export type LibrarySort = z.infer<typeof LibrarySortSchema>;
 
 export const LIBRARY_SEARCH_QUERY_MAX_LENGTH = 200;
 
+/** Search and sort parameters shared by every read of saved records. */
+const LibraryFilterShape = {
+  q: z
+    .string()
+    .trim()
+    .max(LIBRARY_SEARCH_QUERY_MAX_LENGTH)
+    .optional()
+    .transform((value) => (value ? value : undefined)),
+  sort: LibrarySortSchema.optional().default("recent"),
+};
+
 export const LibraryQuerySchema = z
   .object({
     list: LibraryListSchema,
-    q: z
-      .string()
-      .trim()
-      .max(LIBRARY_SEARCH_QUERY_MAX_LENGTH)
-      .optional()
-      .transform((value) => (value ? value : undefined)),
-    sort: LibrarySortSchema.optional().default("recent"),
+    ...LibraryFilterShape,
   })
   .strict();
 export type LibraryQuery = z.infer<typeof LibraryQuerySchema>;
+
+/**
+ * `GET /library/favorites` reads favorites across both lists, so it takes no
+ * `list` — a favorite is an attribute of a saved record, not a third list.
+ */
+export const FavoritesQuerySchema = z.object(LibraryFilterShape).strict();
+export type FavoritesQuery = z.infer<typeof FavoritesQuerySchema>;
 
 export const RecordConditionSchema = z.enum([
   "mint",
@@ -216,6 +228,10 @@ export const LibraryItemResultSchema = z
     copies: z.array(LibraryCopySchema).max(100),
     confirmedFromScanId: z.string().uuid().nullable(),
     coverImage: LibraryCoverImageSchema.nullable(),
+    // When the user marked this record a favorite; null when they have not.
+    // A favorite belongs to the saved relationship, whichever list it is in,
+    // and disappears with the record rather than outliving it.
+    favoritedAt: z.string().datetime().nullable(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
@@ -224,6 +240,12 @@ export const LibraryItemResultSchema = z
 export const GetLibraryResponseSchema = z
   .object({
     list: LibraryListSchema,
+    items: z.array(LibraryItemResultSchema).max(100),
+  })
+  .strict();
+
+export const GetFavoritesResponseSchema = z
+  .object({
     items: z.array(LibraryItemResultSchema).max(100),
   })
   .strict();
@@ -240,10 +262,18 @@ export const UpdateLibraryItemSchema = z
   .object({
     list: LibraryListSchema.optional(),
     notes: z.string().trim().max(2_000).nullable().optional(),
+    // Favorite/unfavorite is idempotent by identity: `true` on an already
+    // favorited record keeps its original `favoritedAt`, and `false` on an
+    // unfavorited one is a no-op, so a double-tap converges either way.
+    favorite: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.list === undefined && value.notes === undefined) {
+    if (
+      value.list === undefined &&
+      value.notes === undefined &&
+      value.favorite === undefined
+    ) {
       context.addIssue({
         code: "custom",
         message: "At least one library item field must be provided.",
@@ -280,6 +310,7 @@ export type ConfirmScanResponse = z.infer<typeof ConfirmScanResponseSchema>;
 export type LibraryCoverImage = z.infer<typeof LibraryCoverImageSchema>;
 export type LibraryItemResult = z.infer<typeof LibraryItemResultSchema>;
 export type GetLibraryResponse = z.infer<typeof GetLibraryResponseSchema>;
+export type GetFavoritesResponse = z.infer<typeof GetFavoritesResponseSchema>;
 export type PlaceLibraryRelease = z.infer<typeof PlaceLibraryReleaseSchema>;
 export type PlaceLibraryReleaseResponse = z.infer<
   typeof PlaceLibraryReleaseResponseSchema

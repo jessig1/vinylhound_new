@@ -4,6 +4,8 @@ import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  MAX_PLAYLIST_ENTRIES,
+  MAX_PLAYLISTS_PER_USER,
   MAX_SCANS_PER_BATCH,
   type AnalyzeScanJob,
 } from "@vinylhound/contracts";
@@ -27,9 +29,20 @@ import {
 import {
   deleteLibraryItem,
   getLibraryItemForUser,
+  listFavoriteLibraryItemsForUser,
   listLibraryItemsForUser,
   updateLibraryItem,
 } from "./library-repository.ts";
+import { placeLibraryRelease } from "./placement-repository.ts";
+import {
+  addPlaylistEntry,
+  createPlaylist,
+  deletePlaylist,
+  getPlaylistForUser,
+  listPlaylistsForUser,
+  removePlaylistEntry,
+  updatePlaylist,
+} from "./playlist-repository.ts";
 import {
   cancelScan,
   cleanupAbandonedScans,
@@ -51,6 +64,8 @@ import {
   libraryCopies,
   libraryItems,
   outboxMessages,
+  playlistEntries,
+  playlists,
   releases,
   scanAttempts,
   scanCandidates,
@@ -1789,6 +1804,468 @@ describe("Clerk user identity resolution", () => {
   });
 });
 
+describe("favorites and playlists", () => {
+  async function saveRecord(
+    list: "collection" | "wishlist",
+    ownerId: string = userId,
+    title = `Saved Music ${randomUUID()}`,
+  ) {
+    const { record } = await placeLibraryRelease(database.db, {
+      userId: ownerId,
+      placement: {
+        artist: "Saved Music Test",
+        title,
+        releaseYear: 1999,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list,
+        notes: null,
+        copy: null,
+      },
+    });
+    return record.libraryItem.id;
+  }
+
+  it("favorites a saved record idempotently and lists favorites across both lists", async () => {
+    const owned = await saveRecord("collection");
+    const wanted = await saveRecord("wishlist");
+
+    const first = await updateLibraryItem(database.db, {
+      userId,
+      itemId: owned,
+      update: { favorite: true },
+    });
+    expect(first.favoritedAt).not.toBeNull();
+    const repeated = await updateLibraryItem(database.db, {
+      userId,
+      itemId: owned,
+      update: { favorite: true },
+    });
+    // A repeated favorite keeps the original moment rather than resetting it.
+    expect(repeated.favoritedAt).toBe(first.favoritedAt);
+
+    await updateLibraryItem(database.db, {
+      userId,
+      itemId: wanted,
+      update: { favorite: true },
+    });
+
+    const favorites = await listFavoriteLibraryItemsForUser(database.db, {
+      userId,
+    });
+    const favoriteIds = favorites.items.map((item) => item.id);
+    expect(favoriteIds).toContain(owned);
+    expect(favoriteIds).toContain(wanted);
+    // Most recently favorited first, whichever list the record is in.
+    expect(favoriteIds.indexOf(wanted)).toBeLessThan(
+      favoriteIds.indexOf(owned),
+    );
+    expect(favorites.items.map((item) => item.list).sort()).toEqual(
+      expect.arrayContaining(["collection", "wishlist"]),
+    );
+
+    const cleared = await updateLibraryItem(database.db, {
+      userId,
+      itemId: owned,
+      update: { favorite: false },
+    });
+    expect(cleared.favoritedAt).toBeNull();
+    const clearedAgain = await updateLibraryItem(database.db, {
+      userId,
+      itemId: owned,
+      update: { favorite: false },
+    });
+    expect(clearedAgain.favoritedAt).toBeNull();
+    expect(
+      (
+        await listFavoriteLibraryItemsForUser(database.db, { userId })
+      ).items.map((item) => item.id),
+    ).not.toContain(owned);
+  });
+
+  it("creates a playlist once per normalized name and rejects renaming onto another", async () => {
+    const suffix = randomUUID();
+    const created = await createPlaylist(database.db, {
+      userId,
+      name: `Road Trip ${suffix}`,
+    });
+    expect(created.created).toBe(true);
+    expect(created.playlist.entries).toEqual([]);
+
+    const replayed = await createPlaylist(database.db, {
+      userId,
+      name: `  road   trip ${suffix} `,
+    });
+    expect(replayed.created).toBe(false);
+    expect(replayed.playlist.id).toBe(created.playlist.id);
+    // The display name is the one first given, not the replay's spelling.
+    expect(replayed.playlist.name).toBe(`Road Trip ${suffix}`);
+
+    const other = await createPlaylist(database.db, {
+      userId,
+      name: `Sunday ${suffix}`,
+    });
+    await expect(
+      updatePlaylist(database.db, {
+        userId,
+        playlistId: other.playlist.id,
+        update: { name: `ROAD TRIP ${suffix}` },
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+
+    const renamed = await updatePlaylist(database.db, {
+      userId,
+      playlistId: other.playlist.id,
+      update: { name: `Sunday morning ${suffix}` },
+    });
+    expect(renamed.name).toBe(`Sunday morning ${suffix}`);
+    // Renaming to its own current name is a harmless replay.
+    await expect(
+      updatePlaylist(database.db, {
+        userId,
+        playlistId: other.playlist.id,
+        update: { name: `Sunday morning ${suffix}` },
+      }),
+    ).resolves.toMatchObject({ name: `Sunday morning ${suffix}` });
+
+    const listed = await listPlaylistsForUser(database.db, { userId });
+    expect(listed.playlists.map((playlist) => playlist.id)).toEqual(
+      expect.arrayContaining([created.playlist.id, other.playlist.id]),
+    );
+  });
+
+  it("adds each saved record once, in append order, and never someone else's", async () => {
+    const { playlist } = await createPlaylist(database.db, {
+      userId,
+      name: `Append ${randomUUID()}`,
+    });
+    const first = await saveRecord("collection");
+    const second = await saveRecord("wishlist");
+
+    const added = await addPlaylistEntry(database.db, {
+      userId,
+      playlistId: playlist.id,
+      libraryItemId: first,
+    });
+    expect(added.created).toBe(true);
+    expect(added.playlist.entries).toHaveLength(1);
+    expect(added.playlist.entries[0]).toMatchObject({
+      position: 1,
+      item: { id: first, list: "collection" },
+    });
+
+    const replayed = await addPlaylistEntry(database.db, {
+      userId,
+      playlistId: playlist.id,
+      libraryItemId: first,
+    });
+    expect(replayed.created).toBe(false);
+    expect(replayed.playlist.entries).toHaveLength(1);
+
+    const appended = await addPlaylistEntry(database.db, {
+      userId,
+      playlistId: playlist.id,
+      libraryItemId: second,
+    });
+    expect(appended.playlist.entries.map((entry) => entry.item.id)).toEqual([
+      first,
+      second,
+    ]);
+    expect(appended.playlist.entries[1]).toMatchObject({ position: 2 });
+
+    // Ownership: another user's saved record cannot be referenced, and
+    // another user's playlist cannot be read or changed — both read as absent.
+    const [stranger] = await database.db.insert(users).values({}).returning();
+    const strangerItem = await saveRecord("collection", stranger!.id);
+    await expect(
+      addPlaylistEntry(database.db, {
+        userId,
+        playlistId: playlist.id,
+        libraryItemId: strangerItem,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      getPlaylistForUser(database.db, {
+        userId: stranger!.id,
+        playlistId: playlist.id,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      addPlaylistEntry(database.db, {
+        userId: stranger!.id,
+        playlistId: playlist.id,
+        libraryItemId: strangerItem,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      updatePlaylist(database.db, {
+        userId: stranger!.id,
+        playlistId: playlist.id,
+        update: { name: "Hijacked" },
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      deletePlaylist(database.db, {
+        userId: stranger!.id,
+        playlistId: playlist.id,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    expect(
+      (await listPlaylistsForUser(database.db, { userId: stranger!.id }))
+        .playlists,
+    ).toEqual([]);
+    await database.db.delete(users).where(eq(users.id, stranger!.id));
+  });
+
+  it("reorders with a complete permutation and rejects a stale or partial order", async () => {
+    const { playlist } = await createPlaylist(database.db, {
+      userId,
+      name: `Reorder ${randomUUID()}`,
+    });
+    const items = [
+      await saveRecord("collection"),
+      await saveRecord("collection"),
+      await saveRecord("wishlist"),
+    ];
+    for (const libraryItemId of items) {
+      await addPlaylistEntry(database.db, {
+        userId,
+        playlistId: playlist.id,
+        libraryItemId,
+      });
+    }
+    const before = await getPlaylistForUser(database.db, {
+      userId,
+      playlistId: playlist.id,
+    });
+    const [a, b, c] = before.entries.map((entry) => entry.id) as [
+      string,
+      string,
+      string,
+    ];
+
+    const reordered = await updatePlaylist(database.db, {
+      userId,
+      playlistId: playlist.id,
+      update: { entryIds: [c, a, b] },
+    });
+    expect(reordered.entries.map((entry) => entry.id)).toEqual([c, a, b]);
+    expect(reordered.entries.map((entry) => entry.position)).toEqual([1, 2, 3]);
+
+    // Replaying the same order converges.
+    await expect(
+      updatePlaylist(database.db, {
+        userId,
+        playlistId: playlist.id,
+        update: { entryIds: [c, a, b] },
+      }),
+    ).resolves.toMatchObject({ entries: [{ id: c }, { id: a }, { id: b }] });
+
+    // A partial order (an entry left out) and an unknown entry are both
+    // stale views and are refused rather than partially applied.
+    await expect(
+      updatePlaylist(database.db, {
+        userId,
+        playlistId: playlist.id,
+        update: { entryIds: [c, a] },
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await expect(
+      updatePlaylist(database.db, {
+        userId,
+        playlistId: playlist.id,
+        update: { entryIds: [c, a, b, randomUUID()] },
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    const unchanged = await getPlaylistForUser(database.db, {
+      userId,
+      playlistId: playlist.id,
+    });
+    expect(unchanged.entries.map((entry) => entry.id)).toEqual([c, a, b]);
+  });
+
+  it("removes an entry without renumbering and drops entries when the saved record is removed", async () => {
+    const { playlist } = await createPlaylist(database.db, {
+      userId,
+      name: `Remove ${randomUUID()}`,
+    });
+    const first = await saveRecord("collection");
+    const second = await saveRecord("wishlist");
+    const third = await saveRecord("wishlist");
+    for (const libraryItemId of [first, second, third]) {
+      await addPlaylistEntry(database.db, {
+        userId,
+        playlistId: playlist.id,
+        libraryItemId,
+      });
+    }
+    const detail = await getPlaylistForUser(database.db, {
+      userId,
+      playlistId: playlist.id,
+    });
+    const secondEntry = detail.entries[1]!;
+
+    const removed = await removePlaylistEntry(database.db, {
+      userId,
+      playlistId: playlist.id,
+      entryId: secondEntry.id,
+    });
+    expect(removed.id).toBe(secondEntry.id);
+    await expect(
+      removePlaylistEntry(database.db, {
+        userId,
+        playlistId: playlist.id,
+        entryId: secondEntry.id,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    const afterRemove = await getPlaylistForUser(database.db, {
+      userId,
+      playlistId: playlist.id,
+    });
+    // The gap is kept and the next append goes after the old maximum.
+    expect(afterRemove.entries.map((entry) => entry.position)).toEqual([1, 3]);
+    const appended = await addPlaylistEntry(database.db, {
+      userId,
+      playlistId: playlist.id,
+      libraryItemId: second,
+    });
+    expect(appended.playlist.entries.map((entry) => entry.position)).toEqual([
+      1, 3, 4,
+    ]);
+
+    // Removing the saved record removes it from the playlist by cascade.
+    await deleteLibraryItem(database.db, { userId, itemId: third });
+    const afterItemDelete = await getPlaylistForUser(database.db, {
+      userId,
+      playlistId: playlist.id,
+    });
+    expect(afterItemDelete.entries.map((entry) => entry.item.id)).toEqual([
+      first,
+      second,
+    ]);
+
+    // Deleting the playlist removes its entries but never the saved records.
+    await deletePlaylist(database.db, { userId, playlistId: playlist.id });
+    await expect(
+      getPlaylistForUser(database.db, { userId, playlistId: playlist.id }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    expect(
+      await database.db
+        .select()
+        .from(playlistEntries)
+        .where(eq(playlistEntries.playlistId, playlist.id)),
+    ).toHaveLength(0);
+    await expect(
+      getLibraryItemForUser(database.db, { userId, itemId: first }),
+    ).resolves.toMatchObject({ id: first });
+  });
+
+  it("enforces the per-user playlist and per-playlist entry limits", async () => {
+    const [account] = await database.db.insert(users).values({}).returning();
+    const ownerId = account!.id;
+
+    await database.db.insert(playlists).values(
+      Array.from({ length: MAX_PLAYLISTS_PER_USER }, (_, index) => ({
+        userId: ownerId,
+        name: `Filler ${index}`,
+        normalizedName: `filler ${index}`,
+      })),
+    );
+    await expect(
+      createPlaylist(database.db, { userId: ownerId, name: "One too many" }),
+    ).rejects.toMatchObject({ code: "playlist_limit" });
+    // Converging on an existing name is still allowed at the limit.
+    await expect(
+      createPlaylist(database.db, { userId: ownerId, name: "filler 0" }),
+    ).resolves.toMatchObject({ created: false });
+
+    const [playlist] = await database.db
+      .select()
+      .from(playlists)
+      .where(
+        and(
+          eq(playlists.userId, ownerId),
+          eq(playlists.normalizedName, "filler 0"),
+        ),
+      );
+    // Bulk-seed distinct saved records so the entry limit can be reached
+    // without hundreds of round trips.
+    const [album] = await database.db
+      .insert(albums)
+      .values({
+        artist: "Limit Test",
+        title: `Limit ${ownerId}`,
+        normalizedArtist: "limit test",
+        normalizedTitle: `limit ${ownerId}`,
+      })
+      .returning();
+    const seededReleases = await database.db
+      .insert(releases)
+      .values(
+        Array.from({ length: MAX_PLAYLIST_ENTRIES }, () => ({
+          albumId: album!.id,
+          identityKey: randomUUID().replaceAll("-", "").padEnd(64, "0"),
+        })),
+      )
+      .returning({ id: releases.id });
+    const seededItems = await database.db
+      .insert(libraryItems)
+      .values(
+        seededReleases.map((release) => ({
+          userId: ownerId,
+          releaseId: release.id,
+          list: "wishlist" as const,
+        })),
+      )
+      .returning({ id: libraryItems.id });
+    await database.db.insert(playlistEntries).values(
+      seededItems.slice(0, MAX_PLAYLIST_ENTRIES - 1).map((item, index) => ({
+        playlistId: playlist!.id,
+        userId: ownerId,
+        libraryItemId: item.id,
+        position: index + 1,
+      })),
+    );
+
+    const last = seededItems[MAX_PLAYLIST_ENTRIES - 1]!.id;
+    const full = await addPlaylistEntry(database.db, {
+      userId: ownerId,
+      playlistId: playlist!.id,
+      libraryItemId: last,
+    });
+    expect(full.created).toBe(true);
+    expect(full.playlist.entries).toHaveLength(MAX_PLAYLIST_ENTRIES);
+
+    const extra = await saveRecord("wishlist", ownerId);
+    await expect(
+      addPlaylistEntry(database.db, {
+        userId: ownerId,
+        playlistId: playlist!.id,
+        libraryItemId: extra,
+      }),
+    ).rejects.toMatchObject({ code: "playlist_entry_limit" });
+    // Re-adding a record already present converges even when full.
+    await expect(
+      addPlaylistEntry(database.db, {
+        userId: ownerId,
+        playlistId: playlist!.id,
+        libraryItemId: last,
+      }),
+    ).resolves.toMatchObject({ created: false });
+
+    await database.db.delete(users).where(eq(users.id, ownerId));
+    await database.db.delete(albums).where(eq(albums.id, album!.id));
+  });
+});
+
 describe("account export and deletion", () => {
   async function createAccountWithData() {
     const [account] = await database.db.insert(users).values({}).returning();
@@ -1855,7 +2332,28 @@ describe("account export and deletion", () => {
       },
     });
 
-    return { accountId, scanId: scan!.id, confirmation };
+    // Saved-music data (roadmap P3.3 Task 2) must travel with the account.
+    await updateLibraryItem(database.db, {
+      userId: accountId,
+      itemId: confirmation.record.libraryItem.id,
+      update: { favorite: true },
+    });
+    const { playlist } = await createPlaylist(database.db, {
+      userId: accountId,
+      name: "Export me",
+    });
+    await addPlaylistEntry(database.db, {
+      userId: accountId,
+      playlistId: playlist.id,
+      libraryItemId: confirmation.record.libraryItem.id,
+    });
+
+    return {
+      accountId,
+      scanId: scan!.id,
+      confirmation,
+      playlistId: playlist.id,
+    };
   }
 
   it("exports every row the account owns", async () => {
@@ -1876,7 +2374,17 @@ describe("account export and deletion", () => {
       libraryItemId: confirmation.record.libraryItem.id,
     });
     expect(exported.libraryItems).toHaveLength(1);
+    expect(exported.libraryItems[0]!.favoritedAt).not.toBeNull();
     expect(exported.libraryCopies).toHaveLength(1);
+    expect(exported.playlists).toEqual([
+      expect.objectContaining({ name: "Export me" }),
+    ]);
+    expect(exported.playlistEntries).toEqual([
+      expect.objectContaining({
+        libraryItemId: confirmation.record.libraryItem.id,
+        position: 1,
+      }),
+    ]);
 
     await deleteAccount(database.db, { userId: accountId });
   });
@@ -1888,7 +2396,7 @@ describe("account export and deletion", () => {
   });
 
   it("deletes an account with confirmation history despite the restrict FKs, without touching shared catalog rows", async () => {
-    const { accountId, scanId } = await createAccountWithData();
+    const { accountId, scanId, playlistId } = await createAccountWithData();
     const [libraryItemBeforeDelete] = await database.db
       .select({ releaseId: libraryItems.releaseId })
       .from(libraryItems)
@@ -1916,6 +2424,18 @@ describe("account export and deletion", () => {
         .select()
         .from(libraryItems)
         .where(eq(libraryItems.userId, accountId)),
+    ).toHaveLength(0);
+    expect(
+      await database.db
+        .select()
+        .from(playlists)
+        .where(eq(playlists.id, playlistId)),
+    ).toHaveLength(0);
+    expect(
+      await database.db
+        .select()
+        .from(playlistEntries)
+        .where(eq(playlistEntries.playlistId, playlistId)),
     ).toHaveLength(0);
     // The shared release/album rows must survive the account's deletion.
     expect(

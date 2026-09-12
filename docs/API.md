@@ -3,8 +3,8 @@
 This is the intended HTTP surface for the first vertical slice. Runtime schemas belong in `packages/contracts`; generated OpenAPI should eventually be derived from the same source.
 
 The create-scan, request-upload, complete-upload, submit, scan-status,
-confirmation, retry, cancel, batch, scan-list, catalog-search, and library
-read/update/delete endpoints are implemented.
+confirmation, retry, cancel, batch, scan-list, catalog-search, library
+read/update/delete, favorites, and playlist endpoints are implemented.
 Identity resolution depends on `AUTH_MODE` (ADR-0013): `development` (the
 default) uses a single fixed development identity with no external
 provider; `production` verifies a Clerk session and resolves it to the same
@@ -156,15 +156,16 @@ when no attempt in the window used a priced model.
 
 `GET /account/export` (ADR-0014) returns every row the requesting user owns:
 account, batches, scans, image metadata (not image bytes), attempts,
-confirmations, library items, and library copies, plus each stored image's
-`objectKey`. It has no side effects and needs no `Idempotency-Key`. An
+confirmations, library items (including `favoritedAt`), library copies,
+playlists, and playlist entries, plus each stored image's `objectKey`. It has no side effects and needs no `Idempotency-Key`. An
 exported confirmation whose saved record was since removed carries
 `libraryItemId: null` and `list: null` (ADR-0018); the decision itself is
 still the user's data and is still exported.
 
 `DELETE /account` (ADR-0014) permanently deletes the account: `users` and
 every FK-cascaded row (`scans`, `image_assets`, `scan_attempts`,
-`scan_candidates`, `batches`, `library_items`, `library_copies`), plus the
+`scan_candidates`, `batches`, `library_items`, `library_copies`, `playlists`,
+`playlist_entries`), plus the
 user's `scan_confirmations` rows deleted explicitly first (they carry a
 deliberate `restrict` FK to `releases` that a plain cascade cannot satisfy on
 its own). Shared catalog rows (`albums`,
@@ -176,13 +177,14 @@ returns `not_found`.
 
 ## Library endpoints
 
-| Method | Path                                                  | Purpose                  |
-| ------ | ----------------------------------------------------- | ------------------------ |
-| GET    | `/library?list={collection,wishlist}&q=&sort=`        | Read the selected list   |
-| POST   | `/library`                                            | Save a release, no scan  |
-| GET    | `/library/export?list={collection,wishlist}&q=&sort=` | Download the list as CSV |
-| PATCH  | `/library/{itemId}`                                   | Change list or notes     |
-| DELETE | `/library/{itemId}`                                   | Remove a list item       |
+| Method | Path                                                  | Purpose                         |
+| ------ | ----------------------------------------------------- | ------------------------------- |
+| GET    | `/library?list={collection,wishlist}&q=&sort=`        | Read the selected list          |
+| POST   | `/library`                                            | Save a release, no scan         |
+| GET    | `/library/favorites?q=&sort=`                         | Read favorites from both lists  |
+| GET    | `/library/export?list={collection,wishlist}&q=&sort=` | Download the list as CSV        |
+| PATCH  | `/library/{itemId}`                                   | Change list, notes, or favorite |
+| DELETE | `/library/{itemId}`                                   | Remove a list item              |
 
 A release now enters the library through two doors. `POST
 /scans/{scanId}/confirm` remains the atomic scan-confirmation command.
@@ -218,8 +220,8 @@ returns `text/csv` with a `content-disposition: attachment` header
 `label`, `format`, `country`, `list`, `notes`, `copyCount`. It does not
 include per-copy detail or catalog references.
 
-`PATCH /library/{itemId}` accepts `{ list?, notes? }` (at least one field
-required) and does not touch copies. Moving a wishlist item to `collection`
+`PATCH /library/{itemId}` accepts `{ list?, notes?, favorite? }` (at least
+one field required) and does not touch copies. Moving a wishlist item to `collection`
 creates one blank copy if the item has none yet, matching confirmation's "first
 owned copy" rule. Moving a `collection` item to `wishlist` is rejected with
 `invalid_state` while it still has any copies, so a copy is never silently
@@ -239,7 +241,74 @@ media/sleeve condition, storage location, notes, and acquisition date. Wishlist
 items always contain zero copies. Every item also carries `coverImage`
 (`{ scanId, imageId }` or `null`) identifying the first completed image of the
 scan it was confirmed from, which the client exchanges for a short-lived read
-URL through `GET /scans/{scanId}/images/{imageId}/thumbnail`.
+URL through `GET /scans/{scanId}/images/{imageId}/thumbnail`, and
+`favoritedAt` (`null` unless the user marked the record a favorite).
+
+**Favorites** (ADR-0021) are an attribute of the saved record, not a third
+list: a record in either list can be one. `PATCH /library/{itemId}` with
+`{ favorite: true }` marks it and `{ favorite: false }` clears it; both are
+idempotent by identity — re-favoriting keeps the original `favoritedAt`, and
+clearing an unfavorited record is a no-op. `GET /library/favorites` returns
+favorites from both lists as the same `LibraryItemResult` shape, most
+recently favorited first under `sort=recent`, with the same `q`/`sort`
+handling as `GET /library` and no `list` parameter. Removing a record removes
+its favorite with it; nothing can be favorited that is not saved.
+
+## Playlist endpoints
+
+| Method | Path                                        | Purpose                              |
+| ------ | ------------------------------------------- | ------------------------------------ |
+| GET    | `/playlists`                                | List the user's playlists            |
+| POST   | `/playlists`                                | Create a playlist (or open by name)  |
+| GET    | `/playlists/{playlistId}`                   | Read a playlist with ordered entries |
+| PATCH  | `/playlists/{playlistId}`                   | Rename and/or reorder                |
+| DELETE | `/playlists/{playlistId}`                   | Delete the playlist, not its records |
+| POST   | `/playlists/{playlistId}/entries`           | Append one saved record              |
+| DELETE | `/playlists/{playlistId}/entries/{entryId}` | Remove one entry                     |
+
+A playlist is a user-owned, ordered list of **saved** release references
+(ADR-0021): every entry points at one of the user's own library items, never
+at a bare release or a catalog/discovery result, so `POST
+/playlists/{playlistId}/entries` takes only `{ libraryItemId }`. Playlists
+organize music; there is no playback, whichever discovery provider is
+configured. All endpoints require an authenticated user, and anything the
+user does not own — a playlist, an entry, or a saved record named in a
+request — answers `404 not_found`.
+
+`POST /playlists` (`{ name }`, 1–100 characters, trimmed) is idempotent by
+identity like `POST /library`: names are unique per user after normalization
+(case folded, whitespace collapsed, punctuation kept), so creating a name that
+already exists returns that playlist with `200` instead of a second one;
+`201` means it was created. Up to 100 playlists per user
+(`409 playlist_limit`).
+
+`GET /playlists/{playlistId}` returns `{ playlist }`: `id`, `name`,
+timestamps, and `entries` in order, each `{ id, position, addedAt, item }`
+where `item` is the full `LibraryItemResult`. `position` is unique and
+ascending but not guaranteed contiguous — removing a saved record from the
+library removes its entries without renumbering the rest — so treat it as an
+ordering key rather than a 1-based index.
+
+`PATCH /playlists/{playlistId}` accepts `{ name?, entryIds? }` (at least one).
+Renaming onto another playlist's name is `409 conflict`. `entryIds` is the
+complete new order and must name every current entry exactly once: a repeated
+id is `400`, and an order that omits an entry or names one the playlist no
+longer holds is `409 conflict`, applied not at all rather than partially, so
+a device holding a stale view cannot silently drop what another device just
+added. A reorder renumbers positions from 1. Replaying the same order or the
+same name converges.
+
+`POST /playlists/{playlistId}/entries` appends the record after the current
+maximum position and returns the whole playlist (`201`). A playlist holds each
+saved release at most once, so adding one already present returns the
+unchanged playlist with `200`. Up to 500 entries per playlist
+(`409 playlist_entry_limit`); converging on an existing entry is still allowed
+at the limit.
+
+`DELETE /playlists/{playlistId}` removes the playlist and its entries and
+never the saved records; `DELETE /playlists/{playlistId}/entries/{entryId}`
+removes one entry and leaves a gap. Neither needs an `Idempotency-Key`; a
+repeat is `404`.
 
 ## Catalog endpoints
 

@@ -6,18 +6,20 @@ An `Album` is the artistic work (artist + title). A `Release` is a published edi
 
 ## Entities
 
-| Entity      | Purpose                                     | Important fields                                                             |
-| ----------- | ------------------------------------------- | ---------------------------------------------------------------------------- |
-| User        | Owner/security boundary                     | id, created_at                                                               |
-| ScanBatch   | Groups a batch submission                   | id, user_id, source, counts, created_at                                      |
-| Scan        | One logical record identification           | id, batch_id?, user_id, status, idempotency_key                              |
-| ImageAsset  | One stored image and its integrity metadata | id, scan_id, object_key, MIME, bytes, checksum, view_type?                   |
-| ScanAttempt | Append-only provider delivery/audit record  | scan_id, logical attempt, delivery, model, prompt, response ID, usage, error |
-| Candidate   | A normalized AI/catalog candidate           | artist, title, release facts, confidence, evidence, rank                     |
-| Album       | Canonical artistic work                     | id, normalized artist/title                                                  |
-| Release     | A particular edition when known             | id, album_id, year, label, catalog number, barcode, country                  |
-| Copy        | A physical owned copy                       | id, user_id, release_id, condition, location, notes, acquired_at             |
-| LibraryItem | User intent for a release                   | user_id, release_id, list, notes, confirmed_from_scan_id                     |
+| Entity        | Purpose                                     | Important fields                                                             |
+| ------------- | ------------------------------------------- | ---------------------------------------------------------------------------- |
+| User          | Owner/security boundary                     | id, created_at                                                               |
+| ScanBatch     | Groups a batch submission                   | id, user_id, source, counts, created_at                                      |
+| Scan          | One logical record identification           | id, batch_id?, user_id, status, idempotency_key                              |
+| ImageAsset    | One stored image and its integrity metadata | id, scan_id, object_key, MIME, bytes, checksum, view_type?                   |
+| ScanAttempt   | Append-only provider delivery/audit record  | scan_id, logical attempt, delivery, model, prompt, response ID, usage, error |
+| Candidate     | A normalized AI/catalog candidate           | artist, title, release facts, confidence, evidence, rank                     |
+| Album         | Canonical artistic work                     | id, normalized artist/title                                                  |
+| Release       | A particular edition when known             | id, album_id, year, label, catalog number, barcode, country                  |
+| Copy          | A physical owned copy                       | id, user_id, release_id, condition, location, notes, acquired_at             |
+| LibraryItem   | User intent for a release                   | user_id, release_id, list, notes, confirmed_from_scan_id, favorited_at       |
+| Playlist      | A user-owned ordered list of saved records  | id, user_id, name (unique per user, normalized)                              |
+| PlaylistEntry | One saved record's place in a playlist      | playlist_id, library_item_id, position                                       |
 
 ## Invariants
 
@@ -31,6 +33,17 @@ An `Album` is the artistic work (artist + title). A `Release` is a published edi
   a wishlist item owns none.
 - Adding an owned item for a wished-for release should remove or convert the wishlist entry transactionally.
 - Object keys are opaque and scoped to a user/scan; public URLs are never persisted as identifiers.
+- A favorite is an attribute of a library item, not a third list: a record in
+  either list can be one, nothing unsaved can be, and removing the record
+  removes the favorite. Re-favoriting keeps the original `favorited_at`.
+- A playlist entry references one of the owner's own library items — a saved
+  release — never a bare release or a catalog result. A playlist holds each
+  saved release at most once; removing the saved record removes its entries
+  from every playlist. Playlists organize music and never play it.
+- Playlist order is by `position`, unique per playlist and ascending but not
+  necessarily contiguous. A reorder must name every current entry exactly
+  once and is rejected whole when it does not, so concurrent editors cannot
+  silently drop each other's entries (ADR-0021).
 
 One library item represents a user's relationship to a release. Each
 collection confirmation creates a separate physical copy beneath that item,

@@ -5,12 +5,17 @@ import type { LibraryItemResult } from "@vinylhound/contracts";
 import {
   DatabaseCommandError,
   getLibraryItemForUser,
+  listPlaylistMembershipForItem,
+  listPlaylistsForUser,
 } from "@vinylhound/database";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
+import { AddToPlaylist } from "../../add-to-playlist";
 import { CoverArt } from "../../cover-art";
+import { FavoriteToggle } from "../../favorite-toggle";
+import { toneForId } from "../../library-album-card";
 import { LibraryCopyEditor } from "../../library-copy-editor";
 import { LibraryItemActions } from "../../library-item-actions";
 import { LibraryNotesEditor } from "../../library-notes-editor";
@@ -41,6 +46,14 @@ export default async function LibraryItemPage({
     throw error;
   });
 
+  const [{ playlists }, memberships] = await Promise.all([
+    listPlaylistsForUser(context.database.db, { userId }),
+    listPlaylistMembershipForItem(context.database.db, {
+      userId,
+      libraryItemId: item.id,
+    }),
+  ]);
+
   const { release } = item;
   const wishlist = item.list === "wishlist";
   const facts = releaseFacts(item);
@@ -65,7 +78,7 @@ export default async function LibraryItemPage({
           <CoverArt
             image={item.coverImage}
             title={release.title}
-            tone={toneFor(item.id)}
+            tone={toneForId(item.id)}
           />
           <span
             className={`status ${wishlist ? "status--review" : "status--success"}`}
@@ -73,6 +86,7 @@ export default async function LibraryItemPage({
             <Icon name={wishlist ? "heart" : "collection"} size={14} />
             {wishlist ? "On your wishlist" : "In your collection"}
           </span>
+          <FavoriteToggle favoritedAt={item.favoritedAt} itemId={item.id} />
           {item.confirmedFromScanId ? (
             <Link
               className="text-button"
@@ -141,6 +155,15 @@ export default async function LibraryItemPage({
           )}
 
           <section className="settings-card">
+            <h2>Playlists</h2>
+            <AddToPlaylist
+              itemId={item.id}
+              memberships={memberships}
+              playlists={playlists}
+            />
+          </section>
+
+          <section className="settings-card">
             <h2>Manage this record</h2>
             <LibraryItemActions
               copyCount={item.copyCount}
@@ -196,25 +219,4 @@ function releaseFacts(item: LibraryItemResult) {
   add("Barcode", release.barcode);
   add("Saved", new Date(item.createdAt).toLocaleDateString());
   return entries;
-}
-
-const tones = [
-  "blue",
-  "cream",
-  "sun",
-  "crosswalk",
-  "classroom",
-  "chrome",
-  "ocean",
-  "green",
-  "snow",
-  "red",
-  "rainbow",
-  "water",
-] as const;
-
-function toneFor(id: string) {
-  let value = 0;
-  for (const character of id) value = (value + character.charCodeAt(0)) % 997;
-  return tones[value % tones.length]!;
 }

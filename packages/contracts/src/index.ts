@@ -4,6 +4,7 @@ export * from "./catalog.ts";
 export * from "./common.ts";
 export * from "./discovery.ts";
 export * from "./library.ts";
+export * from "./playlist.ts";
 export * from "./quota.ts";
 export * from "./scan.ts";
 export * from "./upload.ts";

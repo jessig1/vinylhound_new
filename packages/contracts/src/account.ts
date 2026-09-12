@@ -3,6 +3,7 @@ import { z } from "zod";
 import { IngestionSourceSchema, ScanStatusSchema } from "./scan.ts";
 import { ImageMimeTypeSchema, ImageViewTypeSchema } from "./upload.ts";
 import { LibraryListSchema, RecordConditionSchema } from "./library.ts";
+import { PLAYLIST_NAME_MAX_LENGTH } from "./playlist.ts";
 
 export const AccountExportScanSchema = z
   .object({
@@ -73,6 +74,7 @@ export const AccountExportLibraryItemSchema = z
     list: LibraryListSchema,
     notes: z.string().nullable(),
     confirmedFromScanId: z.string().uuid().nullable(),
+    favoritedAt: z.string().datetime().nullable(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
@@ -90,6 +92,25 @@ export const AccountExportLibraryCopySchema = z
     acquiredAt: z.string().nullable(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const AccountExportPlaylistSchema = z
+  .object({
+    id: z.string().uuid(),
+    name: z.string().min(1).max(PLAYLIST_NAME_MAX_LENGTH),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const AccountExportPlaylistEntrySchema = z
+  .object({
+    id: z.string().uuid(),
+    playlistId: z.string().uuid(),
+    libraryItemId: z.string().uuid(),
+    position: z.number().int().positive(),
+    createdAt: z.string().datetime(),
   })
   .strict();
 
@@ -116,6 +137,8 @@ export const AccountExportResponseSchema = z
     confirmations: z.array(AccountExportConfirmationSchema),
     libraryItems: z.array(AccountExportLibraryItemSchema),
     libraryCopies: z.array(AccountExportLibraryCopySchema),
+    playlists: z.array(AccountExportPlaylistSchema),
+    playlistEntries: z.array(AccountExportPlaylistEntrySchema),
   })
   .strict();
 

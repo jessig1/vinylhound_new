@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNotNull } from "drizzle-orm";
 
 import type {
+  GetFavoritesResponse,
   GetLibraryResponse,
   LibraryCoverImage,
   LibraryItemResult,
@@ -10,6 +11,7 @@ import type {
   UpdateLibraryCopy,
   UpdateLibraryItem,
 } from "@vinylhound/contracts";
+import { resolveFavoritedAt } from "@vinylhound/domain";
 
 import type { Database } from "./database.ts";
 import { DatabaseCommandError } from "./scan-repository.ts";
@@ -43,6 +45,51 @@ export async function listLibraryItemsForUser(
     input.sort ?? "recent",
   );
   return { list: input.list, items };
+}
+
+/**
+ * Favorites across both lists, most recently favorited first. A favorite is
+ * an attribute of the saved record rather than a third list (ADR-0021), so
+ * this is the same row shape `GET /library` returns, filtered.
+ */
+export async function listFavoriteLibraryItemsForUser(
+  db: Database,
+  input: {
+    userId: string;
+    query?: string;
+    sort?: LibrarySort;
+  },
+): Promise<GetFavoritesResponse> {
+  const rows = await selectLibraryItemRows(db, {
+    userId: input.userId,
+    favoritesOnly: true,
+  });
+  const items = sortLibraryItems(
+    filterLibraryItemsByQuery(
+      await attachCopiesAndSerialize(db, input.userId, rows),
+      input.query,
+    ),
+    input.sort ?? "recent",
+  );
+  return { items };
+}
+
+/**
+ * The user's own saved records by ID, for callers that hold references to
+ * them (playlist entries). IDs the user does not own are simply absent from
+ * the result rather than an error, so ownership never leaks by difference.
+ */
+export async function getLibraryItemsByIdForUser(
+  db: Pick<Database, "select">,
+  input: { userId: string; itemIds: readonly string[] },
+): Promise<Map<string, LibraryItemResult>> {
+  if (!input.itemIds.length) return new Map();
+  const rows = await selectLibraryItemRows(db, {
+    userId: input.userId,
+    itemIds: input.itemIds,
+  });
+  const items = await attachCopiesAndSerialize(db, input.userId, rows);
+  return new Map(items.map((item) => [item.id, item]));
 }
 
 export async function getLibraryItemForUser(
@@ -146,6 +193,10 @@ export async function updateLibraryItem(
         list: nextList,
         notes:
           input.update.notes !== undefined ? input.update.notes : item.notes,
+        favoritedAt:
+          input.update.favorite !== undefined
+            ? resolveFavoritedAt(item.favoritedAt, input.update.favorite, now)
+            : item.favoritedAt,
         updatedAt: now,
       })
       .where(eq(libraryItems.id, item.id));
@@ -302,14 +353,23 @@ async function lockLibraryItem(
 
 async function selectLibraryItemRows(
   db: Pick<Database, "select">,
-  input: { userId: string; list?: LibraryList; itemId?: string },
+  input: {
+    userId: string;
+    list?: LibraryList;
+    itemId?: string;
+    itemIds?: readonly string[];
+    favoritesOnly?: boolean;
+  },
 ) {
+  // A by-ID read returns exactly the rows asked for; every other read is
+  // still the first page of 100 (full pagination is roadmap P3.4).
   return db
     .select({
       id: libraryItems.id,
       list: libraryItems.list,
       notes: libraryItems.notes,
       confirmedFromScanId: libraryItems.confirmedFromScanId,
+      favoritedAt: libraryItems.favoritedAt,
       createdAt: libraryItems.createdAt,
       updatedAt: libraryItems.updatedAt,
       releaseId: releases.id,
@@ -338,10 +398,18 @@ async function selectLibraryItemRows(
         eq(libraryItems.userId, input.userId),
         input.list ? eq(libraryItems.list, input.list) : undefined,
         input.itemId ? eq(libraryItems.id, input.itemId) : undefined,
+        input.itemIds
+          ? inArray(libraryItems.id, [...input.itemIds])
+          : undefined,
+        input.favoritesOnly ? isNotNull(libraryItems.favoritedAt) : undefined,
       ),
     )
-    .orderBy(desc(libraryItems.updatedAt))
-    .limit(100);
+    .orderBy(
+      input.favoritesOnly
+        ? desc(libraryItems.favoritedAt)
+        : desc(libraryItems.updatedAt),
+    )
+    .limit(input.itemIds ? Math.max(input.itemIds.length, 1) : 100);
 }
 
 async function attachCopiesAndSerialize(
@@ -402,6 +470,7 @@ async function attachCopiesAndSerialize(
       coverImage: row.confirmedFromScanId
         ? (coverByScanId.get(row.confirmedFromScanId) ?? null)
         : null,
+      favoritedAt: row.favoritedAt ? row.favoritedAt.toISOString() : null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };

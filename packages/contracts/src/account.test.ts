@@ -21,6 +21,8 @@ describe("AccountExportResponseSchema", () => {
         confirmations: [],
         libraryItems: [],
         libraryCopies: [],
+        playlists: [],
+        playlistEntries: [],
       }),
     ).toMatchObject({
       account: { id: "00000000-0000-4000-8000-000000000001" },
@@ -60,11 +62,44 @@ describe("AccountExportResponseSchema", () => {
           confirmedAt: "2026-08-01T00:00:02.000Z",
         },
       ],
-      libraryItems: [],
+      libraryItems: [
+        {
+          id: "00000000-0000-4000-8000-000000000003",
+          releaseId: "00000000-0000-4000-8000-000000000004",
+          list: "collection",
+          notes: null,
+          confirmedFromScanId: "00000000-0000-4000-8000-000000000002",
+          favoritedAt: "2026-08-02T00:00:00.000Z",
+          createdAt: "2026-08-01T00:00:02.000Z",
+          updatedAt: "2026-08-02T00:00:00.000Z",
+        },
+      ],
       libraryCopies: [],
+      playlists: [
+        {
+          id: "00000000-0000-4000-8000-000000000005",
+          name: "Late night",
+          createdAt: "2026-08-03T00:00:00.000Z",
+          updatedAt: "2026-08-03T00:00:00.000Z",
+        },
+      ],
+      playlistEntries: [
+        {
+          id: "00000000-0000-4000-8000-000000000006",
+          playlistId: "00000000-0000-4000-8000-000000000005",
+          libraryItemId: "00000000-0000-4000-8000-000000000003",
+          position: 1,
+          createdAt: "2026-08-03T00:00:00.000Z",
+        },
+      ],
     });
 
     expect(parsed.confirmations[0]).toMatchObject({ artist: "Miles Davis" });
+    // Saved-music data travels with the export (roadmap P3.3 Task 2).
+    expect(parsed.libraryItems[0]).toMatchObject({
+      favoritedAt: "2026-08-02T00:00:00.000Z",
+    });
+    expect(parsed.playlistEntries[0]).toMatchObject({ position: 1 });
   });
 
   it("rejects an export with an unknown extra field", () => {
@@ -81,6 +116,8 @@ describe("AccountExportResponseSchema", () => {
       confirmations: [],
       libraryItems: [],
       libraryCopies: [],
+      playlists: [],
+      playlistEntries: [],
       extra: "not allowed",
     });
 

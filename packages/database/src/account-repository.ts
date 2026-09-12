@@ -12,6 +12,8 @@ import {
   imageAssets,
   libraryCopies,
   libraryItems,
+  playlistEntries,
+  playlists,
   scanAttempts,
   scanConfirmations,
   scans,
@@ -38,6 +40,8 @@ export async function getAccountExportForUser(
     userConfirmations,
     userLibraryItems,
     userLibraryCopies,
+    userPlaylists,
+    userPlaylistEntries,
   ] = await Promise.all([
     db.select().from(batches).where(eq(batches.userId, input.userId)),
     db.select().from(scans).where(eq(scans.userId, input.userId)),
@@ -100,6 +104,11 @@ export async function getAccountExportForUser(
       .select()
       .from(libraryCopies)
       .where(eq(libraryCopies.userId, input.userId)),
+    db.select().from(playlists).where(eq(playlists.userId, input.userId)),
+    db
+      .select()
+      .from(playlistEntries)
+      .where(eq(playlistEntries.userId, input.userId)),
   ]);
 
   return {
@@ -167,6 +176,7 @@ export async function getAccountExportForUser(
       list: item.list,
       notes: item.notes,
       confirmedFromScanId: item.confirmedFromScanId,
+      favoritedAt: item.favoritedAt ? item.favoritedAt.toISOString() : null,
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
     })),
@@ -181,6 +191,19 @@ export async function getAccountExportForUser(
       acquiredAt: copy.acquiredAt,
       createdAt: copy.createdAt.toISOString(),
       updatedAt: copy.updatedAt.toISOString(),
+    })),
+    playlists: userPlaylists.map((playlist) => ({
+      id: playlist.id,
+      name: playlist.name,
+      createdAt: playlist.createdAt.toISOString(),
+      updatedAt: playlist.updatedAt.toISOString(),
+    })),
+    playlistEntries: userPlaylistEntries.map((entry) => ({
+      id: entry.id,
+      playlistId: entry.playlistId,
+      libraryItemId: entry.libraryItemId,
+      position: entry.position,
+      createdAt: entry.createdAt.toISOString(),
     })),
   };
 }
@@ -230,6 +253,8 @@ export async function deleteAccount(
       .delete(scanConfirmations)
       .where(eq(scanConfirmations.userId, input.userId));
 
+    // playlists and playlist_entries cascade from users (and from
+    // library_items), so the account delete needs no extra ordering for them.
     await transaction.delete(users).where(eq(users.id, input.userId));
 
     return {

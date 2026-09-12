@@ -12,6 +12,8 @@ const navigation: { href: string; label: string; icon: IconName }[] = [
   { href: "/dashboard", label: "Home", icon: "home" },
   { href: "/collection", label: "Collection", icon: "collection" },
   { href: "/wishlist", label: "Wishlist", icon: "heart" },
+  { href: "/favorites", label: "Favorites", icon: "star" },
+  { href: "/playlists", label: "Playlists", icon: "playlist" },
   { href: "/discover", label: "Discover", icon: "search" },
 ];
 
@@ -68,7 +70,10 @@ export function DashboardShell({
         <nav className="sidebar__nav" aria-label="Main navigation">
           <p>Library</p>
           {navigation.map((item) => {
-            const active = pathname === item.href;
+            const active =
+              pathname === item.href ||
+              (item.href === "/playlists" &&
+                pathname.startsWith("/playlists/"));
             return (
               <Link
                 className={active ? "is-active" : ""}

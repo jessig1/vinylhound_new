@@ -7,8 +7,9 @@ import { listLibraryItemsForUser } from "@vinylhound/database";
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
-import { CoverArt } from "./cover-art";
+import { LibraryAlbumCard } from "./library-album-card";
 import { LibraryToolbar } from "./library-toolbar";
+import { SavedMusicNav } from "./saved-music-nav";
 import { Icon } from "./ui";
 
 export async function LibraryPage({
@@ -49,6 +50,8 @@ export async function LibraryPage({
         </div>
       </header>
 
+      <SavedMusicNav current={list} />
+
       <LibraryToolbar
         list={list}
         query={query ?? ""}
@@ -58,46 +61,9 @@ export async function LibraryPage({
 
       {library.items.length ? (
         <section className="album-grid album-grid--library" aria-label={title}>
-          {library.items.map((item) => {
-            const release = item.release;
-            const facts = [
-              release.releaseYear?.toString(),
-              release.label,
-              release.format,
-              release.country,
-            ].filter(Boolean);
-            return (
-              <Link
-                className="album-card album-card--large"
-                href={`/library/${item.id}`}
-                key={item.id}
-              >
-                <div className="album-card__art-wrap">
-                  <CoverArt
-                    image={item.coverImage}
-                    title={release.title}
-                    tone={toneFor(item.id)}
-                  />
-                  {wishlist ? (
-                    <span className="heart-badge">
-                      <Icon name="heart" size={17} />
-                    </span>
-                  ) : null}
-                  {!wishlist && item.copyCount > 1 ? (
-                    <span className="copy-badge">{item.copyCount} copies</span>
-                  ) : null}
-                </div>
-                <h2>{release.title}</h2>
-                <p>{release.artist}</p>
-                <small>{facts.join(" · ") || "Release details not set"}</small>
-                {item.notes ? (
-                  <small className="album-card__note">
-                    <Icon name="info" size={13} /> {item.notes}
-                  </small>
-                ) : null}
-              </Link>
-            );
-          })}
+          {library.items.map((item) => (
+            <LibraryAlbumCard item={item} key={item.id} />
+          ))}
         </section>
       ) : (
         <section className="library-empty">
@@ -134,27 +100,6 @@ export async function LibraryPage({
   );
 }
 
-function firstValue(value: string | string[] | undefined) {
+export function firstValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
-}
-
-const tones = [
-  "blue",
-  "cream",
-  "sun",
-  "crosswalk",
-  "classroom",
-  "chrome",
-  "ocean",
-  "green",
-  "snow",
-  "red",
-  "rainbow",
-  "water",
-] as const;
-
-function toneFor(id: string) {
-  let value = 0;
-  for (const character of id) value = (value + character.charCodeAt(0)) % 997;
-  return tones[value % tones.length]!;
 }

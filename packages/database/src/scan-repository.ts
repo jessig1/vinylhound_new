@@ -42,6 +42,8 @@ export type DatabaseCommandErrorCode =
   | "conflict"
   | "invalid_state"
   | "not_found"
+  | "playlist_entry_limit"
+  | "playlist_limit"
   | "quota_exceeded"
   | "scan_image_limit";
 

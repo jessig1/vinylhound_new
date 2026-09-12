@@ -561,6 +561,9 @@ export const libraryItems = pgTable(
       () => scans.id,
       { onDelete: "set null" },
     ),
+    // A favorite is an attribute of this saved relationship, not a third
+    // list (ADR-0021): set in either list, cleared with the row.
+    favoritedAt: timestamp("favorited_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -578,6 +581,9 @@ export const libraryItems = pgTable(
       table.list,
       table.createdAt,
     ),
+    index("library_items_user_favorited_at_idx")
+      .on(table.userId, table.favoritedAt)
+      .where(sql`${table.favoritedAt} is not null`),
     check(
       "library_items_notes_length_check",
       sql`${table.notes} is null or char_length(${table.notes}) <= 2000`,
@@ -624,6 +630,73 @@ export const libraryCopies = pgTable(
       "library_copies_notes_length_check",
       sql`${table.notes} is null or char_length(${table.notes}) <= 2000`,
     ),
+  ],
+);
+
+export const playlists = pgTable(
+  "playlists",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 100 }).notNull(),
+    normalizedName: varchar("normalized_name", { length: 100 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("playlists_user_normalized_name_unique").on(
+      table.userId,
+      table.normalizedName,
+    ),
+    index("playlists_user_updated_at_idx").on(table.userId, table.updatedAt),
+    check(
+      "playlists_name_check",
+      sql`char_length(${table.name}) between 1 and 100`,
+    ),
+    check(
+      "playlists_normalized_name_check",
+      sql`char_length(${table.normalizedName}) between 1 and 100`,
+    ),
+  ],
+);
+
+export const playlistEntries = pgTable(
+  "playlist_entries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    playlistId: uuid("playlist_id")
+      .notNull()
+      .references(() => playlists.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // A saved release, never a bare catalog result; removing the saved
+    // record removes its entries from every playlist.
+    libraryItemId: uuid("library_item_id")
+      .notNull()
+      .references(() => libraryItems.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("playlist_entries_playlist_item_unique").on(
+      table.playlistId,
+      table.libraryItemId,
+    ),
+    uniqueIndex("playlist_entries_playlist_position_unique").on(
+      table.playlistId,
+      table.position,
+    ),
+    index("playlist_entries_library_item_id_idx").on(table.libraryItemId),
+    check("playlist_entries_position_check", sql`${table.position} > 0`),
   ],
 );
 
@@ -720,4 +793,6 @@ export type ReleaseRow = typeof releases.$inferSelect;
 export type LibraryItemRow = typeof libraryItems.$inferSelect;
 export type LibraryCopyRow = typeof libraryCopies.$inferSelect;
 export type CatalogReferenceRow = typeof catalogReferences.$inferSelect;
+export type PlaylistRow = typeof playlists.$inferSelect;
+export type PlaylistEntryRow = typeof playlistEntries.$inferSelect;
 export type ScanConfirmationRow = typeof scanConfirmations.$inferSelect;

@@ -371,7 +371,7 @@ emulation does not prove real-camera behavior.
 - [x] **Task 1.** Add independent catalog search/details with provider provenance and clear
       release-concept versus pressing uncertainty. Keep MusicBrainz behind its
       port; another provider requires an ADR.
-- [ ] **Task 2.** Define contracts/domain rules before persistence/UI for release favorites
+- [x] **Task 2.** Define contracts/domain rules before persistence/UI for release favorites
       and user-owned ordered playlists of saved release references. Include
       favorite/unfavorite and playlist create/rename/reorder/remove/delete.
       Playlists organize music; streaming playback is outside scope.
@@ -504,8 +504,60 @@ noted for Task 1). The one e2e failure is `e2e/live-camera.e2e.ts`'s first
 test, still the pre-existing flake that reproduces on clean `main` and is
 unrelated to this work.
 
-Still open in P3.3: Task 2 (favorites and playlists) and Task 4 (version
-conventions and compatibility fixtures).
+Task 2 completed 2026-09-12 (ADR-0021). Contracts and domain rules came
+first, then persistence, routes, UI and tests. **A favorite is an attribute
+of the saved record** — a nullable `library_items.favorited_at`, not a third
+list or a separate table — so a record in either list can be one, nothing
+unsaved can be, removing the record removes the favorite, and export/deletion
+cover it with no new plumbing. `PATCH /library/{itemId}` gained
+`{ favorite }` (idempotent by identity: re-favoriting keeps the original
+timestamp, `resolveFavoritedAt` in `@vinylhound/domain`), `GET
+/library/favorites` reads favorites across both lists, and `/favorites` is
+the library page filtered. **A playlist is a user-owned ordered list of the
+user's own library items**: `playlists` (name unique per user after
+`normalizePlaylistName`) and `playlist_entries` (`library_item_id`,
+`position`), migration 016. The add contract admits only `{ libraryItemId }`,
+so a playlist can hold only saved music by construction — the guard against
+"playlist" quietly becoming a streaming queue now that discovery is Spotify.
+Rules in `@vinylhound/domain` with unit tests: one entry per saved release
+per playlist; append after the current maximum position; positions unique
+and ascending but not contiguous (a cascade delete leaves a gap, a reorder
+renumbers); a reorder must name every current entry exactly once
+(`resolvePlaylistOrder`) and a stale or partial order is `409`, never
+partially applied; 100 playlists per user, 500 entries per playlist. Create
+and add are idempotent by identity like `POST /library` (no
+`Idempotency-Key`; `201` created / `200` converged); every mutation locks
+the playlist row, and creates take a per-user advisory lock so the count
+check cannot be raced. Ownership is by absence: another user's playlist,
+entry, or record is `404` everywhere. Routes: `GET/POST /playlists`,
+`GET/PATCH/DELETE /playlists/{id}`, `POST /playlists/{id}/entries`, `DELETE
+/playlists/{id}/entries/{entryId}`. UI: `/playlists` (create, list),
+`/playlists/{id}` (rename, move up/down, remove, delete with confirm; a `409`
+on reorder reloads the playlist), "Add to favorites" and an "Add to
+playlist" section with current memberships on `/library/{itemId}`, a star
+badge on cards, and a "Saved music" strip (Collection · Wishlist · Favorites
+· Playlists) on all four pages so phones reach the new views without adding
+bottom-nav columns; desktop sidebar gained both. Account export gained
+`favoritedAt`, `playlists`, and `playlistEntries`; deletion cascades. Verified:
+`lint`, `typecheck`, `test` (144/144, +22: `packages/domain/src/favorites.test.ts`,
+`playlists.test.ts`, `packages/contracts/src/playlist.test.ts`, plus
+favorites cases in `library.test.ts` and `account.test.ts`), `npm run
+test:integration --workspace @vinylhound/database` (40/40, +6 in a new
+"favorites and playlists" block covering idempotent favorite/unfavorite and
+the cross-list favorites read, create-by-name replay and rename conflict,
+append order and dedupe, ownership across every operation, permutation
+reorder plus stale/partial rejection, gap-preserving removal and cascade from
+library-item delete, both limits, and export/deletion of the new rows — the
+placement path from Task 3 got its first integration coverage as a side
+effect, since the block seeds records through `placeLibraryRelease`), `npm
+run build`, and `npm run test:e2e` (new `e2e/saved-music.e2e.ts`: favorite →
+appears on `/favorites` with zero axe violations → unfavorite → gone; create
+playlist → add two records from their pages → reorder and reload to prove
+persistence → remove → rename → axe → index shows the count → delete →
+records survive; `/favorites` and `/playlists` added to the audited-route
+and 360px lists).
+
+Still open in P3.3: Task 4 (version conventions and compatibility fixtures).
 
 Exit: separate browser tests complete search/details, favorite/unfavorite,
 playlist editing, and reviewed wishlist addition without a scan. Integration

@@ -13,7 +13,65 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-11
+## Current state — verified 2026-09-12
+
+- **P3.3 Task 2 (favorites and playlists) is complete (ADR-0021), uncommitted
+  in the working tree for the maintainer to review.** Contracts and domain
+  rules were written first, then migration 016, repositories, routes, UI,
+  and tests, in that order. The two modelling decisions that shape
+  everything: a **favorite is a nullable `library_items.favorited_at`**, not a
+  third list or a table of its own (so it cannot outlive or precede the
+  saved record, and export/deletion cover it for free); and a **playlist
+  entry references one of the user's own `library_items` rows** — the add
+  contract admits only `{ libraryItemId }`, so a playlist can hold saved
+  music only, by type rather than by policy. That second choice is the
+  structural answer to the resume point's warning: with discovery on
+  Spotify, "playlist" must not drift into a streaming queue, and now it
+  cannot reference anything the user has not saved.
+  Surface: `PATCH /library/{itemId}` gained `{ favorite }`; `GET
+/library/favorites?q=&sort=` reads both lists; `GET/POST /playlists`,
+  `GET/PATCH/DELETE /playlists/{id}`, `POST /playlists/{id}/entries`,
+  `DELETE /playlists/{id}/entries/{entryId}`. Pages: `/favorites`,
+  `/playlists`, `/playlists/{id}`; the item page gained a favorite toggle
+  and an "Add to playlist" section showing current memberships; cards show
+  a star badge; a "Saved music" strip on all four pages (plus two sidebar
+  entries) reaches the new views without touching the six-column phone
+  bottom bar.
+  Rules worth knowing before extending it (all in `@vinylhound/domain`,
+  detailed in ADR-0021 and `docs/API.md`): names unique per user after
+  `normalizePlaylistName`; create and add are idempotent by identity like
+  `POST /library` (`201`/`200`, no `Idempotency-Key`); one entry per saved
+  release per playlist; positions unique and ascending but **not
+  contiguous** (cascade deletes leave gaps, reorders renumber — treat
+  `position` as an ordering key); a reorder must be a full permutation of
+  the current entries and a stale/partial one is `409` applied not at all;
+  100 playlists per user and 500 entries per playlist (`409 playlist_limit`
+  / `409 playlist_entry_limit`, two new `DatabaseCommandError` codes);
+  ownership by absence (`404` everywhere). The reorder is two UPDATEs inside
+  the locked transaction — lift all positions above the maximum, then
+  assign `1..n` via one CASE — because `(playlist_id, position)` is unique
+  and Postgres checks it per row.
+  Verified: `lint`, `typecheck`, `test` (144/144, +22), `npm run
+test:integration --workspace @vinylhound/database` (40/40, +6: favorites,
+  create/rename, append/dedupe/ownership, reorder, removal/cascade, limits,
+  plus export/deletion assertions on the new rows — and the Task 3
+  placement path got its first integration coverage as a side effect, since
+  the new block seeds records through `placeLibraryRelease`), `npm run
+build`, and `npm run test:e2e` (25/27 on the full mobile-Chromium run; the
+  two failures were the pre-existing `live-camera` flake and a locator bug
+  in the new e2e file, fixed and re-run green — details in the session
+  log). `format:check` fails on 79 untouched files, none of them from this
+  session: with `core.autocrlf=true` this checkout holds CRLF in every file
+  git has re-checked-out since the PR #18 merge, which prettier
+  (`endOfLine: lf`) flags although `git diff` is clean — the same artifact
+  earlier sessions saw on `next-env.d.ts` alone, now wider. Do not "fix"
+  line endings (CLAUDE.md); run `format:check` on the changed files or
+  under a Linux checkout/CI. Migration 016 is applied to the local dev
+  database; **staging/production still need `npm run db:migrate`**.
+  Not done, deliberately: no "save and add to playlist" one-step from
+  `/discover`; no favorites filter on the list pages themselves; no
+  drag-and-drop (move up/down buttons only); the favorites page inherits
+  the library's first-100-rows read, which P3.4 Task 1 owns.
 
 - **`apps/web` now builds and runs on Turbopack; the `--webpack` pin and the
   `next.config.ts` webpack hook are deleted (ADR-0020).**
@@ -1288,15 +1346,18 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-11: P3.3 Task 1 (revised onto Spotify) and Task 3 are
-done. Next is P3.3 Task 2 — favorites and user-owned ordered playlists.**
-Define the contracts and domain rules before persistence or UI, as Task 1/3
-did: favorite/unfavorite plus playlist create/rename/reorder/remove/delete
-over saved release references. Playlists organize music; streaming playback
-is out of scope even though the discovery provider is now Spotify — do not
-let the provider change quietly widen that scope. After Task 2, Task 4
-(explicit HTTP/event version conventions and previous-deployed-version
-compatibility fixtures) is the last of P3.3.
+**Current, 2026-09-12: P3.3 Tasks 1, 2 and 3 are done. Next is P3.3 Task 4
+— explicit HTTP/event version conventions and previous-deployed-version
+compatibility fixtures in `packages/contracts`, building on
+`scan.analyze.v1`, with catalog/usage coverage and a CI compatibility check.
+It is the last of P3.3.** Task 2's work is uncommitted in the working tree
+(see "Current state") and should be reviewed and committed first; migration
+016 is applied locally only. When Task 4 writes its fixtures, the newest
+contracts to freeze are `packages/contracts/src/playlist.ts` and the
+`favoritedAt` / `favorite` additions in `library.ts` and `account.ts` — a
+previous-deployed-version fixture for `LibraryItemResult` must accept the
+pre-016 shape without `favoritedAt` only if the roadmap decides old clients
+are supported; the server already always emits it.
 
 Both pre-flight items are now done: the maintainer applied migration 015, and
 `/discover` has been exercised against the real Spotify API. That run found the
@@ -3149,3 +3210,24 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   since that failure mode would only appear at production runtime. Full suite
   green apart from the pre-existing `live-camera` flake. Recorded the new
   import convention in `AGENTS.md` so Codex picks it up.
+
+- **2026-09-12 - Claude.** Completed P3.3 Task 2 (ADR-0021): release
+  favorites and user-owned ordered playlists over saved records, contracts
+  and domain rules first. Chose to model a favorite as an attribute of the
+  existing `library_items` row and a playlist entry as a reference to the
+  user's own library item, so nothing unsaved can be favorited or listed and
+  the Spotify-backed discovery provider cannot turn "playlist" into a
+  streaming queue by accident. Wrote `packages/contracts/src/playlist.ts`,
+  `packages/domain/src/{favorites,playlists}.ts`, migration 016, the
+  playlist repository, seven route files, four pages and four client
+  components, and updated export/deletion, `docs/API.md`, `docs/DOMAIN.md`,
+  and the roadmap. Verified lint, typecheck, unit (144/144), database
+  integration (40/40), build, and e2e: the full mobile-Chromium run was
+  25/27 — the pre-existing `live-camera` flake plus a locator bug in the new
+  `saved-music.e2e.ts` (a `<label>` that wraps a `<select>` includes the
+  option text, so `getByLabel(..., { exact: true })` never matched); fixed
+  by locating the combobox by role and re-run green (2/2). Left uncommitted
+  for maintainer review, per the convention of previous sessions. Noted
+  while working: the Task 3 placement path had no integration test until
+  this block seeded through it; and the Bash tool on this machine truncates
+  very long inline commands (write scripts to a file instead).

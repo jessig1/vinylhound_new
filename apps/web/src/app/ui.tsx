@@ -6,7 +6,9 @@ export type IconName =
   | "arrowRight"
   | "camera"
   | "check"
+  | "chevronDown"
   | "chevronRight"
+  | "chevronUp"
   | "clock"
   | "collection"
   | "eye"
@@ -16,9 +18,11 @@ export type IconName =
   | "info"
   | "lock"
   | "mail"
+  | "playlist"
   | "search"
   | "settings"
   | "sparkle"
+  | "star"
   | "upload"
   | "user";
 
@@ -54,7 +58,9 @@ const iconPaths: Record<IconName, ReactNode> = {
     </>
   ),
   check: <path d="m5 12 4 4L19 6" />,
+  chevronDown: <path d="m6 9 6 6 6-6" />,
   chevronRight: <path d="m9 18 6-6-6-6" />,
+  chevronUp: <path d="m6 15 6-6 6 6" />,
   clock: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -107,6 +113,13 @@ const iconPaths: Record<IconName, ReactNode> = {
       <path d="m4 7 8 6 8-6" />
     </>
   ),
+  playlist: (
+    <>
+      <path d="M4 6h11M4 12h11M4 18h7" />
+      <path d="M19 6v10.5" />
+      <circle cx="16.5" cy="16.5" r="2.5" />
+    </>
+  ),
   search: (
     <>
       <circle cx="11" cy="11" r="7" />
@@ -124,6 +137,9 @@ const iconPaths: Record<IconName, ReactNode> = {
       <path d="m12 3 1.2 4.3L17 9l-3.8 1.7L12 15l-1.2-4.3L7 9l3.8-1.7L12 3Z" />
       <path d="m19 15 .6 2.1L22 18l-2.4.9L19 21l-.6-2.1L16 18l2.4-.9L19 15Z" />
     </>
+  ),
+  star: (
+    <path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z" />
   ),
   upload: (
     <>

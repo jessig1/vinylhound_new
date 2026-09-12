@@ -19,7 +19,8 @@ export function LibraryToolbar({
   sort,
   title,
 }: {
-  list: LibraryList;
+  /** Omitted on views with no CSV export, such as favorites. */
+  list?: LibraryList;
   query: string;
   sort: LibrarySort;
   title: string;
@@ -51,9 +52,9 @@ export function LibraryToolbar({
     navigate(draftQuery, value);
   }
 
-  const exportParams = new URLSearchParams({ list });
-  if (query) exportParams.set("q", query);
-  if (sort !== "recent") exportParams.set("sort", sort);
+  const exportParams = list ? new URLSearchParams({ list }) : null;
+  if (exportParams && query) exportParams.set("q", query);
+  if (exportParams && sort !== "recent") exportParams.set("sort", sort);
 
   return (
     <div className="library-toolbar">
@@ -79,12 +80,14 @@ export function LibraryToolbar({
             </option>
           ))}
         </select>
-        <a
-          className="filter-button library-toolbar__export"
-          href={`/api/v1/library/export?${exportParams.toString()}`}
-        >
-          Export
-        </a>
+        {exportParams ? (
+          <a
+            className="filter-button library-toolbar__export"
+            href={`/api/v1/library/export?${exportParams.toString()}`}
+          >
+            Export
+          </a>
+        ) : null}
       </div>
     </div>
   );

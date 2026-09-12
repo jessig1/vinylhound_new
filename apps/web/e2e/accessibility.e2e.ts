@@ -8,6 +8,8 @@ const auditedRoutes = [
   { path: "/wishlist", name: "wishlist" },
   { path: "/account", name: "account" },
   { path: "/discover", name: "discover" },
+  { path: "/favorites", name: "favorites" },
+  { path: "/playlists", name: "playlists" },
 ];
 
 for (const route of auditedRoutes) {
@@ -49,7 +51,14 @@ test("scan and library controls fit a narrow phone viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 360, height: 780 });
-  for (const path of ["/scan", "/scans", "/collection", "/discover"]) {
+  for (const path of [
+    "/scan",
+    "/scans",
+    "/collection",
+    "/discover",
+    "/favorites",
+    "/playlists",
+  ]) {
     await page.goto(path);
     await expect(page.locator("main")).toBeVisible();
     expect(

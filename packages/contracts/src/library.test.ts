@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ConfirmScanRequestSchema,
+  FavoritesQuerySchema,
   LibraryQuerySchema,
   UpdateLibraryItemSchema,
 } from "./library.ts";
@@ -103,6 +104,15 @@ describe("ConfirmScanRequestSchema", () => {
     ).toMatchObject({ notes: "Signed copy" });
   });
 
+  it("accepts a favorite-only toggle in either direction", () => {
+    expect(UpdateLibraryItemSchema.parse({ favorite: true })).toEqual({
+      favorite: true,
+    });
+    expect(UpdateLibraryItemSchema.parse({ favorite: false })).toEqual({
+      favorite: false,
+    });
+  });
+
   it("requires a direct library update to change something", () => {
     expect(() => UpdateLibraryItemSchema.parse({})).toThrow();
   });
@@ -146,5 +156,20 @@ describe("LibraryQuerySchema", () => {
     expect(() =>
       LibraryQuerySchema.parse({ list: "collection", q: "a".repeat(201) }),
     ).toThrow();
+  });
+});
+
+describe("FavoritesQuerySchema", () => {
+  it("takes search and sort but no list, since favorites span both", () => {
+    expect(
+      FavoritesQuerySchema.parse({ q: "  miles ", sort: "artist" }),
+    ).toEqual({ q: "miles", sort: "artist" });
+    expect(FavoritesQuerySchema.parse({})).toEqual({
+      q: undefined,
+      sort: "recent",
+    });
+    expect(FavoritesQuerySchema.safeParse({ list: "collection" }).success).toBe(
+      false,
+    );
   });
 });

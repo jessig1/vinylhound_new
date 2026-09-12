@@ -5,6 +5,7 @@ export * from "./confirmation-repository.ts";
 export * from "./library-repository.ts";
 export * from "./operations-repository.ts";
 export * from "./placement-repository.ts";
+export * from "./playlist-repository.ts";
 export * from "./release-resolution.ts";
 export * from "./scan-repository.ts";
 export * from "./schema.ts";
