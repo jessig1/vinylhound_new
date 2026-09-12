@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { UsageCostSummarySchema } from "./scan.js";
+import { UsageCostSummarySchema } from "./scan.ts";
 
 export const USAGE_SUMMARY_WINDOW_DAYS = 30;
 

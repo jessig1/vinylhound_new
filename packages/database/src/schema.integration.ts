@@ -8,28 +8,28 @@ import {
   type AnalyzeScanJob,
 } from "@vinylhound/contracts";
 
-import { createDatabase } from "./database.js";
+import { createDatabase } from "./database.ts";
 import {
   deleteAccount,
   getAccountExportForUser,
-} from "./account-repository.js";
+} from "./account-repository.ts";
 import {
   getBatchCostSummary,
   getScanForUser,
   getUsageSummaryForUser,
   listScanSummariesForUser,
   prepareScanAnalysis,
-} from "./analysis-repository.js";
+} from "./analysis-repository.ts";
 import {
   confirmScan,
   getScanConfirmationForUser,
-} from "./confirmation-repository.js";
+} from "./confirmation-repository.ts";
 import {
   deleteLibraryItem,
   getLibraryItemForUser,
   listLibraryItemsForUser,
   updateLibraryItem,
-} from "./library-repository.js";
+} from "./library-repository.ts";
 import {
   cancelScan,
   cleanupAbandonedScans,
@@ -43,7 +43,7 @@ import {
   getScanQuotaHeadroomForUser,
   retryScan,
   submitScan,
-} from "./scan-repository.js";
+} from "./scan-repository.ts";
 import {
   albums,
   catalogReferences,
@@ -57,7 +57,7 @@ import {
   scanConfirmations,
   scans,
   users,
-} from "./schema.js";
+} from "./schema.ts";
 
 const connectionString = process.env.DATABASE_URL;
 

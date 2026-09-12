@@ -7,7 +7,7 @@ import {
   RETRYABLE_SCAN_STATUSES,
   RetryScanResponseSchema,
   ScanStatusSchema,
-} from "./scan.js";
+} from "./scan.ts";
 
 const baseJob = {
   jobVersion: 1 as const,

@@ -4,7 +4,7 @@ import {
   ConfirmScanRequestSchema,
   LibraryQuerySchema,
   UpdateLibraryItemSchema,
-} from "./library.js";
+} from "./library.ts";
 
 describe("ConfirmScanRequestSchema", () => {
   it("accepts a corrected candidate and target list", () => {

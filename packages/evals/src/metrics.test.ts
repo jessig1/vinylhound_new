@@ -10,8 +10,8 @@ import {
   estimateAttemptCost,
   scoreIdentification,
   type SuccessfulAttempt,
-} from "./metrics.js";
-import { evaluationCase } from "./test-fixture.js";
+} from "./metrics.ts";
+import { evaluationCase } from "./test-fixture.ts";
 
 describe("evaluation scoring", () => {
   it("normalizes artist/title and finds the expected album in the top three", () => {

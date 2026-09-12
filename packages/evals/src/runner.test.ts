@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { AlbumIdentifier } from "@vinylhound/ai";
 
-import { runEvaluation } from "./runner.js";
-import { evaluationManifest } from "./test-fixture.js";
+import { runEvaluation } from "./runner.ts";
+import { evaluationManifest } from "./test-fixture.ts";
 
 describe("runEvaluation", () => {
   const temporaryDirectories: string[] = [];

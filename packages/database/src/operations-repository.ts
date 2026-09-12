@@ -5,8 +5,8 @@ import {
   type AnalyzeScanJob,
 } from "@vinylhound/contracts";
 
-import type { Database } from "./database.js";
-import { outboxMessages, scans } from "./schema.js";
+import type { Database } from "./database.ts";
+import { outboxMessages, scans } from "./schema.ts";
 
 export async function getOperationalDrainState(db: Database) {
   const [scanState] = await db

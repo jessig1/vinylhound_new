@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CreateImageUploadRequestSchema,
   detectImageMimeType,
-} from "./upload.js";
+} from "./upload.ts";
 
 describe("CreateImageUploadRequestSchema", () => {
   const upload = {

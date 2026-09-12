@@ -9,7 +9,10 @@ import {
   CorrelationIdSchema,
   IdempotencyKeySchema,
 } from "@vinylhound/contracts";
-import { CatalogProviderError } from "@vinylhound/catalog";
+import {
+  isCatalogProviderError,
+  isDiscoveryProviderError,
+} from "@vinylhound/catalog";
 import { DatabaseCommandError } from "@vinylhound/database";
 import {
   ImageValidationError,
@@ -172,7 +175,7 @@ export function errorResponse(error: unknown, requestId: string) {
           : 409;
     return createError(status, error.code, error.message, requestId);
   }
-  if (error instanceof CatalogProviderError) {
+  if (isCatalogProviderError(error)) {
     const status =
       error.category === "rate_limit"
         ? 429
@@ -182,6 +185,24 @@ export function errorResponse(error: unknown, requestId: string) {
     return createError(
       status,
       `catalog_${error.category}`,
+      error.message,
+      requestId,
+    );
+  }
+  if (isDiscoveryProviderError(error)) {
+    const status =
+      error.category === "rate_limit"
+        ? 429
+        : error.category === "not_found"
+          ? 404
+          : // Missing or rejected credentials are a deployment problem, not a
+            // bad request: the caller is told the feature is unavailable.
+            error.category === "not_configured"
+            ? 503
+            : 502;
+    return createError(
+      status,
+      `discovery_${error.category}`,
       error.message,
       requestId,
     );
@@ -206,6 +227,20 @@ export function errorResponse(error: unknown, requestId: string) {
     );
   }
 
+  // An unclassified error reaching here is always a defect: either a new
+  // error type that needs a branch above, or a known one whose identity
+  // check failed. Logging name/message/stack is the difference between a
+  // five-minute diagnosis and a blind one, and the client response is
+  // unchanged.
+  console.error(`[web] unhandled route error; requestId=${requestId}`, {
+    name: error instanceof Error ? error.name : typeof error,
+    message: error instanceof Error ? error.message : String(error),
+    constructor: error instanceof Error ? error.constructor?.name : undefined,
+    topFrame:
+      error instanceof Error
+        ? error.stack?.split(/\r?\n/)[1]?.trim()
+        : undefined,
+  });
   return createError(
     500,
     "internal_error",

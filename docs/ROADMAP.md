@@ -375,7 +375,7 @@ emulation does not prove real-camera behavior.
       and user-owned ordered playlists of saved release references. Include
       favorite/unfavorite and playlist create/rename/reorder/remove/delete.
       Playlists organize music; streaming playback is outside scope.
-- [ ] **Task 3.** Add reviewed, idempotent catalog-to-wishlist placement without scanning,
+- [x] **Task 3.** Add reviewed, idempotent catalog-to-wishlist placement without scanning,
       using existing library deduplication rules and no invented image history.
       Include new saved-music data in account export/deletion.
 - [ ] **Task 4.** Establish explicit HTTP/event version conventions and previous-deployed-
@@ -438,6 +438,74 @@ camera captures once while held, rearms after change, and resumes after a
 pause") fails consistently and reproduces identically on a clean, unmodified
 `main` (confirmed via `git stash`) — a pre-existing flake unrelated to this
 task, not something Task 1 introduced or is scoped to fix.
+
+Task 1 revised and Task 3 completed 2026-09-11 (ADR-0019). `/discover` was
+rebuilt on **Spotify** as a separate discovery provider, keeping MusicBrainz as
+the catalog provider for scan review and pressing identity. The two-field
+artist+title form is replaced by one debounced free-text box returning Artists,
+Albums and Tracks as three sections with artwork, and a browse chain of search
+→ artist discography → album tracklist (`/discover`,
+`/discover/artists/{id}`, `/discover/albums/{id}`). The query lives in the URL
+as `?q=`, so a search is shareable and survives the back button, and each
+keystroke aborts the previous in-flight request rather than racing it.
+
+Why two providers rather than a swap: Spotify has no pressing entity at all —
+no catalog number, country, format, packaging or release status — so replacing
+MusicBrainz would have emptied exactly the fields scan review collects and that
+distinguish one vinyl pressing from another. Spotify is much better at the
+browse experience (relevance, inline artwork, artist-first navigation, no
+1 req/s ceiling); MusicBrainz is the one that models physical editions. The
+split is enforced structurally: separate ports (`CatalogProvider` versus
+`DiscoveryProvider`), separate contracts (`catalog.ts` versus `discovery.ts`),
+separate routes (`/catalog/*` versus `/discovery/*`).
+
+`CatalogReferenceSchema` gained a nullable `releaseId`, rejected as non-null
+for Spotify and still required for MusicBrainz. Null is not missing data: it is
+the machine-readable statement that the provider models no pressing.
+`resolveReviewedRelease` (extracted from `confirmScan`, now shared by both
+save paths) derives release identity from a provider reference only when that
+reference names a pressing, so a Spotify-sourced record dedupes on normalized
+attributes exactly as a hand-entered one does and two real pressings stay two
+releases. Fields Spotify cannot answer are saved as null, never guessed; only
+`label` and the UPC/EAN `barcode` carry over.
+
+Task 3's placement is `POST /library` (`PlaceLibraryReleaseSchema`), idempotent
+by identity rather than by key — upsert on `(user_id, release_id)`, `collection`
+outranking `wishlist`, and an owned copy created only when the item has none
+yet. It writes no `scan_confirmations` row and leaves `confirmedFromScanId`
+null, since no scan was reviewed and there is no image history to attribute.
+Account export and deletion needed no change and were verified to cover the new
+records: placement writes only to the existing user-scoped `library_items` and
+`library_copies`, which export already selects by `userId` and which cascade
+from the `users` delete.
+
+Discovery is optional per deployment. With `SPOTIFY_CLIENT_ID`/
+`SPOTIFY_CLIENT_SECRET` unset, `context.discovery` is null, the routes answer
+`503 discovery_not_configured`, and `/discover` says so; scanning, review,
+confirmation and the library are unaffected. Credentials are server-side only.
+
+Verified: `npm run lint`, `npm run typecheck`, `npm test` (120/120, +17 net new
+across `packages/catalog/src/spotify-discovery.test.ts` covering token reuse,
+single refresh on a rejected token, unified search mapping, null/placeholder
+filtering, per-market discography collapse, album label/barcode/tracks, local
+rejection of malformed IDs, and the rate-limit/not-configured/not-found error
+mappings; plus `packages/contracts/src/catalog.test.ts` cases proving a
+MusicBrainz reference must carry a pressing, a Spotify one must not, and rows
+persisted before Spotify existed still parse), `npm run build`, and `npm run
+test:e2e` (mobile Chromium, 22/23). The rewritten `e2e/discover.e2e.ts` stubs
+`/api/v1/discovery/*` and proves the three-section search, URL query state, the
+search → artist → album walk, saving to the library with the assertion that no
+pressing field is invented and the reference claims no pressing, the
+unconfigured-deployment message, and the empty-result state, with zero axe
+WCAG 2 A/AA violations on both the search and album pages. `format:check`
+still fails only on the generated `apps/web/next-env.d.ts` (no working-tree
+diff against its last commit — the same pre-existing Windows CRLF artifact
+noted for Task 1). The one e2e failure is `e2e/live-camera.e2e.ts`'s first
+test, still the pre-existing flake that reproduces on clean `main` and is
+unrelated to this work.
+
+Still open in P3.3: Task 2 (favorites and playlists) and Task 4 (version
+conventions and compatibility fixtures).
 
 Exit: separate browser tests complete search/details, favorite/unfavorite,
 playlist editing, and reviewed wishlist addition without a scan. Integration

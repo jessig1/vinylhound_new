@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-import { IngestionSourceSchema, ScanStatusSchema } from "./scan.js";
-import { ImageMimeTypeSchema, ImageViewTypeSchema } from "./upload.js";
-import { LibraryListSchema, RecordConditionSchema } from "./library.js";
+import { IngestionSourceSchema, ScanStatusSchema } from "./scan.ts";
+import { ImageMimeTypeSchema, ImageViewTypeSchema } from "./upload.ts";
+import { LibraryListSchema, RecordConditionSchema } from "./library.ts";
 
 export const AccountExportScanSchema = z
   .object({

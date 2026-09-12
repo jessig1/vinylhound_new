@@ -35,6 +35,6 @@ export interface ObjectStorage {
   deleteObject(objectKey: string): Promise<void>;
 }
 
-export * from "./image-normalization.js";
-export * from "./image-validation.js";
-export * from "./s3-object-storage.js";
+export * from "./image-normalization.ts";
+export * from "./image-validation.ts";
+export * from "./s3-object-storage.ts";

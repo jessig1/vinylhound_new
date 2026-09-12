@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCorrelationId } from "./http.js";
+import { parseCorrelationId } from "./http.ts";
 
 function requestWithHeader(value: string | null) {
   const headers = new Headers();

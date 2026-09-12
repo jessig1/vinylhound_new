@@ -179,16 +179,27 @@ returns `not_found`.
 | Method | Path                                                  | Purpose                  |
 | ------ | ----------------------------------------------------- | ------------------------ |
 | GET    | `/library?list={collection,wishlist}&q=&sort=`        | Read the selected list   |
+| POST   | `/library`                                            | Save a release, no scan  |
 | GET    | `/library/export?list={collection,wishlist}&q=&sort=` | Download the list as CSV |
 | PATCH  | `/library/{itemId}`                                   | Change list or notes     |
 | DELETE | `/library/{itemId}`                                   | Remove a list item       |
 
-The list query (with search/sort), export, `PATCH`/`DELETE`, and
-server-rendered collection/wishlist pages are implemented. Adding a release
-still only happens through the atomic scan-confirmation command
-(`POST /scans/{scanId}/confirm`); there is no standalone `POST /library` —
-`AddLibraryItemSchema` is a contract for a future direct-add flow, not a
-route.
+A release now enters the library through two doors. `POST
+/scans/{scanId}/confirm` remains the atomic scan-confirmation command.
+`POST /library` (`PlaceLibraryReleaseSchema`) saves a release found in
+`/discover` with no scan involved: same reviewed-release fields, minus
+`selectedCandidateId`. It writes no `scan_confirmations` row and leaves
+`confirmedFromScanId` null, because no scan was reviewed and no image history
+exists to attribute.
+
+`POST /library` requires no `Idempotency-Key` — it is idempotent by identity,
+the same reasoning as `DELETE /library/{itemId}`. The item is upserted on
+`(user_id, release_id)`, `collection` outranks `wishlist` on conflict, and a
+`collection` placement creates an owned copy only when the item has none yet
+(the existing "first owned copy" rule). A repeat call converges on the same
+state and returns `200`; the first returns `201`. A user who genuinely owns a
+second pressing adds it through per-copy editing, where that intent is
+explicit.
 
 `q` (optional, trimmed, max 200 characters) matches against the displayed
 artist or title, case-insensitively; `sort` (optional, default `recent`) is
@@ -254,8 +265,51 @@ and its track listing — `reference.releaseGroupId` identifies the album
 concept shared by every pressing, while `reference.releaseId` identifies this
 specific pressing; a cover or title match never by itself proves which
 pressing is on hand. The scan review screen only persists a reference after
-the user selects a result; `/discover` is read-only today and does not save
-anything (P3.3 Task 3 adds catalog-to-wishlist placement without a scan).
+the user selects a result.
+
+## Discovery endpoints
+
+| Method | Path                                | Purpose                              |
+| ------ | ----------------------------------- | ------------------------------------ |
+| GET    | `/discovery/search?q=&type=&limit=` | Free-text artist/album/track search  |
+| GET    | `/discovery/artists/{artistId}`     | Artist detail and discography        |
+| GET    | `/discovery/albums/{albumId}`       | Album detail with full track listing |
+
+Discovery is Spotify-backed and separate from the catalog endpoints above by
+design (ADR-0019): the catalog answers "which pressing is this?" and feeds scan
+review; discovery answers "what music exists?" and feeds browsing. `type` is
+`all` (default), `artist`, `album`, or `track`; `limit` is 1-50, default 10.
+All three require an authenticated user.
+
+Results carry Spotify IDs (22 base-62 characters, never MBIDs), cover and
+artist image URLs, and `externalUrl` back to Spotify. An album detail adds
+`label`, the UPC/EAN as `barcode`, `genres`, and the track listing. Fields a
+pressing needs but Spotify has no equivalent for — catalog number, country,
+format, packaging, release status — are absent rather than guessed.
+
+The adapter mints and caches a client-credentials token (refreshed a minute
+before expiry, and once more if a cached token is rejected mid-request),
+caches normalized responses for an hour, and collapses an artist's repeated
+per-market albums into one discography entry. Errors map to
+`discovery_rate_limit` (429), `discovery_not_found` (404),
+`discovery_not_configured` (503), and `discovery_provider_unavailable` /
+`discovery_invalid_response` (502). A non-ok Spotify response carries its own
+explanation through to the message (JSON `error.message`,
+`error_description`, or raw text, capped at 300 characters), and other
+failures include the upstream status. **401 and 403 both map to
+`discovery_not_configured`**: a 403 here means the Spotify account that owns
+the app has no active Premium subscription, which is a deployment problem
+rather than a bad request, and the client is told exactly that.
+
+**Discovery is optional per deployment.** With `SPOTIFY_CLIENT_ID` and
+`SPOTIFY_CLIENT_SECRET` unset, all three routes answer `503
+discovery_not_configured` and `/discover` explains that the feature is not set
+up. Scanning, review, confirmation and the library are unaffected.
+
+Saving a discovered album uses `POST /library`. Its catalog reference carries
+`provider: "spotify"` and `releaseId: null` — Spotify identifies an album
+concept, never a pressing — so such a record takes its release identity from
+the reviewed attributes rather than from the provider reference.
 
 ## Queue contract
 

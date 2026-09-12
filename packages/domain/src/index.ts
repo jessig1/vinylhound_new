@@ -1,3 +1,3 @@
-export * from "./review-policy.js";
-export * from "./release-identity.js";
-export * from "./provider-pricing.js";
+export * from "./review-policy.ts";
+export * from "./release-identity.ts";
+export * from "./provider-pricing.ts";

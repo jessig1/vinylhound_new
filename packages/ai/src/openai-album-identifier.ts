@@ -12,12 +12,12 @@ import type {
   AlbumIdentificationRequest,
   AlbumIdentificationResponse,
   AlbumIdentifier,
-} from "./album-identifier.js";
-import { AlbumIdentificationError } from "./album-identifier.js";
+} from "./album-identifier.ts";
+import { AlbumIdentificationError } from "./album-identifier.ts";
 import {
   ALBUM_IDENTIFICATION_INSTRUCTIONS,
   ALBUM_IDENTIFICATION_PROMPT_VERSION,
-} from "./prompt.js";
+} from "./prompt.ts";
 
 export interface OpenAIAlbumIdentifierOptions {
   apiKey: string;

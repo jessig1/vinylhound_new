@@ -11,8 +11,8 @@ import type {
   UpdateLibraryItem,
 } from "@vinylhound/contracts";
 
-import type { Database } from "./database.js";
-import { DatabaseCommandError } from "./scan-repository.js";
+import type { Database } from "./database.ts";
+import { DatabaseCommandError } from "./scan-repository.ts";
 import {
   albums,
   imageAssets,
@@ -20,7 +20,7 @@ import {
   libraryItems,
   releases,
   scanConfirmations,
-} from "./schema.js";
+} from "./schema.ts";
 
 export async function listLibraryItemsForUser(
   db: Database,

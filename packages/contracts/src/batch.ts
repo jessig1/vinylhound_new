@@ -4,7 +4,7 @@ import {
   ScanCandidateResultSchema,
   ScanStatusSchema,
   UsageCostSummarySchema,
-} from "./scan.js";
+} from "./scan.ts";
 
 export const MAX_SCANS_PER_BATCH = 20;
 

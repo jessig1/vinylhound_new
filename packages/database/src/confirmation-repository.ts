@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import { and, desc, eq, sql } from "drizzle-orm";
 
 import type {
@@ -7,16 +5,15 @@ import type {
   ConfirmScanResponse,
   ScanConfirmationSummary,
 } from "@vinylhound/contracts";
+import type { Database } from "./database.ts";
 import {
-  normalizeOptionalReleaseIdentityPart,
-  normalizeReleaseIdentityPart,
-} from "@vinylhound/domain";
-
-import type { Database } from "./database.js";
-import { DatabaseCommandError } from "./scan-repository.js";
+  hashJson,
+  resolveReviewedRelease,
+  serializeCopy,
+} from "./release-resolution.ts";
+import { DatabaseCommandError } from "./scan-repository.ts";
 import {
   albums,
-  catalogReferences,
   libraryCopies,
   libraryItems,
   releases,
@@ -24,7 +21,7 @@ import {
   scanCandidates,
   scanConfirmations,
   scans,
-} from "./schema.js";
+} from "./schema.ts";
 
 export async function confirmScan(
   db: Database,
@@ -166,170 +163,21 @@ export async function confirmScan(
       }
     }
 
-    if (input.confirmation.catalogReference) {
-      await transaction.execute(
-        sql`select pg_advisory_xact_lock(
-          hashtext(${input.confirmation.catalogReference.provider}),
-          hashtext(${input.confirmation.catalogReference.releaseGroupId})
-        )`,
-      );
-    }
-
-    const normalizedArtist = normalizeReleaseIdentityPart(
-      input.confirmation.artist,
-    );
-    const normalizedTitle = normalizeReleaseIdentityPart(
-      input.confirmation.title,
-    );
     const catalogReference = input.confirmation.catalogReference;
-    const existingAlbumReference = catalogReference
-      ? await transaction.query.catalogReferences.findFirst({
-          where: and(
-            eq(catalogReferences.provider, catalogReference.provider),
-            eq(catalogReferences.entityType, "album"),
-            eq(catalogReferences.externalId, catalogReference.releaseGroupId),
-          ),
-        })
-      : null;
-    const referencedAlbum = existingAlbumReference?.albumId
-      ? await transaction.query.albums.findFirst({
-          where: eq(albums.id, existingAlbumReference.albumId),
-        })
-      : null;
-    const [insertedAlbum] = referencedAlbum
-      ? [referencedAlbum]
-      : await transaction
-          .insert(albums)
-          .values({
-            artist: input.confirmation.artist,
-            title: input.confirmation.title,
-            normalizedArtist,
-            normalizedTitle,
-          })
-          .onConflictDoNothing({
-            target: [albums.normalizedArtist, albums.normalizedTitle],
-          })
-          .returning();
-    const album =
-      insertedAlbum ??
-      (await transaction.query.albums.findFirst({
-        where: and(
-          eq(albums.normalizedArtist, normalizedArtist),
-          eq(albums.normalizedTitle, normalizedTitle),
-        ),
-      }));
-    if (!album) {
-      throw new DatabaseCommandError(
-        "conflict",
-        "The normalized album identity could not be resolved.",
-      );
-    }
-
-    if (catalogReference && !existingAlbumReference) {
-      await transaction
-        .insert(catalogReferences)
-        .values({
-          provider: catalogReference.provider,
-          entityType: "album",
-          externalId: catalogReference.releaseGroupId,
-          albumId: album.id,
-          sourceUrl: `https://musicbrainz.org/release-group/${catalogReference.releaseGroupId}`,
-          fetchedAt: new Date(catalogReference.fetchedAt),
-        })
-        .onConflictDoNothing({
-          target: [
-            catalogReferences.provider,
-            catalogReferences.entityType,
-            catalogReferences.externalId,
-          ],
-        });
-    }
-
-    const existingReleaseReference = catalogReference
-      ? await transaction.query.catalogReferences.findFirst({
-          where: and(
-            eq(catalogReferences.provider, catalogReference.provider),
-            eq(catalogReferences.entityType, "release"),
-            eq(catalogReferences.externalId, catalogReference.releaseId),
-          ),
-        })
-      : null;
-    const referencedRelease = existingReleaseReference?.releaseId
-      ? await transaction.query.releases.findFirst({
-          where: eq(releases.id, existingReleaseReference.releaseId),
-        })
-      : null;
-    if (referencedRelease && referencedRelease.albumId !== album.id) {
-      throw new DatabaseCommandError(
-        "conflict",
-        "The catalog release is already linked to a different album.",
-      );
-    }
-    const identityKey = catalogReference
-      ? hashJson([catalogReference.provider, catalogReference.releaseId])
-      : hashJson([
-          normalizedArtist,
-          normalizedTitle,
-          input.confirmation.releaseYear,
-          normalizeOptionalReleaseIdentityPart(input.confirmation.label),
-          normalizeOptionalReleaseIdentityPart(
-            input.confirmation.catalogNumber,
-          ),
-          normalizeOptionalReleaseIdentityPart(input.confirmation.barcode),
-          normalizeOptionalReleaseIdentityPart(input.confirmation.releaseDate),
-          normalizeOptionalReleaseIdentityPart(input.confirmation.country),
-          normalizeOptionalReleaseIdentityPart(input.confirmation.format),
-        ]);
-    const [insertedRelease] = referencedRelease
-      ? [referencedRelease]
-      : await transaction
-          .insert(releases)
-          .values({
-            albumId: album.id,
-            identityKey,
-            releaseYear: input.confirmation.releaseYear,
-            releaseDate: input.confirmation.releaseDate,
-            country: input.confirmation.country,
-            format: input.confirmation.format,
-            packaging: input.confirmation.packaging,
-            releaseStatus: input.confirmation.releaseStatus,
-            label: input.confirmation.label,
-            catalogNumber: input.confirmation.catalogNumber,
-            barcode: input.confirmation.barcode,
-          })
-          .onConflictDoNothing({ target: releases.identityKey })
-          .returning();
-    const release =
-      insertedRelease ??
-      (await transaction.query.releases.findFirst({
-        where: eq(releases.identityKey, identityKey),
-      }));
-    if (!release) {
-      throw new DatabaseCommandError(
-        "conflict",
-        "The normalized release identity could not be resolved.",
-      );
-    }
-
-    if (catalogReference && !existingReleaseReference) {
-      await transaction
-        .insert(catalogReferences)
-        .values({
-          provider: catalogReference.provider,
-          entityType: "release",
-          externalId: catalogReference.releaseId,
-          releaseId: release.id,
-          sourceUrl: catalogReference.sourceUrl,
-          fetchedAt: new Date(catalogReference.fetchedAt),
-        })
-        .onConflictDoNothing({
-          target: [
-            catalogReferences.provider,
-            catalogReferences.entityType,
-            catalogReferences.externalId,
-          ],
-        });
-    }
+    const { release } = await resolveReviewedRelease(transaction, {
+      artist: input.confirmation.artist,
+      title: input.confirmation.title,
+      releaseYear: input.confirmation.releaseYear,
+      label: input.confirmation.label,
+      catalogNumber: input.confirmation.catalogNumber,
+      barcode: input.confirmation.barcode,
+      releaseDate: input.confirmation.releaseDate,
+      country: input.confirmation.country,
+      format: input.confirmation.format,
+      packaging: input.confirmation.packaging,
+      releaseStatus: input.confirmation.releaseStatus,
+      catalogReference,
+    });
 
     const now = new Date();
     const [libraryItem] = await transaction
@@ -511,22 +359,5 @@ async function readConfirmationResponse(
       copy: copy ? serializeCopy(copy) : null,
     },
     confirmedAt: confirmation.confirmedAt.toISOString(),
-  };
-}
-
-function hashJson(value: unknown) {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
-function serializeCopy(copy: typeof libraryCopies.$inferSelect) {
-  return {
-    id: copy.id,
-    mediaCondition: copy.mediaCondition,
-    sleeveCondition: copy.sleeveCondition,
-    location: copy.location,
-    notes: copy.notes,
-    acquiredAt: copy.acquiredAt,
-    createdAt: copy.createdAt.toISOString(),
-    updatedAt: copy.updatedAt.toISOString(),
   };
 }

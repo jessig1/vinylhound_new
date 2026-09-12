@@ -72,7 +72,10 @@ export const libraryListEnum = pgEnum("library_list", [
   "wishlist",
 ]);
 
-export const catalogProviderEnum = pgEnum("catalog_provider", ["musicbrainz"]);
+export const catalogProviderEnum = pgEnum("catalog_provider", [
+  "musicbrainz",
+  "spotify",
+]);
 export const catalogEntityTypeEnum = pgEnum("catalog_entity_type", [
   "album",
   "release",
@@ -665,9 +668,10 @@ export const scanConfirmations = pgTable(
         packaging: string | null;
         releaseStatus: string | null;
         catalogReference: {
-          provider: "musicbrainz";
+          provider: "musicbrainz" | "spotify";
           releaseGroupId: string;
-          releaseId: string;
+          // Null when the provider models no pressing entity (Spotify).
+          releaseId: string | null;
           sourceUrl: string;
           fetchedAt: string;
         } | null;

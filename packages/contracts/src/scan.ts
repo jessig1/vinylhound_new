@@ -1,13 +1,13 @@
 import { z } from "zod";
 
-import { CorrelationIdSchema } from "./common.js";
+import { CorrelationIdSchema } from "./common.ts";
 import {
   ImageMimeTypeSchema,
   ImageViewTypeSchema,
   MAX_IMAGES_PER_SCAN,
   MAX_IMAGE_SIZE_BYTES,
-} from "./upload.js";
-import { ScanConfirmationSummarySchema } from "./library.js";
+} from "./upload.ts";
+import { ScanConfirmationSummarySchema } from "./library.ts";
 
 export const IngestionSourceSchema = z.enum([
   "camera",

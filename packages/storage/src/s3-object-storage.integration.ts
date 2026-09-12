@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
-import { createS3ObjectStorage } from "./s3-object-storage.js";
+import { createS3ObjectStorage } from "./s3-object-storage.ts";
 
 const requiredEnvironment = [
   "S3_REGION",

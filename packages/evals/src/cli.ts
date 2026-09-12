@@ -7,8 +7,8 @@ import {
   DEFAULT_EVALUATION_MODELS,
   runEvaluation,
   validateEvaluationInputs,
-} from "./runner.js";
-import type { EvaluationImageDetail } from "./metrics.js";
+} from "./runner.ts";
+import type { EvaluationImageDetail } from "./metrics.ts";
 
 interface CliOptions {
   manifestPath: string;

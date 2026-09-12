@@ -14,7 +14,7 @@ import {
 } from "@vinylhound/queue";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 
-import { createScanAnalysisHandler } from "./analysis-handler.js";
+import { createScanAnalysisHandler } from "./analysis-handler.ts";
 
 interface SqsLambdaRecord {
   messageId: string;

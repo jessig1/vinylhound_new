@@ -1,3 +1,3 @@
-export * from "./manifest.js";
-export * from "./metrics.js";
-export * from "./runner.js";
+export * from "./manifest.ts";
+export * from "./metrics.ts";
+export * from "./runner.ts";

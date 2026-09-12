@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AlbumCandidate } from "@vinylhound/contracts";
 
-import { determineReviewOutcome } from "./review-policy.js";
+import { determineReviewOutcome } from "./review-policy.ts";
 
 function candidate(confidence: number, title = "Kind of Blue"): AlbumCandidate {
   return {

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAlbumIdentificationContent,
   normalizeOpenAIError,
-} from "./openai-album-identifier.js";
+} from "./openai-album-identifier.ts";
 
 describe("buildAlbumIdentificationContent", () => {
   it("pairs every image with its physical-record view label", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { selectRunnableCases } from "./manifest.js";
-import { evaluationCase, evaluationManifest } from "./test-fixture.js";
+import { selectRunnableCases } from "./manifest.ts";
+import { evaluationCase, evaluationManifest } from "./test-fixture.ts";
 
 describe("selectRunnableCases", () => {
   it("selects verified and consented cases by split", () => {

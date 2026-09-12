@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 
 import { runner } from "node-pg-migrate";
 
-import type { DatabaseOptions } from "./database.js";
+import type { DatabaseOptions } from "./database.ts";
 
 export async function runDatabaseMigrations(options: DatabaseOptions) {
   return runner({

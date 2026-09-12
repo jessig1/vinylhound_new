@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { CatalogReferenceSchema } from "./catalog.js";
+import { CatalogReferenceSchema } from "./catalog.ts";
 
 export const LibraryListSchema = z.enum(["collection", "wishlist"]);
 export type LibraryList = z.infer<typeof LibraryListSchema>;
@@ -45,39 +45,66 @@ export const CopyDetailsInputSchema = z
   })
   .strict();
 
+/**
+ * The reviewed release fields a user commits to, shared by the two ways a
+ * record enters the library: confirming a scan, and placing a catalog result
+ * directly from `/discover` with no scan involved. Keeping one shape means a
+ * saved record carries identical fields whichever door it came through.
+ */
+const ReviewedReleaseShape = {
+  artist: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255),
+  releaseYear: z.number().int().min(1900).max(2200).nullable(),
+  label: z.string().trim().min(1).max(255).nullable(),
+  catalogNumber: z.string().trim().min(1).max(255).nullable(),
+  barcode: z.string().trim().min(1).max(255).nullable(),
+  releaseDate: z
+    .string()
+    .regex(/^\d{4}(?:-\d{2}(?:-\d{2})?)?$/)
+    .nullable()
+    .default(null),
+  country: z.string().trim().min(1).max(10).nullable().default(null),
+  format: z.string().trim().min(1).max(255).nullable().default(null),
+  packaging: z.string().trim().min(1).max(255).nullable().default(null),
+  releaseStatus: z.string().trim().min(1).max(100).nullable().default(null),
+  catalogReference: CatalogReferenceSchema.nullable().default(null),
+  list: LibraryListSchema,
+  notes: z.string().trim().max(2_000).nullable(),
+  copy: CopyDetailsInputSchema.nullable().default(null),
+};
+
+function rejectWishlistCopy(
+  value: { list: LibraryList; copy: unknown },
+  context: z.RefinementCtx,
+) {
+  if (value.list === "wishlist" && value.copy !== null) {
+    context.addIssue({
+      code: "custom",
+      path: ["copy"],
+      message: "Wishlist entries cannot include an owned copy.",
+    });
+  }
+}
+
 export const ConfirmScanRequestSchema = z
   .object({
     selectedCandidateId: z.string().uuid().nullable(),
-    artist: z.string().trim().min(1).max(255),
-    title: z.string().trim().min(1).max(255),
-    releaseYear: z.number().int().min(1900).max(2200).nullable(),
-    label: z.string().trim().min(1).max(255).nullable(),
-    catalogNumber: z.string().trim().min(1).max(255).nullable(),
-    barcode: z.string().trim().min(1).max(255).nullable(),
-    releaseDate: z
-      .string()
-      .regex(/^\d{4}(?:-\d{2}(?:-\d{2})?)?$/)
-      .nullable()
-      .default(null),
-    country: z.string().trim().min(1).max(10).nullable().default(null),
-    format: z.string().trim().min(1).max(255).nullable().default(null),
-    packaging: z.string().trim().min(1).max(255).nullable().default(null),
-    releaseStatus: z.string().trim().min(1).max(100).nullable().default(null),
-    catalogReference: CatalogReferenceSchema.nullable().default(null),
-    list: LibraryListSchema,
-    notes: z.string().trim().max(2_000).nullable(),
-    copy: CopyDetailsInputSchema.nullable().default(null),
+    ...ReviewedReleaseShape,
   })
   .strict()
-  .superRefine((value, context) => {
-    if (value.list === "wishlist" && value.copy !== null) {
-      context.addIssue({
-        code: "custom",
-        path: ["copy"],
-        message: "Wishlist entries cannot include an owned copy.",
-      });
-    }
-  });
+  .superRefine(rejectWishlistCopy);
+
+/**
+ * Placing a release into the library straight from discovery. Identical to a
+ * scan confirmation minus the scan: there is no candidate to select and no
+ * image history, so none is invented — the saved record's
+ * `confirmedFromScanId` stays null and no `scan_confirmations` audit row is
+ * written, because no scan was reviewed.
+ */
+export const PlaceLibraryReleaseSchema = z
+  .object(ReviewedReleaseShape)
+  .strict()
+  .superRefine(rejectWishlistCopy);
 
 export const ConfirmedReleaseSchema = z
   .object({
@@ -107,6 +134,21 @@ export const LibraryCopySchema = z
     acquiredAt: z.string().nullable(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+  })
+  .strict();
+
+export const PlaceLibraryReleaseResponseSchema = z
+  .object({
+    release: ConfirmedReleaseSchema,
+    libraryItem: z
+      .object({
+        id: z.string().uuid(),
+        list: LibraryListSchema,
+        notes: z.string().nullable(),
+        copy: LibraryCopySchema.nullable(),
+      })
+      .strict(),
+    placedAt: z.string().datetime(),
   })
   .strict();
 
@@ -238,3 +280,7 @@ export type ConfirmScanResponse = z.infer<typeof ConfirmScanResponseSchema>;
 export type LibraryCoverImage = z.infer<typeof LibraryCoverImageSchema>;
 export type LibraryItemResult = z.infer<typeof LibraryItemResultSchema>;
 export type GetLibraryResponse = z.infer<typeof GetLibraryResponseSchema>;
+export type PlaceLibraryRelease = z.infer<typeof PlaceLibraryReleaseSchema>;
+export type PlaceLibraryReleaseResponse = z.infer<
+  typeof PlaceLibraryReleaseResponseSchema
+>;

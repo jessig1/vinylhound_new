@@ -20,7 +20,7 @@ import {
   type EvaluationManifest,
   type EvaluationSplit,
   type RunnableEvaluationCase,
-} from "./manifest.js";
+} from "./manifest.ts";
 import {
   aggregateConfigurationAttempts,
   estimateAttemptCost,
@@ -29,7 +29,7 @@ import {
   scoreIdentification,
   type EvaluationAttempt,
   type EvaluationImageDetail,
-} from "./metrics.js";
+} from "./metrics.ts";
 
 export const DEFAULT_EVALUATION_MODELS = [
   "gpt-5.6-sol",

@@ -1,12 +1,17 @@
 import {
   GetLibraryResponseSchema,
   LibraryQuerySchema,
+  PlaceLibraryReleaseResponseSchema,
+  PlaceLibraryReleaseSchema,
 } from "@vinylhound/contracts";
-import { listLibraryItemsForUser } from "@vinylhound/database";
+import {
+  listLibraryItemsForUser,
+  placeLibraryRelease,
+} from "@vinylhound/database";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
-import { HttpError, jsonResponse, withRoute } from "@/server/http";
+import { HttpError, jsonResponse, parseJson, withRoute } from "@/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,3 +46,40 @@ export const GET = withRoute("library.list", async (request, { requestId }) => {
   response.headers.set("cache-control", "no-store");
   return response;
 });
+
+/**
+ * Saves a release into the library with no scan involved — the `/discover`
+ * path (ADR-0019). No `Idempotency-Key` is required: the write is idempotent
+ * by identity, upserting on `(user_id, release_id)` and adding an owned copy
+ * only when the item has none yet, so a double-tap converges instead of
+ * stacking duplicates.
+ */
+export const POST = withRoute(
+  "library.place",
+  async (request, { requestId }) => {
+    const parsed = await parseJson(request, PlaceLibraryReleaseSchema);
+    const context = getServerContext();
+    const userId = await requireUserId(context);
+    // Provenance is stamped here rather than trusted from the body: the caller
+    // decides which release to save, never when the record claims to have been
+    // looked up.
+    const placement = parsed.catalogReference
+      ? {
+          ...parsed,
+          catalogReference: {
+            ...parsed.catalogReference,
+            fetchedAt: new Date().toISOString(),
+          },
+        }
+      : parsed;
+    const { record, created } = await placeLibraryRelease(context.database.db, {
+      userId,
+      placement,
+    });
+    return jsonResponse(
+      PlaceLibraryReleaseResponseSchema.parse(record),
+      created ? 201 : 200,
+      requestId,
+    );
+  },
+);

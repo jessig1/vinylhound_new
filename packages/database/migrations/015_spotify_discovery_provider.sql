@@ -1,0 +1,13 @@
+-- Spotify joins MusicBrainz as a catalog reference source (ADR-0019).
+--
+-- MusicBrainz remains the only provider consulted to establish a pressing;
+-- Spotify references identify an album concept only, so they are written at
+-- entity_type 'album' and never 'release'. catalog_references.external_id is
+-- already varchar(255), so Spotify's 22-character base-62 IDs need no column
+-- change, and the (provider, entity_type, external_id) unique index keeps the
+-- two providers' identifier spaces from colliding.
+--
+-- ALTER TYPE ... ADD VALUE cannot run inside a transaction block in
+-- PostgreSQL versions before 12; the runner targets 16, where it is
+-- transactional and safe alongside the migration metadata insert.
+ALTER TYPE catalog_provider ADD VALUE IF NOT EXISTS 'spotify';

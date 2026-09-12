@@ -9,7 +9,7 @@ import {
   ANALYZE_SCAN_JOB,
   createAnalyzeScanWorker,
   createBullMqScanQueue,
-} from "./index.js";
+} from "./index.ts";
 
 const redisUrl = process.env.REDIS_URL;
 

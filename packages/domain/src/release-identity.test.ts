@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeOptionalReleaseIdentityPart,
   normalizeReleaseIdentityPart,
-} from "./release-identity.js";
+} from "./release-identity.ts";
 
 describe("release identity normalization", () => {
   it("normalizes case, compatibility characters, punctuation, and whitespace", () => {

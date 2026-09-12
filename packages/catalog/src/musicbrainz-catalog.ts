@@ -11,7 +11,7 @@ import {
   CatalogProviderError,
   type CatalogProvider,
   type SearchCatalogReleasesInput,
-} from "./catalog-provider.js";
+} from "./catalog-provider.ts";
 
 const ArtistCreditSchema = z
   .object({

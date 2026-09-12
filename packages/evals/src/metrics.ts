@@ -11,7 +11,7 @@ import {
   type ReviewOutcome,
 } from "@vinylhound/domain";
 
-import type { ExpectedOutcome, RunnableEvaluationCase } from "./manifest.js";
+import type { ExpectedOutcome, RunnableEvaluationCase } from "./manifest.ts";
 
 const editionFields = [
   "releaseYear",

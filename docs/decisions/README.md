@@ -20,3 +20,5 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0016: Use tiered AWS runtimes with SQS as the cloud queue](0016-tiered-aws-runtime-and-sqs.md)
 - [ADR-0017: Dismissing a scan result reuses `cancelScan`; the dashboard acts on scans directly](0017-dismiss-scan-results.md)
 - [ADR-0018: A saved record can always be removed; its confirmation row survives without it](0018-removable-library-items.md)
+- [ADR-0019: Spotify is the discovery provider; MusicBrainz stays the catalog provider](0019-spotify-discovery-provider.md)
+- [ADR-0020: Relative imports name `.ts`; the web app builds with Turbopack](0020-typescript-import-specifiers-and-turbopack.md)

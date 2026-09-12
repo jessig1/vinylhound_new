@@ -1,338 +1,338 @@
 "use client";
 
-import type { FormEvent } from "react";
-import { useState } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 
-import {
-  GetCatalogReleaseResponseSchema,
-  SearchCatalogReleasesResponseSchema,
-  type CatalogReleaseCandidate,
-  type CatalogReleaseDetail,
+import type {
+  DiscoveryAlbum,
+  DiscoveryArtist,
+  DiscoverySearchResults,
+  DiscoveryTrack,
 } from "@vinylhound/contracts";
 
 import { Icon } from "../ui";
+import { DiscoveryArt } from "./discovery-art";
+import {
+  DiscoveryUnavailableError,
+  formatDuration,
+  searchDiscovery,
+} from "./discovery-client";
+
+const DEBOUNCE_MS = 350;
+const MIN_QUERY_LENGTH = 2;
+
+const emptyResults: DiscoverySearchResults = {
+  artists: [],
+  albums: [],
+  tracks: [],
+};
 
 export default function DiscoverPage() {
-  const [artist, setArtist] = useState("");
-  const [title, setTitle] = useState("");
-  const [results, setResults] = useState<CatalogReleaseCandidate[]>([]);
-  const [searched, setSearched] = useState(false);
-  const [searchPending, setSearchPending] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [detail, setDetail] = useState<CatalogReleaseDetail | null>(null);
-  const [detailPending, setDetailPending] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  return (
+    // useSearchParams needs a Suspense boundary to keep the route from
+    // opting the whole page into client-side rendering at build time.
+    <Suspense fallback={<DiscoverFallback />}>
+      <DiscoverSearch />
+    </Suspense>
+  );
+}
 
-  async function search(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!artist.trim() || !title.trim() || searchPending) return;
-    setSearchPending(true);
-    setSearchError(null);
-    setSearched(false);
-    setDetail(null);
-    setDetailError(null);
-    try {
-      const query = new URLSearchParams({ artist, title });
-      const response = await fetch(`/api/v1/catalog/releases?${query}`, {
-        cache: "no-store",
-      });
-      const body = (await response.json()) as { error?: { message?: string } };
-      if (!response.ok) {
-        throw new Error(body.error?.message ?? "Catalog search failed.");
-      }
-      setResults(SearchCatalogReleasesResponseSchema.parse(body).results);
-      setSearched(true);
-    } catch (caught) {
-      setResults([]);
-      setSearchError(
-        caught instanceof Error ? caught.message : "Catalog search failed.",
-      );
-    } finally {
-      setSearchPending(false);
+function DiscoverFallback() {
+  return (
+    <main className="content-page discover-page">
+      <p className="field-help" role="status">
+        Loading discovery…
+      </p>
+    </main>
+  );
+}
+
+function DiscoverSearch() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get("q") ?? "";
+
+  const [query, setQuery] = useState(initialQuery);
+  const [results, setResults] = useState<DiscoverySearchResults>(emptyResults);
+  const [searchedFor, setSearchedFor] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
+
+  // One controller per in-flight search. A newer keystroke aborts the older
+  // request outright, so a slow response can never overwrite a newer one.
+  const inFlight = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < MIN_QUERY_LENGTH) {
+      inFlight.current?.abort();
+      inFlight.current = null;
+      setResults(emptyResults);
+      setSearchedFor(null);
+      setPending(false);
+      setError(null);
+      return;
     }
-  }
 
-  async function viewDetails(candidate: CatalogReleaseCandidate) {
-    if (detailPending) return;
-    setDetailPending(true);
-    setDetailError(null);
-    setDetail(null);
-    try {
-      const response = await fetch(
-        `/api/v1/catalog/releases/${candidate.reference.releaseId}`,
-        { cache: "no-store" },
-      );
-      const body = (await response.json()) as { error?: { message?: string } };
-      if (!response.ok) {
-        throw new Error(
-          body.error?.message ?? "The release details could not be loaded.",
-        );
-      }
-      setDetail(GetCatalogReleaseResponseSchema.parse(body).release);
-    } catch (caught) {
-      setDetailError(
-        caught instanceof Error
-          ? caught.message
-          : "The release details could not be loaded.",
-      );
-    } finally {
-      setDetailPending(false);
-    }
-  }
+    const timer = setTimeout(() => {
+      inFlight.current?.abort();
+      const controller = new AbortController();
+      inFlight.current = controller;
+      setPending(true);
+      setError(null);
 
-  const groups = groupByReleaseGroup(results);
+      searchDiscovery(trimmed, { limit: 12, signal: controller.signal })
+        .then((response) => {
+          if (controller.signal.aborted) return;
+          setResults({
+            artists: response.artists,
+            albums: response.albums,
+            tracks: response.tracks,
+          });
+          setSearchedFor(response.query);
+          setUnavailable(null);
+        })
+        .catch((caught: unknown) => {
+          if (controller.signal.aborted) return;
+          setResults(emptyResults);
+          setSearchedFor(trimmed);
+          if (caught instanceof DiscoveryUnavailableError) {
+            // The server's message distinguishes "no credentials configured"
+            // from "Spotify refused these credentials", which need different
+            // fixes; showing fixed copy here would send the reader after the
+            // wrong one.
+            setUnavailable(caught.message);
+            setError(null);
+            return;
+          }
+          setUnavailable(null);
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "The search could not be completed.",
+          );
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setPending(false);
+        });
+    }, DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // Keep the address bar in step so a search can be shared, bookmarked, and
+  // returned to with the back button.
+  useEffect(() => {
+    const trimmed = query.trim();
+    const current = searchParams.get("q") ?? "";
+    if (trimmed === current) return;
+    const timer = setTimeout(() => {
+      router.replace(
+        trimmed ? `/discover?q=${encodeURIComponent(trimmed)}` : "/discover",
+        { scroll: false },
+      );
+    }, DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query, router, searchParams]);
+
+  useEffect(() => () => inFlight.current?.abort(), []);
+
+  const total =
+    results.artists.length + results.albums.length + results.tracks.length;
+  const showEmpty =
+    searchedFor !== null && total === 0 && !pending && !error && !unavailable;
 
   return (
     <main className="content-page discover-page">
       <header className="page-heading">
         <div>
           <p className="section-kicker">Discovery</p>
-          <h1>Search the catalog.</h1>
+          <h1>Find any record.</h1>
           <p>
-            Look up an album directly, without scanning a cover. Results group
-            pressings under the album they belong to — matching the concept
-            doesn&apos;t confirm which pressing you have.
+            Search artists, albums, and tracks without scanning a sleeve. Save
+            what you find to your collection or wishlist.
           </p>
         </div>
       </header>
 
-      <form className="review-form discover-search-form" onSubmit={search}>
-        <div className="review-fields">
-          <label className="field field--wide">
-            <span>Artist</span>
-            <input
-              onChange={(event) => setArtist(event.target.value)}
-              placeholder="Miles Davis"
-              required
-              value={artist}
-            />
-          </label>
-          <label className="field field--wide">
-            <span>Album title</span>
-            <input
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Kind of Blue"
-              required
-              value={title}
-            />
-          </label>
-        </div>
-        <button
-          className="primary-button"
-          disabled={searchPending || !artist.trim() || !title.trim()}
-          type="submit"
-        >
+      <form
+        className="discover-search-form"
+        onSubmit={(event) => event.preventDefault()}
+        role="search"
+      >
+        <div className="discover-search-field">
           <Icon name="search" size={18} />
-          {searchPending ? "Searching…" : "Search catalog"}
-        </button>
-        {searchError ? (
-          <p className="form-error" role="alert">
-            {searchError}
-          </p>
-        ) : null}
+          <input
+            aria-label="Search artists, albums, and tracks"
+            autoComplete="off"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Miles Davis, Kind of Blue, So What…"
+            type="search"
+            value={query}
+          />
+          {query ? (
+            <button
+              aria-label="Clear search"
+              className="discover-search-clear"
+              onClick={() => setQuery("")}
+              type="button"
+            >
+              ✕
+            </button>
+          ) : null}
+        </div>
+        <p aria-live="polite" className="field-help">
+          {pending
+            ? "Searching…"
+            : searchedFor && total
+              ? `${total} results for “${searchedFor}”.`
+              : query.trim().length > 0 &&
+                  query.trim().length < MIN_QUERY_LENGTH
+                ? "Keep typing to search."
+                : " "}
+        </p>
       </form>
 
-      {searched && !searchError ? (
-        groups.length ? (
-          <div className="discover-groups" aria-label="Search results">
-            {groups.map((group) => (
-              <section className="discover-group" key={group.releaseGroupId}>
-                <div className="review-section-heading">
-                  <div>
-                    <p className="section-kicker">Album</p>
-                    <h2>{group.title}</h2>
-                  </div>
-                  <p className="field-help">
-                    {group.artist} ·{" "}
-                    {group.candidates.length === 1
-                      ? "1 pressing found"
-                      : `${group.candidates.length} pressings found`}
-                  </p>
-                </div>
-                <div
-                  className="candidate-list"
-                  aria-label={`Pressings of ${group.title}`}
-                >
-                  {group.candidates.map((candidate) => (
-                    <button
-                      className={`candidate-card candidate-card--catalog${
-                        detail?.reference.releaseId ===
-                        candidate.reference.releaseId
-                          ? " is-selected"
-                          : ""
-                      }`}
-                      key={candidate.reference.releaseId}
-                      aria-pressed={
-                        detail?.reference.releaseId ===
-                        candidate.reference.releaseId
-                      }
-                      onClick={() => viewDetails(candidate)}
-                      type="button"
-                    >
-                      <span>
-                        <strong>{candidate.title}</strong>
-                        <small>
-                          {[
-                            candidate.releaseDate,
-                            candidate.country,
-                            candidate.formats.join("/"),
-                          ]
-                            .filter(Boolean)
-                            .join(" · ") || "Details not listed"}
-                        </small>
-                      </span>
-                      <span className="candidate-card__confidence">
-                        {candidate.score}%
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        ) : (
-          <p className="empty-candidate-copy">
-            No catalog releases found for that artist and title. Try a slightly
-            different spelling or a shorter title.
-          </p>
-        )
+      {unavailable ? (
+        <p className="empty-candidate-copy">
+          {unavailable} Scanning and your library work either way.
+        </p>
+      ) : null}
+      {error ? (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {showEmpty ? (
+        <p className="empty-candidate-copy">
+          Nothing found for “{searchedFor}”. Try a different spelling, or search
+          the artist on its own.
+        </p>
       ) : null}
 
-      {detailPending ? (
-        <p className="field-help" role="status">
-          Loading release details…
-        </p>
+      {results.artists.length ? (
+        <ResultSection title="Artists">
+          <div className="discovery-grid discovery-grid--artists">
+            {results.artists.map((artist) => (
+              <ArtistCard artist={artist} key={artist.id} />
+            ))}
+          </div>
+        </ResultSection>
       ) : null}
-      {detailError ? (
-        <p className="form-error" role="alert">
-          {detailError}
-        </p>
+
+      {results.albums.length ? (
+        <ResultSection title="Albums">
+          <div className="discovery-grid">
+            {results.albums.map((album) => (
+              <AlbumCard album={album} key={album.id} />
+            ))}
+          </div>
+        </ResultSection>
       ) : null}
-      {detail ? <ReleaseDetailPanel detail={detail} /> : null}
+
+      {results.tracks.length ? (
+        <ResultSection title="Tracks">
+          <ul className="discovery-track-list">
+            {results.tracks.map((track) => (
+              <TrackRow key={track.id} track={track} />
+            ))}
+          </ul>
+        </ResultSection>
+      ) : null}
     </main>
   );
 }
 
-function ReleaseDetailPanel({ detail }: { detail: CatalogReleaseDetail }) {
-  const isConceptTitle = detail.title === detail.releaseGroupTitle;
-  const sourceUrl = detail.reference.sourceUrl.startsWith("https://")
-    ? detail.reference.sourceUrl
-    : null;
-
+function ResultSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
-    <section className="discover-detail" aria-live="polite">
+    <section aria-label={title} className="discover-group">
       <div className="review-section-heading">
         <div>
-          <p className="section-kicker">Pressing detail</p>
-          <h2>{detail.title}</h2>
+          <p className="section-kicker">Results</p>
+          <h2>{title}</h2>
         </div>
       </div>
-      <p>{detail.artist}</p>
-      {!isConceptTitle ? (
-        <p className="field-help">
-          Part of the album <strong>{detail.releaseGroupTitle}</strong> — this
-          pressing&apos;s own title differs from the album concept.
-        </p>
-      ) : null}
-
-      <dl className="discover-detail__facts">
-        <Fact label="Release date" value={detail.releaseDate} />
-        <Fact label="Country" value={detail.country} />
-        <Fact label="Format" value={detail.formats.join(", ") || null} />
-        <Fact label="Packaging" value={detail.packaging} />
-        <Fact label="Barcode" value={detail.barcode} />
-        <Fact label="Status" value={detail.status} />
-        {detail.labels.length ? (
-          <Fact
-            label="Label"
-            value={detail.labels
-              .map((label) =>
-                [label.name, label.catalogNumber].filter(Boolean).join(" · "),
-              )
-              .join("; ")}
-          />
-        ) : null}
-      </dl>
-
-      {detail.tracks.length ? (
-        <div className="discover-tracklist">
-          <h3>Tracklist</h3>
-          <ol>
-            {detail.tracks.map((track, index) => (
-              <li key={`${track.position}-${index}`}>
-                <span className="discover-tracklist__position">
-                  {track.position}
-                </span>
-                <span className="discover-tracklist__title">{track.title}</span>
-                <span className="discover-tracklist__length">
-                  {track.lengthMs ? formatDuration(track.lengthMs) : ""}
-                </span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : null}
-
-      <p className="pressing-note">
-        <Icon name="info" size={16} /> A cover match identifies the album, not a
-        specific pressing. Check labels, barcode, and matrix/runout details
-        against your copy before treating an edition as fact.
-      </p>
-      <p className="field-help">
-        Source: MusicBrainz · fetched{" "}
-        {new Date(detail.reference.fetchedAt).toLocaleString()}
-        {sourceUrl ? (
-          <>
-            {" · "}
-            <a href={sourceUrl} rel="noreferrer" target="_blank">
-              View on MusicBrainz
-            </a>
-          </>
-        ) : null}
-      </p>
+      {children}
     </section>
   );
 }
 
-function Fact({ label, value }: { label: string; value: string | null }) {
+function ArtistCard({ artist }: { artist: DiscoveryArtist }) {
   return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{value ?? "Unknown"}</dd>
-    </div>
+    <Link className="discovery-card" href={`/discover/artists/${artist.id}`}>
+      <DiscoveryArt
+        id={artist.id}
+        shape="circle"
+        title={artist.name}
+        url={artist.imageUrl}
+      />
+      <span className="discovery-card__body">
+        <strong>{artist.name}</strong>
+        <small>{artist.genres.slice(0, 2).join(", ") || "Artist"}</small>
+      </span>
+    </Link>
   );
 }
 
-function groupByReleaseGroup(candidates: CatalogReleaseCandidate[]) {
-  const groups = new Map<
-    string,
-    {
-      releaseGroupId: string;
-      title: string;
-      artist: string;
-      candidates: CatalogReleaseCandidate[];
-    }
-  >();
-  for (const candidate of candidates) {
-    const key = candidate.reference.releaseGroupId;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.candidates.push(candidate);
-    } else {
-      groups.set(key, {
-        releaseGroupId: key,
-        title: candidate.title,
-        artist: candidate.artist,
-        candidates: [candidate],
-      });
-    }
-  }
-  return [...groups.values()];
+function AlbumCard({ album }: { album: DiscoveryAlbum }) {
+  return (
+    <Link className="discovery-card" href={`/discover/albums/${album.id}`}>
+      <DiscoveryArt id={album.id} title={album.title} url={album.coverUrl} />
+      <span className="discovery-card__body">
+        <strong>{album.title}</strong>
+        <small>{album.artist}</small>
+        <small className="discovery-card__meta">
+          {[
+            album.releaseYear?.toString(),
+            album.albumType === "album" ? null : album.albumType,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </small>
+      </span>
+    </Link>
+  );
 }
 
-function formatDuration(lengthMs: number) {
-  const totalSeconds = Math.round(lengthMs / 1_000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+function TrackRow({ track }: { track: DiscoveryTrack }) {
+  const body = (
+    <>
+      <DiscoveryArt id={track.id} title={track.title} url={track.coverUrl} />
+      <span className="discovery-card__body">
+        <strong>{track.title}</strong>
+        <small>{track.artist}</small>
+        {track.albumTitle ? (
+          <small className="discovery-card__meta">{track.albumTitle}</small>
+        ) : null}
+      </span>
+      {track.durationMs ? (
+        <span className="discovery-track-list__length">
+          {formatDuration(track.durationMs)}
+        </span>
+      ) : null}
+    </>
+  );
+
+  return (
+    <li>
+      {track.albumId ? (
+        <Link
+          className="discovery-card"
+          href={`/discover/albums/${track.albumId}`}
+        >
+          {body}
+        </Link>
+      ) : (
+        <span className="discovery-card discovery-card--static">{body}</span>
+      )}
+    </li>
+  );
 }

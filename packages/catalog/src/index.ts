@@ -1,2 +1,4 @@
-export * from "./catalog-provider.js";
-export * from "./musicbrainz-catalog.js";
+export * from "./catalog-provider.ts";
+export * from "./discovery-provider.ts";
+export * from "./musicbrainz-catalog.ts";
+export * from "./spotify-discovery.ts";
