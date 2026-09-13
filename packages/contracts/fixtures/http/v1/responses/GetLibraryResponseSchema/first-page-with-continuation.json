@@ -1,0 +1,57 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /library since P3.4 Task 1 (ADR-0023, 2026-09-12) made the read a keyset page: the browser's \"Show more\" reads this shape through parseResponse, so a removed or retyped field breaks a tab opened before a deploy. Before this change the response had no nextCursor and no browser code parsed it (the pages rendered server-side), so no earlier sample exists to freeze.",
+  "value": {
+    "list": "collection",
+    "items": [
+      {
+        "id": "5e6f7a8b-9c0d-4e1f-8a3b-4c5d6e7f8a11",
+        "list": "collection",
+        "notes": "Gatefold, plays clean.",
+        "release": {
+          "id": "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e09",
+          "artist": "Miles Davis",
+          "title": "Kind of Blue",
+          "releaseYear": 1959,
+          "label": "Columbia",
+          "catalogNumber": "CS 8163",
+          "barcode": null,
+          "releaseDate": "1959-08-17",
+          "country": "US",
+          "format": "12\" Vinyl",
+          "packaging": null,
+          "releaseStatus": "Official",
+          "catalogReference": {
+            "provider": "musicbrainz",
+            "releaseGroupId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "releaseId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "sourceUrl": "https://musicbrainz.org/release/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "fetchedAt": "2026-09-12T09:30:00.000Z"
+          }
+        },
+        "copyCount": 1,
+        "copies": [
+          {
+            "id": "6f7a8b9c-0d1e-4f2a-9b4c-5d6e7f8a9b12",
+            "mediaCondition": "very_good_plus",
+            "sleeveCondition": "very_good",
+            "location": "Shelf A",
+            "notes": null,
+            "acquiredAt": "2026-08-30",
+            "createdAt": "2026-09-12T09:30:05.000Z",
+            "updatedAt": "2026-09-12T09:30:05.000Z"
+          }
+        ],
+        "confirmedFromScanId": "7a8b9c0d-1e2f-4a3b-8c5d-6e7f8a9b0c13",
+        "coverImage": {
+          "scanId": "7a8b9c0d-1e2f-4a3b-8c5d-6e7f8a9b0c13",
+          "imageId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d14"
+        },
+        "favoritedAt": null,
+        "createdAt": "2026-09-12T09:30:05.000Z",
+        "updatedAt": "2026-09-12T09:30:05.000Z"
+      }
+    ],
+    "nextCursor": "eyJ2IjoxLCJzb3J0IjoicmVjZW50Iiwia2V5IjpbIjIwMjYtMDktMTJUMDk6MzA6MDUuMDAwMDAwWiIsIjVlNmY3YThiLTljMGQtNGUxZi04YTNiLTRjNWQ2ZTdmOGExMSJdfQ"
+  }
+}

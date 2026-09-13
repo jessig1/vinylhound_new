@@ -172,7 +172,11 @@ export function errorResponse(error: unknown, requestId: string) {
         ? 404
         : error.code === "quota_exceeded"
           ? 429
-          : 409;
+          : // A page cursor the server cannot read is a malformed request,
+            // not a state conflict: the caller starts over from page one.
+            error.code === "invalid_cursor"
+            ? 400
+            : 409;
     return createError(status, error.code, error.message, requestId);
   }
   if (isCatalogProviderError(error)) {

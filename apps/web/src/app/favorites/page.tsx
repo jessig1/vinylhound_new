@@ -7,7 +7,7 @@ import { listFavoriteLibraryItemsForUser } from "@vinylhound/database";
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
-import { LibraryAlbumCard } from "../library-album-card";
+import { LibraryGrid } from "../library-grid";
 import { firstValue } from "../library-page";
 import { LibraryToolbar } from "../library-toolbar";
 import { SavedMusicNav } from "../saved-music-nav";
@@ -55,14 +55,14 @@ export default async function FavoritesPage({
       <LibraryToolbar query={query ?? ""} sort={sort} title="Your favorites" />
 
       {favorites.items.length ? (
-        <section
-          className="album-grid album-grid--library"
-          aria-label="Your favorites"
-        >
-          {favorites.items.map((item) => (
-            <LibraryAlbumCard item={item} key={item.id} />
-          ))}
-        </section>
+        <LibraryGrid
+          initialCursor={favorites.nextCursor}
+          initialItems={favorites.items}
+          key={`favorites:${query ?? ""}:${sort}`}
+          label="Your favorites"
+          query={query ?? ""}
+          sort={sort}
+        />
       ) : (
         <section className="library-empty">
           <span className="upload-card__icon">

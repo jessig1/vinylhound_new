@@ -22,13 +22,16 @@ export default async function DashboardPage() {
   const [scans, collection, wishlist, collectionCount, wishlistCount] =
     await Promise.all([
       listScansForUser(context.database.db, { userId, limit: 3 }),
+      // The previews show three records each; the counts come separately.
       listLibraryItemsForUser(context.database.db, {
         userId,
         list: "collection",
+        limit: 3,
       }),
       listLibraryItemsForUser(context.database.db, {
         userId,
         list: "wishlist",
+        limit: 3,
       }),
       countLibraryItemsForUser(context.database.db, {
         userId,
@@ -106,14 +109,14 @@ export default async function DashboardPage() {
 
       <div className="dashboard-columns">
         <LibraryPreview
-          albums={collection.items.slice(0, 3)}
+          albums={collection.items}
           count={collectionCount}
           emptyMessage="Records you add to your shelf will appear here."
           href="/collection"
           title="Collection"
         />
         <LibraryPreview
-          albums={wishlist.items.slice(0, 3)}
+          albums={wishlist.items}
           count={wishlistCount}
           emptyMessage="Records you save for later will appear here."
           href="/wishlist"

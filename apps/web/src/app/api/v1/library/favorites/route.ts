@@ -14,7 +14,8 @@ export const dynamic = "force-dynamic";
 /**
  * Favorites across both lists. A favorite is an attribute of a saved record,
  * not a third list (ADR-0021), so there is no `list` parameter; toggling is
- * `PATCH /library/{itemId}` with `{ favorite }`.
+ * `PATCH /library/{itemId}` with `{ favorite }`. Paged like `GET /library`
+ * (ADR-0023).
  */
 export const GET = withRoute(
   "library.favorites",
@@ -23,12 +24,14 @@ export const GET = withRoute(
     const parsedQuery = FavoritesQuerySchema.safeParse({
       q: searchParams.get("q") ?? undefined,
       sort: searchParams.get("sort") ?? undefined,
+      cursor: searchParams.get("cursor") ?? undefined,
+      limit: searchParams.get("limit") ?? undefined,
     });
     if (!parsedQuery.success) {
       throw new HttpError(
         400,
         "invalid_query",
-        "sort (if provided) must be recent, artist, or title.",
+        "sort (if provided) must be recent, artist, or title; limit (if provided) must be an integer from 1 to 100.",
       );
     }
     const context = getServerContext();
@@ -37,6 +40,8 @@ export const GET = withRoute(
       userId,
       query: parsedQuery.data.q,
       sort: parsedQuery.data.sort,
+      cursor: parsedQuery.data.cursor,
+      limit: parsedQuery.data.limit,
     });
     const response = jsonResponse(
       GetFavoritesResponseSchema.parse(result),

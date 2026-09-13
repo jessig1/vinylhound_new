@@ -140,7 +140,12 @@ capture-session flow on `/scan`, the `/scans/batch/{batchId}` progress page,
 and cross-navigation back from a batch item's review page), upload of a
 misnamed cover file (content sniffing), identification review, refresh
 recovery, confirmation into the collection, the collection listing, and
-pre-upload rejection messaging for non-image and HEIC files. The suite also
+pre-upload rejection messaging for non-image and HEIC files.
+`library-pagination.e2e.ts` seeds one record more than a page holds through
+`POST /library` and proves the searched wishlist page shows one page then
+appends the rest on "Show more", that the API pages by cursor with every
+record once and in order, that an unreadable cursor is `400 invalid_cursor`,
+and that the CSV export carries every match. The suite also
 runs axe-core WCAG 2 A/AA checks against dashboard, scan, collection, wishlist,
 and account routes, and verifies a keyboard-visible focus target.
 

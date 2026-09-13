@@ -212,14 +212,14 @@ returns `not_found`.
 
 ## Library endpoints
 
-| Method | Path                                                  | Purpose                         |
-| ------ | ----------------------------------------------------- | ------------------------------- |
-| GET    | `/library?list={collection,wishlist}&q=&sort=`        | Read the selected list          |
-| POST   | `/library`                                            | Save a release, no scan         |
-| GET    | `/library/favorites?q=&sort=`                         | Read favorites from both lists  |
-| GET    | `/library/export?list={collection,wishlist}&q=&sort=` | Download the list as CSV        |
-| PATCH  | `/library/{itemId}`                                   | Change list, notes, or favorite |
-| DELETE | `/library/{itemId}`                                   | Remove a list item              |
+| Method | Path                                                          | Purpose                         |
+| ------ | ------------------------------------------------------------- | ------------------------------- |
+| GET    | `/library?list={collection,wishlist}&q=&sort=&cursor=&limit=` | Read one page of the list       |
+| POST   | `/library`                                                    | Save a release, no scan         |
+| GET    | `/library/favorites?q=&sort=&cursor=&limit=`                  | Read one page of favorites      |
+| GET    | `/library/export?list={collection,wishlist}&q=&sort=`         | Download every match as CSV     |
+| PATCH  | `/library/{itemId}`                                           | Change list, notes, or favorite |
+| DELETE | `/library/{itemId}`                                           | Remove a list item              |
 
 A release now enters the library through two doors. `POST
 /scans/{scanId}/confirm` remains the atomic scan-confirmation command.
@@ -239,21 +239,35 @@ second pressing adds it through per-copy editing, where that intent is
 explicit.
 
 `q` (optional, trimmed, max 200 characters) matches against the displayed
-artist or title, case-insensitively; `sort` (optional, default `recent`) is
-`recent` (most recently added/updated first, the existing behavior),
-`artist`, or `title`. Both parameters are validated together with `list` by
-`LibraryQuerySchema`. Matching and sorting operate on the same effective
-artist/title the response already returns — which prefers a scan
-confirmation's corrected values over the shared album row — rather than the
-raw `albums`/`releases` columns, so a corrected identification is searchable
-immediately (ADR-0012). Both apply after the existing 100-item fetch, so a
-search narrows within that page rather than searching beyond it.
+artist or title, case-insensitively, as a substring (`%` and `_` are literal);
+`sort` (optional, default `recent`) is `recent` (most recently added/updated
+first), `artist`, or `title`. Matching and sorting operate on the same
+effective artist/title the response returns — a scan confirmation's
+corrected values over the shared album row — evaluated in SQL over the whole
+library, so a corrected identification is searchable immediately and a
+search sees every saved record (ADR-0012, ADR-0023).
+
+**Pages** (ADR-0023). A list read returns one page of at most `limit`
+records (optional, 1–100, default 50) and a `nextCursor`: an opaque string
+that continues the same `list`/`q`/`sort` from where the page ended, or
+`null` on the last page. Pass it back as `cursor` to read the next page.
+Pages are keyset continuations on a total order — `recent` on
+`(updated_at, id)` (favorites: `(favorited_at, id)`), `artist` on
+`(artist, title, id)`, `title` on `(title, artist, id)`, names compared
+lower-cased — so a record added or edited between two requests never
+appears twice or displaces one that was already in sequence. A cursor the
+server cannot read, or one issued under a different `sort`, is
+`400 invalid_cursor`; start again from the first page. All parameters are
+validated together with `list` by `LibraryQuerySchema` (favorites:
+`FavoritesQuerySchema`, no `list`).
 
 `GET /library/export` accepts the same `list`/`q`/`sort` parameters and
 returns `text/csv` with a `content-disposition: attachment` header
-(`{list}.csv`) instead of JSON. Columns: `artist`, `title`, `releaseYear`,
-`label`, `format`, `country`, `list`, `notes`, `copyCount`. It does not
-include per-copy detail or catalog references.
+(`{list}.csv`) instead of JSON. It streams **every** matching record in the
+requested order, following the same pages the list read would, not only the
+first page; `cursor` and `limit` are ignored. Columns: `artist`, `title`,
+`releaseYear`, `label`, `format`, `country`, `list`, `notes`, `copyCount`.
+It does not include per-copy detail or catalog references.
 
 `PATCH /library/{itemId}` accepts `{ list?, notes?, favorite? }` (at least
 one field required) and does not touch copies. Moving a wishlist item to `collection`
@@ -285,9 +299,10 @@ list: a record in either list can be one. `PATCH /library/{itemId}` with
 idempotent by identity — re-favoriting keeps the original `favoritedAt`, and
 clearing an unfavorited record is a no-op. `GET /library/favorites` returns
 favorites from both lists as the same `LibraryItemResult` shape, most
-recently favorited first under `sort=recent`, with the same `q`/`sort`
-handling as `GET /library` and no `list` parameter. Removing a record removes
-its favorite with it; nothing can be favorited that is not saved.
+recently favorited first under `sort=recent`, with the same `q`/`sort`/
+`cursor`/`limit` handling as `GET /library` and no `list` parameter.
+Removing a record removes its favorite with it; nothing can be favorited
+that is not saved.
 
 ## Playlist endpoints
 

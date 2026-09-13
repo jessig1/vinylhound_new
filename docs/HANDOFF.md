@@ -15,6 +15,77 @@ the log.
 
 ## Current state — verified 2026-09-12
 
+- **P3.4 Task 1 (full-library search, keyset pagination, complete export)
+  is complete (ADR-0023) and uncommitted in the working tree for maintainer
+  review.** Every list read — `GET /library`, `GET /library/favorites`, the
+  CSV export, and the collection/wishlist/favorites pages — used to fetch
+  the first 100 rows and filter/sort in application code (ADR-0012, because
+  the displayed artist/title prefers `scan_confirmations.reviewed_release`
+  over the shared `albums` row). Now `library-repository.ts` filters with
+  `ILIKE` (wildcards escaped) and orders in SQL on
+  `coalesce(reviewed_release->>'artist', albums.artist)` (same for title),
+  so a corrected identification is still matched and ordered by the name the
+  user confirmed, but over the whole library. Pages are keyset
+  continuations on a total order: `recent` on `(updated_at, id)` desc
+  (favorites: `(favorited_at, id)`), `artist` on `(lower(artist),
+lower(title), id)` asc, `title` the pair reversed; `LIMIT n+1` detects the
+  next page. The cursor (`library-cursor.ts`) is base64url over
+  `{ v: 1, sort, key }`, bound to its sort and key length, not signed (a
+  caller can only page their own rows); the timestamp travels at microsecond
+  precision via `to_char(... 'HH24:MI:SS.US"Z"')` because a JS `Date` would
+  land a continuation early or late when rows share a millisecond. Bad
+  cursor → `DatabaseCommandError("invalid_cursor")` → `400` (new code,
+  mapped in `server/http.ts`). Contract: `LibraryQuerySchema`/
+  `FavoritesQuerySchema` gained optional `cursor` (≤ 1024) and `limit`
+  (1–100, default 50, `z.coerce` from query text); both responses gained
+  required `nextCursor: string | null`. `iterateLibraryItemsForUser` walks
+  every page and `GET /library/export` streams them as CSV through a
+  `ReadableStream` (first page read before the response starts so a DB
+  failure is still an error status); CSV formatting moved to
+  `server/library-csv.ts` with unit tests. Pages render the first page
+  server-side and the new client `LibraryGrid` ("Show more") appends the
+  next through `parseResponse`, keyed on list/q/sort; the dashboard asks
+  for `limit: 3`. Because the browser now parses the two list responses
+  they are in `BROWSER_PARSED_RESPONSES` with fixtures
+  (`GetLibraryResponseSchema/first-page-with-continuation`,
+  `GetFavoritesResponseSchema/last-page`), and `LibraryQuerySchema` has
+  `before-pagination` (list/q/sort only, a bookmarked export link) and
+  `continuation-page` fixtures. No pre-change response fixture was frozen:
+  nothing in the browser parsed either response before. `check:contracts`
+  reports exactly one forward gap, by design: a replica still on the
+  previous version rejects `cursor`/`limit` (`400 invalid_query`) during a
+  rolling deploy, so a "Show more" click in that window shows the retry
+  message. `packages/database` now depends on `zod` (for the cursor
+  payload schema; `package-lock.json` updated by `npm install`).
+  Verified: `lint`, `typecheck`, unit `test` (311/311, +28), `npm run
+test:database` (49/49, +9 in a new "full-library search and keyset
+  pagination" block over a dedicated 120-record account: a match at row
+  110, `%`/`_` literal, a confirmation whose album row was rewritten
+  underneath still matched/ordered by the confirmed name, every sort walked
+  at page size 7 with no duplicates or gaps and the exact expected order, a
+  `recent` walk with an insert and an edit between pages, identical `recent`
+  walks at page sizes 7/13/100, favorites paged by `favorited_at`, export
+  iteration yielding [100, 20], cursor rejection, and no cross-user leak),
+  `check:contracts` against `origin/main`, `npm run build` (Turbopack, worker
+  emit free of `.ts`), `npx prettier --check . --end-of-line auto`, and
+  `npm run test:e2e` (27/28 on mobile Chromium: the new
+  `library-pagination.e2e.ts` passes — 51 seeded records, one page then
+  "Show more", axe clean, API walk at `limit=20` → [20, 20, 11] in title
+  order, `invalid_cursor` → 400, export of all 51 — and the one failure is
+  the pre-existing `live-camera` flake). `next-env.d.ts` reverted after the
+  e2e run. The `package-lock.json` diff is the two `zod` lines for
+  `packages/database` plus this npm version's normalization (it drops
+  `"peer": true` on packages that are also direct dependencies) — npm's own
+  output, not hand-edited. `docs/API.md`, `docs/TESTING.md`,
+  `docs/ROADMAP.md` (Task 1 checked), ADR-0012's status line and the ADR
+  index are updated. Known
+  consequences, all in ADR-0023: name sorts now order by the database
+  collation's `lower()` with a total tiebreak rather than JS
+  `localeCompare`; a record edited mid-walk under `recent` moves above the
+  cursor (inherent to paging on a mutable key); no index backs the
+  expression ordering — revisit with a materialized effective-name pair if
+  P3.5's baseline shows it.
+
 - **P3.3 Task 4 (version conventions and compatibility fixtures) is
   complete (ADR-0022), committed as `e9945b0` and pushed. P3.3 is closed
   with it. CI on `main` is green as of `3dd7f81`, including the new
@@ -1442,20 +1513,29 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-12 (second session): P3.3 is complete — Tasks 1–4 are
-checked in `docs/ROADMAP.md`. Task 4's work (ADR-0022) is committed as
-`e9945b0`, pushed, and CI is green on `main` at `3dd7f81` — the contract
-compatibility step has now run for real against a base with the event
-registry, so the forward check is live for every change from here on.**
+**Current, 2026-09-12 (third session): P3.4 Task 1 is done (ADR-0023) and
+checked in `docs/ROADMAP.md`; the work is uncommitted in the working tree
+and should be reviewed and committed first** (`git status` lists it: the
+repository, cursor codec, contracts, four fixtures, three routes, the
+`LibraryGrid` client component, CSS, docs, and `package-lock.json`). Run
+`npm run check`, `npm run check:contracts` (expect the one reported
+`LibraryQuerySchema/continuation-page` rejection — intended, see ADR-0023)
+and `npm run test:database` to confirm before committing.
 
-Next per `docs/ROADMAP.md`'s sequence is **P3.4 (complete the everyday
-experience)**, starting with Task 1 (full-library search instead of the
-first-100-rows read, which the favorites page inherits). Consult the roadmap
-before choosing; P3.5 follows product-scope stabilization, and Phase 4
-extraction now has its compatibility foundation (topic grammar, registry,
-producer/consumer split, fixture directory, CI check) — P4.2's versioned
-confirmation event should be registered through `defineEventContract` and
-get an `events/<topic>/` fixture in the same change.
+Next per `docs/ROADMAP.md` is **P3.4 Task 2** (per-copy editing completion:
+explicit last-copy rules, deletion, ownership, idempotency, mutation
+feedback, audit history preserved) or **Task 3** (batch review navigation
+with P3.1 image reads, empty/loading/error states, accessibility, the
+privacy notice); both have partial progress recorded in the roadmap note
+under P3.4. Task 4 (five-participant test) comes last. When Task 2 touches
+`UpdateLibraryCopySchema`/`DeleteLibraryCopyResponseSchema`, follow the
+fixture rule below. The library grid now reads through `parseResponse` and
+the pages accept `q`/`sort` in the URL and page in place; a favorites
+filter on the list pages, "save and add to playlist", and drag-and-drop
+remain deliberately undone (P3.3 Task 2 note). P3.5 follows product-scope
+stabilization; P4.2's versioned confirmation event should be registered
+through `defineEventContract` and get an `events/<topic>/` fixture in the
+same change.
 
 When the next contract change lands, follow `packages/contracts/fixtures/
 README.md`: freeze the pre-change shape if no fixture covers it, add the new
@@ -1473,8 +1553,14 @@ per-process; `e2e/live-camera.e2e.ts`'s first test is a pre-existing flake.
 
 ---
 
-**Superseded, kept for the Spotify decision it records.** The resume point
-that follows was written before Task 4.
+**Superseded, kept for the Spotify decision it records.** The resume points
+that follow were written before P3.3 Task 4 and P3.4 Task 1.
+
+**2026-09-12 (second session): P3.3 is complete — Tasks 1–4 are checked in
+`docs/ROADMAP.md`. Task 4's work (ADR-0022) is committed as `e9945b0`,
+pushed, and CI is green on `main` at `3dd7f81`.** Next was P3.4 Task 1
+(full-library search instead of the first-100-rows read, which the
+favorites page inherited) — now done, above.
 
 **2026-09-12 (first session): P3.3 Tasks 1, 2 and 3 are done. Next is P3.3 Task 4
 — explicit HTTP/event version conventions and previous-deployed-version
@@ -3410,3 +3496,33 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   while working: the Task 3 placement path had no integration test until
   this block seeded through it; and the Bash tool on this machine truncates
   very long inline commands (write scripts to a file instead).
+
+- **2026-09-12 - Claude (third session).** Completed P3.4 Task 1
+  (ADR-0023): full-library search, keyset pagination and complete export.
+  Read the read path first: every list read fetched 100 rows and
+  filtered/sorted in JS because the displayed artist/title prefers the
+  confirmation's `reviewed_release` over `albums` (ADR-0012). Kept that
+  rule and moved it into SQL — `ILIKE` and `ORDER BY` on
+  `coalesce(reviewed_release->>'artist', albums.artist)` — rather than
+  adding a materialized column and migration, since a user's rows are
+  already reached through the `user_id` index. Pages are keyset
+  continuations on a total order ending in `id`; the cursor is opaque
+  base64url `{ v, sort, key }`, sort-bound, shape-validated, unsigned, and
+  carries the timestamp at microsecond precision (a JS `Date` would
+  misplace continuations when rows share a millisecond — the integration
+  suite's tight seed loop exercises exactly that). Contracts first
+  (`cursor`/`limit` in, `nextCursor` out), then `library-cursor.ts`, the
+  repository, `iterateLibraryItemsForUser` + a streaming CSV export with
+  `server/library-csv.ts` split out and unit-tested, the `LibraryGrid`
+  client "Show more" through `parseResponse`, `invalid_cursor` → 400, the
+  dashboard on `limit: 3`, four fixtures (two responses now browser-parsed,
+  the query shape before and after), a 9-test integration block over a
+  dedicated 120-record account, and an e2e that seeds 51 records and walks
+  page, API and export. `check:contracts` reports the one intended forward
+  gap (a previous-version replica rejects `cursor`/`limit` during a
+  rolling deploy). Verified lint, typecheck, unit (311/311), database
+  integration (49/49), build, prettier with `--end-of-line auto`, and e2e
+  (27/28, `live-camera` flake only). Wrote ADR-0023, marked ADR-0012's
+  tradeoff superseded, updated `docs/API.md`, `docs/TESTING.md`, the
+  roadmap (Task 1 checked, partial-progress note trimmed) and this file.
+  Left uncommitted for maintainer review, per convention.

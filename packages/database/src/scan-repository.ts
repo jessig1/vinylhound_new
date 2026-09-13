@@ -41,6 +41,7 @@ import {
 export type DatabaseCommandErrorCode =
   | "batch_scan_limit"
   | "conflict"
+  | "invalid_cursor"
   | "invalid_state"
   | "not_found"
   | "playlist_entry_limit"

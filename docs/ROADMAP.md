@@ -621,9 +621,10 @@ the compatibility foundation separately before Phase 4 extraction.
 
 ### P3.4 — Complete the everyday experience
 
-- [ ] **Task 1.** Replace search within the first 100 fetched rows with full-library search,
+- [x] **Task 1.** Replace search within the first 100 fetched rows with full-library search,
       stable cursor pagination/sorting, and export of all matching records.
       Preserve effective user-corrected artist/title matching and ordering.
+      (ADR-0023, 2026-09-12)
 - [ ] **Task 2.** Complete per-copy condition/location/notes/acquisition-date editing and
       deletion, ownership checks, idempotency, and mutation feedback. Define
       last-copy rules explicitly and preserve confirmation audit history.
@@ -638,10 +639,10 @@ library item detail page at `/library/{itemId}` now carries per-copy editing
 with real mutation feedback, notes editing, and removal (part of Task 2), and
 P3.1 image reads are wired into scan history and both library grids (part of
 Task 3). Still outstanding for these tasks: batch review navigation, explicit
-last-copy rules, full-library search and pagination, Playwright coverage for
-the new page, and the participant testing. Saved records became removable via
-ADR-0018, which supersedes ADR-0011's delete restriction while preserving
-confirmation audit history.
+last-copy rules, Playwright coverage for the new page, and the participant
+testing. Saved records became removable via ADR-0018, which supersedes
+ADR-0011's delete restriction while preserving confirmation audit history.
+Task 1 (2026-09-12) closed full-library search and pagination.
 
 Exit: tests find/export records beyond a 100-item fixture, paginate without
 duplicates, and verify copy mutations/audit protection. All four browser profiles

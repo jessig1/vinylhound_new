@@ -1,6 +1,8 @@
 # ADR-0012: Library search/sort/export match the displayed release, not the stored album row
 
-- Status: accepted
+- Status: accepted; the "after the 100-row fetch" tradeoff is superseded by
+  [ADR-0023](0023-full-library-search-and-keyset-pagination.md), which moves
+  the same effective-release matching and ordering into SQL and pages it
 - Date: 2026-08-31
 
 ## Context

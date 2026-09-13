@@ -37,6 +37,8 @@ const BROWSER_PARSED_RESPONSES = [
   "DiscoveryArtistDetailResponseSchema",
   "DiscoverySearchResponseSchema",
   "GetBatchResponseSchema",
+  "GetFavoritesResponseSchema",
+  "GetLibraryResponseSchema",
   "GetQuotaHeadroomResponseSchema",
   "GetScanResponseSchema",
   "PlaceLibraryReleaseResponseSchema",

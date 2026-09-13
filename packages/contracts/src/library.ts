@@ -9,8 +9,19 @@ export const LibrarySortSchema = z.enum(["recent", "artist", "title"]);
 export type LibrarySort = z.infer<typeof LibrarySortSchema>;
 
 export const LIBRARY_SEARCH_QUERY_MAX_LENGTH = 200;
+export const LIBRARY_PAGE_SIZE_DEFAULT = 50;
+export const LIBRARY_PAGE_SIZE_MAX = 100;
+export const LIBRARY_CURSOR_MAX_LENGTH = 1024;
 
-/** Search and sort parameters shared by every read of saved records. */
+/**
+ * Search, sort and page parameters shared by every read of saved records.
+ * Reads are keyset-paginated (ADR-0023): `cursor` is the opaque `nextCursor`
+ * a previous page returned under the same `sort`, and a page never overlaps
+ * or skips the one before it however the library changes in between. The
+ * server rejects a cursor it cannot read, or one issued under a different
+ * sort, with `400 invalid_cursor`. `limit` is read from a query string, so
+ * it is coerced from its text form.
+ */
 const LibraryFilterShape = {
   q: z
     .string()
@@ -19,6 +30,13 @@ const LibraryFilterShape = {
     .optional()
     .transform((value) => (value ? value : undefined)),
   sort: LibrarySortSchema.optional().default("recent"),
+  cursor: z.string().min(1).max(LIBRARY_CURSOR_MAX_LENGTH).optional(),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(LIBRARY_PAGE_SIZE_MAX)
+    .default(LIBRARY_PAGE_SIZE_DEFAULT),
 };
 
 export const LibraryQuerySchema = z
@@ -237,16 +255,24 @@ export const LibraryItemResultSchema = z
   })
   .strict();
 
+/**
+ * One page of saved records. `nextCursor` continues the same `list`/`q`/
+ * `sort` from where this page ended and is null on the last page; a caller
+ * that wants every matching record follows it until then, which is what
+ * `GET /library/export` does server-side.
+ */
 export const GetLibraryResponseSchema = z
   .object({
     list: LibraryListSchema,
-    items: z.array(LibraryItemResultSchema).max(100),
+    items: z.array(LibraryItemResultSchema).max(LIBRARY_PAGE_SIZE_MAX),
+    nextCursor: z.string().nullable(),
   })
   .strict();
 
 export const GetFavoritesResponseSchema = z
   .object({
-    items: z.array(LibraryItemResultSchema).max(100),
+    items: z.array(LibraryItemResultSchema).max(LIBRARY_PAGE_SIZE_MAX),
+    nextCursor: z.string().nullable(),
   })
   .strict();
 

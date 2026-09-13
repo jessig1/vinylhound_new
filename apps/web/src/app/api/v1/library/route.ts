@@ -16,18 +16,25 @@ import { HttpError, jsonResponse, parseJson, withRoute } from "@/server/http";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * One page of the selected list. `cursor` continues from a previous page's
+ * `nextCursor` under the same `sort` (ADR-0023); a cursor the server cannot
+ * read is `400 invalid_cursor`.
+ */
 export const GET = withRoute("library.list", async (request, { requestId }) => {
   const searchParams = new URL(request.url).searchParams;
   const parsedQuery = LibraryQuerySchema.safeParse({
     list: searchParams.get("list"),
     q: searchParams.get("q") ?? undefined,
     sort: searchParams.get("sort") ?? undefined,
+    cursor: searchParams.get("cursor") ?? undefined,
+    limit: searchParams.get("limit") ?? undefined,
   });
   if (!parsedQuery.success) {
     throw new HttpError(
       400,
       "invalid_query",
-      "The list query parameter must be collection or wishlist, and sort (if provided) must be recent, artist, or title.",
+      "The list query parameter must be collection or wishlist; sort (if provided) must be recent, artist, or title; limit (if provided) must be an integer from 1 to 100.",
     );
   }
   const context = getServerContext();
@@ -37,6 +44,8 @@ export const GET = withRoute("library.list", async (request, { requestId }) => {
     list: parsedQuery.data.list,
     query: parsedQuery.data.q,
     sort: parsedQuery.data.sort,
+    cursor: parsedQuery.data.cursor,
+    limit: parsedQuery.data.limit,
   });
   const response = jsonResponse(
     GetLibraryResponseSchema.parse(result),

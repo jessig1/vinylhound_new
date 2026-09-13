@@ -1,19 +1,34 @@
-import { and, asc, count, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNotNull,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
-import type {
-  GetFavoritesResponse,
-  GetLibraryResponse,
-  LibraryCoverImage,
-  LibraryItemResult,
-  LibraryCopy,
-  LibraryList,
-  LibrarySort,
-  UpdateLibraryCopy,
-  UpdateLibraryItem,
+import {
+  LIBRARY_PAGE_SIZE_DEFAULT,
+  LIBRARY_PAGE_SIZE_MAX,
+  type GetFavoritesResponse,
+  type GetLibraryResponse,
+  type LibraryCoverImage,
+  type LibraryItemResult,
+  type LibraryCopy,
+  type LibraryList,
+  type LibrarySort,
+  type UpdateLibraryCopy,
+  type UpdateLibraryItem,
 } from "@vinylhound/contracts";
 import { resolveFavoritedAt } from "@vinylhound/domain";
 
 import type { Database } from "./database.ts";
+import { decodeLibraryCursor, encodeLibraryCursor } from "./library-cursor.ts";
 import { DatabaseCommandError } from "./scan-repository.ts";
 import {
   albums,
@@ -24,54 +39,116 @@ import {
   scanConfirmations,
 } from "./schema.ts";
 
+export interface LibraryPageInput {
+  userId: string;
+  query?: string;
+  sort?: LibrarySort;
+  /** A `nextCursor` from the previous page under the same sort. */
+  cursor?: string;
+  limit?: number;
+}
+
+/**
+ * One page of a list, searched, sorted and paged in SQL over the whole
+ * library rather than within a first fetch of 100 rows (ADR-0023). Search
+ * and the name sorts use the same effective artist/title the response
+ * shows — a scan confirmation's corrected values over the shared album row
+ * (ADR-0012) — so a corrected identification is found and ordered by the
+ * name the user confirmed. Pages are keyset continuations: `nextCursor`
+ * names the last row's sort key, and the next page starts strictly after
+ * it, so an insert or edit between two requests never duplicates or skips a
+ * row that was already there.
+ */
 export async function listLibraryItemsForUser(
-  db: Database,
-  input: {
-    userId: string;
-    list: LibraryList;
-    query?: string;
-    sort?: LibrarySort;
-  },
+  db: Pick<Database, "select">,
+  input: LibraryPageInput & { list: LibraryList },
 ): Promise<GetLibraryResponse> {
-  const rows = await selectLibraryItemRows(db, {
-    userId: input.userId,
-    list: input.list,
+  const page = await selectLibraryItemPage(db, {
+    ...input,
+    recency: "updatedAt",
   });
-  const items = sortLibraryItems(
-    filterLibraryItemsByQuery(
-      await attachCopiesAndSerialize(db, input.userId, rows),
-      input.query,
-    ),
-    input.sort ?? "recent",
-  );
-  return { list: input.list, items };
+  return { list: input.list, ...page };
 }
 
 /**
  * Favorites across both lists, most recently favorited first. A favorite is
  * an attribute of the saved record rather than a third list (ADR-0021), so
- * this is the same row shape `GET /library` returns, filtered.
+ * this is the same row shape `GET /library` returns, filtered and paged the
+ * same way; only `recent` orders by when the record was starred instead of
+ * when it last changed.
  */
 export async function listFavoriteLibraryItemsForUser(
-  db: Database,
-  input: {
-    userId: string;
-    query?: string;
-    sort?: LibrarySort;
-  },
+  db: Pick<Database, "select">,
+  input: LibraryPageInput,
 ): Promise<GetFavoritesResponse> {
+  return selectLibraryItemPage(db, {
+    ...input,
+    favoritesOnly: true,
+    recency: "favoritedAt",
+  });
+}
+
+/**
+ * Every record a list read would return, in the same order, one page at a
+ * time — what an export walks so it covers all matching records rather than
+ * a first page. Callers that only need the first page use
+ * `listLibraryItemsForUser` directly.
+ */
+export async function* iterateLibraryItemsForUser(
+  db: Pick<Database, "select">,
+  input: Omit<LibraryPageInput, "cursor" | "limit"> & {
+    list: LibraryList;
+    pageSize?: number;
+  },
+): AsyncGenerator<LibraryItemResult[], void, undefined> {
+  let cursor: string | undefined;
+  do {
+    const page = await listLibraryItemsForUser(db, {
+      ...input,
+      cursor,
+      limit: input.pageSize ?? LIBRARY_PAGE_SIZE_MAX,
+    });
+    if (page.items.length) yield page.items;
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+}
+
+async function selectLibraryItemPage(
+  db: Pick<Database, "select">,
+  input: LibraryPageInput & {
+    list?: LibraryList;
+    favoritesOnly?: boolean;
+    recency: "updatedAt" | "favoritedAt";
+  },
+): Promise<{ items: LibraryItemResult[]; nextCursor: string | null }> {
+  const sort = input.sort ?? "recent";
+  const limit = Math.min(
+    Math.max(input.limit ?? LIBRARY_PAGE_SIZE_DEFAULT, 1),
+    LIBRARY_PAGE_SIZE_MAX,
+  );
+  const ordering = libraryOrdering(sort, input.recency);
   const rows = await selectLibraryItemRows(db, {
     userId: input.userId,
-    favoritesOnly: true,
+    list: input.list,
+    favoritesOnly: input.favoritesOnly,
+    query: input.query,
+    orderBy: ordering.orderBy,
+    after: input.cursor
+      ? ordering.after(decodeLibraryCursor(input.cursor, sort))
+      : undefined,
+    // One row past the page says whether a next page exists without a
+    // count query; it is dropped before serialization.
+    limit: limit + 1,
   });
-  const items = sortLibraryItems(
-    filterLibraryItemsByQuery(
-      await attachCopiesAndSerialize(db, input.userId, rows),
-      input.query,
-    ),
-    input.sort ?? "recent",
-  );
-  return { items };
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const items = await attachCopiesAndSerialize(db, input.userId, pageRows);
+  const last = pageRows[pageRows.length - 1];
+  return {
+    items,
+    nextCursor:
+      hasMore && last ? encodeLibraryCursor(sort, ordering.key(last)) : null,
+  };
 }
 
 /**
@@ -87,6 +164,7 @@ export async function getLibraryItemsByIdForUser(
   const rows = await selectLibraryItemRows(db, {
     userId: input.userId,
     itemIds: input.itemIds,
+    limit: input.itemIds.length,
   });
   const items = await attachCopiesAndSerialize(db, input.userId, rows);
   return new Map(items.map((item) => [item.id, item]));
@@ -99,6 +177,7 @@ export async function getLibraryItemForUser(
   const rows = await selectLibraryItemRows(db, {
     userId: input.userId,
     itemId: input.itemId,
+    limit: 1,
   });
   const [item] = await attachCopiesAndSerialize(db, input.userId, rows);
   if (!item) {
@@ -123,33 +202,83 @@ export async function countLibraryItemsForUser(
   return result?.value ?? 0;
 }
 
-export function filterLibraryItemsByQuery(
-  items: LibraryItemResult[],
-  query: string | undefined,
-): LibraryItemResult[] {
-  if (!query) return items;
-  const needle = query.trim().toLowerCase();
-  if (!needle) return items;
-  return items.filter(
-    (item) =>
-      item.release.artist.toLowerCase().includes(needle) ||
-      item.release.title.toLowerCase().includes(needle),
-  );
+/**
+ * The artist and title a library item displays: the values the user
+ * confirmed on the scan it came from when there was one, else the shared
+ * album row (ADR-0012). Search and the name sorts evaluate these in SQL so
+ * they see every row; `attachCopiesAndSerialize` resolves the same
+ * preference in application code for the fields it returns.
+ */
+const effectiveArtist = sql<string>`coalesce(${scanConfirmations.reviewedRelease}->>'artist', ${albums.artist})`;
+const effectiveTitle = sql<string>`coalesce(${scanConfirmations.reviewedRelease}->>'title', ${albums.title})`;
+const sortArtist = sql<string>`lower(${effectiveArtist})`;
+const sortTitle = sql<string>`lower(${effectiveTitle})`;
+
+/**
+ * A timestamp rendered for a cursor at its full microsecond precision, so a
+ * continuation compares against exactly the instant the row holds. A JS
+ * `Date` keeps milliseconds only and would start the next page a few rows
+ * early or late whenever two rows share one.
+ */
+function cursorTimestamp(
+  column: typeof libraryItems.updatedAt | typeof libraryItems.favoritedAt,
+) {
+  return sql<string>`to_char(${column} at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 }
 
-function sortLibraryItems(
-  items: LibraryItemResult[],
+type LibraryRow = Awaited<ReturnType<typeof selectLibraryItemRows>>[number];
+
+/**
+ * How one sort orders rows and continues from a cursor. `orderBy` and
+ * `after` name the same expressions in the same order with the id last, so
+ * the ordering is total and the keyset comparison is exact: `recent`
+ * continues from `(stamp, id)`, a name sort from `(first, second, id)`.
+ */
+function libraryOrdering(
   sort: LibrarySort,
-): LibraryItemResult[] {
-  if (sort === "recent") return items;
-  const sorted = [...items];
-  sorted.sort((a, b) => {
-    const key = sort === "artist" ? "artist" : "title";
-    return a.release[key].localeCompare(b.release[key], undefined, {
-      sensitivity: "base",
-    });
-  });
-  return sorted;
+  recency: "updatedAt" | "favoritedAt",
+): {
+  orderBy: SQL[];
+  key: (row: LibraryRow) => string[];
+  after: (key: string[]) => SQL;
+} {
+  const id = libraryItems.id;
+  if (sort === "recent") {
+    const favorited = recency === "favoritedAt";
+    const stamp = favorited ? libraryItems.favoritedAt : libraryItems.updatedAt;
+    return {
+      orderBy: [desc(stamp), desc(id)],
+      key: (row) => [
+        (favorited ? row.favoritedAtCursor : row.updatedAtCursor) ?? "",
+        row.id,
+      ],
+      after: ([stampKey, idKey]) =>
+        sql`(${stamp}, ${id}) < (${stampKey}::timestamptz, ${idKey}::uuid)`,
+    };
+  }
+  const [first, second] =
+    sort === "artist" ? [sortArtist, sortTitle] : [sortTitle, sortArtist];
+  return {
+    orderBy: [asc(first), asc(second), asc(id)],
+    key: (row) =>
+      sort === "artist"
+        ? [row.sortArtist, row.sortTitle, row.id]
+        : [row.sortTitle, row.sortArtist, row.id],
+    after: ([firstKey, secondKey, idKey]) =>
+      sql`(${first}, ${second}, ${id}) > (${firstKey}, ${secondKey}, ${idKey}::uuid)`,
+  };
+}
+
+/**
+ * Case-insensitive substring match on the effective artist or title. The
+ * query is a bound parameter with LIKE's wildcards escaped, so "100%" finds
+ * that text rather than everything.
+ */
+function searchCondition(query: string | undefined): SQL | undefined {
+  const needle = query?.trim();
+  if (!needle) return undefined;
+  const pattern = `%${needle.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
+  return or(ilike(effectiveArtist, pattern), ilike(effectiveTitle, pattern));
 }
 
 export async function updateLibraryItem(
@@ -220,6 +349,7 @@ export async function updateLibraryItem(
     const rows = await selectLibraryItemRows(transaction, {
       userId: input.userId,
       itemId: item.id,
+      limit: 1,
     });
     const [result] = await attachCopiesAndSerialize(
       transaction,
@@ -359,10 +489,13 @@ async function selectLibraryItemRows(
     itemId?: string;
     itemIds?: readonly string[];
     favoritesOnly?: boolean;
+    query?: string;
+    orderBy?: SQL[];
+    /** Keyset condition from `libraryOrdering().after`. */
+    after?: SQL;
+    limit: number;
   },
 ) {
-  // A by-ID read returns exactly the rows asked for; every other read is
-  // still the first page of 100 (full pagination is roadmap P3.4).
   return db
     .select({
       id: libraryItems.id,
@@ -372,6 +505,14 @@ async function selectLibraryItemRows(
       favoritedAt: libraryItems.favoritedAt,
       createdAt: libraryItems.createdAt,
       updatedAt: libraryItems.updatedAt,
+      // Sort keys as the database orders them, so a cursor built from the
+      // last row of a page compares exactly on the next request.
+      updatedAtCursor: cursorTimestamp(libraryItems.updatedAt),
+      favoritedAtCursor: sql<
+        string | null
+      >`case when ${libraryItems.favoritedAt} is null then null else ${cursorTimestamp(libraryItems.favoritedAt)} end`,
+      sortArtist,
+      sortTitle,
       releaseId: releases.id,
       artist: albums.artist,
       title: albums.title,
@@ -402,14 +543,17 @@ async function selectLibraryItemRows(
           ? inArray(libraryItems.id, [...input.itemIds])
           : undefined,
         input.favoritesOnly ? isNotNull(libraryItems.favoritedAt) : undefined,
+        searchCondition(input.query),
+        input.after,
       ),
     )
     .orderBy(
-      input.favoritesOnly
-        ? desc(libraryItems.favoritedAt)
-        : desc(libraryItems.updatedAt),
+      ...(input.orderBy ?? [
+        desc(libraryItems.updatedAt),
+        desc(libraryItems.id),
+      ]),
     )
-    .limit(input.itemIds ? Math.max(input.itemIds.length, 1) : 100);
+    .limit(Math.max(input.limit, 1));
 }
 
 async function attachCopiesAndSerialize(

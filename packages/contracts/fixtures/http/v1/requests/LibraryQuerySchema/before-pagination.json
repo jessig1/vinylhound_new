@@ -1,0 +1,9 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Query parameters GET /library and GET /library/export accepted from b2d87d6 (2026-08-31) until P3.4 Task 1 (ADR-0023, 2026-09-12) added cursor and limit: a bookmarked or stale-tab export link carries only list, q and sort, and must keep working with the page size defaulted.",
+  "value": {
+    "list": "collection",
+    "q": "coltrane",
+    "sort": "artist"
+  }
+}

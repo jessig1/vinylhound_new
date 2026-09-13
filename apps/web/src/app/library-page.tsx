@@ -7,7 +7,7 @@ import { listLibraryItemsForUser } from "@vinylhound/database";
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
 
-import { LibraryAlbumCard } from "./library-album-card";
+import { LibraryGrid } from "./library-grid";
 import { LibraryToolbar } from "./library-toolbar";
 import { SavedMusicNav } from "./saved-music-nav";
 import { Icon } from "./ui";
@@ -60,11 +60,15 @@ export async function LibraryPage({
       />
 
       {library.items.length ? (
-        <section className="album-grid album-grid--library" aria-label={title}>
-          {library.items.map((item) => (
-            <LibraryAlbumCard item={item} key={item.id} />
-          ))}
-        </section>
+        <LibraryGrid
+          initialCursor={library.nextCursor}
+          initialItems={library.items}
+          key={`${list}:${query ?? ""}:${sort}`}
+          label={title}
+          list={list}
+          query={query ?? ""}
+          sort={sort}
+        />
       ) : (
         <section className="library-empty">
           <span className="upload-card__icon">

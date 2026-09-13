@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   ConfirmScanRequestSchema,
   FavoritesQuerySchema,
+  GetLibraryResponseSchema,
+  LIBRARY_CURSOR_MAX_LENGTH,
+  LIBRARY_PAGE_SIZE_DEFAULT,
+  LIBRARY_PAGE_SIZE_MAX,
   LibraryQuerySchema,
   UpdateLibraryItemSchema,
 } from "./library.ts";
@@ -128,12 +132,47 @@ describe("ConfirmScanRequestSchema", () => {
 });
 
 describe("LibraryQuerySchema", () => {
-  it("defaults sort to recent and omits an empty query", () => {
+  it("defaults sort to recent, the page size to the default, and omits an empty query", () => {
     expect(LibraryQuerySchema.parse({ list: "collection" })).toEqual({
       list: "collection",
       q: undefined,
       sort: "recent",
+      cursor: undefined,
+      limit: LIBRARY_PAGE_SIZE_DEFAULT,
     });
+  });
+
+  it("reads the page size from its query-string text and bounds it", () => {
+    expect(
+      LibraryQuerySchema.parse({ list: "collection", limit: "25" }),
+    ).toMatchObject({ limit: 25 });
+    expect(
+      LibraryQuerySchema.parse({
+        list: "collection",
+        limit: String(LIBRARY_PAGE_SIZE_MAX),
+      }),
+    ).toMatchObject({ limit: LIBRARY_PAGE_SIZE_MAX });
+    for (const limit of ["0", "-1", "2.5", "abc", "", "101"]) {
+      expect(
+        LibraryQuerySchema.safeParse({ list: "collection", limit }).success,
+        `limit=${JSON.stringify(limit)}`,
+      ).toBe(false);
+    }
+  });
+
+  it("passes a continuation cursor through opaquely", () => {
+    expect(
+      LibraryQuerySchema.parse({ list: "wishlist", cursor: "eyJ2IjoxfQ" }),
+    ).toMatchObject({ cursor: "eyJ2IjoxfQ" });
+    expect(
+      LibraryQuerySchema.safeParse({ list: "wishlist", cursor: "" }).success,
+    ).toBe(false);
+    expect(
+      LibraryQuerySchema.safeParse({
+        list: "wishlist",
+        cursor: "c".repeat(LIBRARY_CURSOR_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
   });
 
   it("trims a provided query and accepts a sort value", () => {
@@ -163,13 +202,39 @@ describe("FavoritesQuerySchema", () => {
   it("takes search and sort but no list, since favorites span both", () => {
     expect(
       FavoritesQuerySchema.parse({ q: "  miles ", sort: "artist" }),
-    ).toEqual({ q: "miles", sort: "artist" });
+    ).toEqual({ q: "miles", sort: "artist", limit: LIBRARY_PAGE_SIZE_DEFAULT });
     expect(FavoritesQuerySchema.parse({})).toEqual({
       q: undefined,
       sort: "recent",
+      cursor: undefined,
+      limit: LIBRARY_PAGE_SIZE_DEFAULT,
     });
     expect(FavoritesQuerySchema.safeParse({ list: "collection" }).success).toBe(
       false,
     );
+  });
+});
+
+describe("GetLibraryResponseSchema", () => {
+  it("carries a continuation cursor that is null on the last page", () => {
+    expect(
+      GetLibraryResponseSchema.parse({
+        list: "collection",
+        items: [],
+        nextCursor: null,
+      }),
+    ).toEqual({ list: "collection", items: [], nextCursor: null });
+    expect(
+      GetLibraryResponseSchema.parse({
+        list: "collection",
+        items: [],
+        nextCursor: "eyJ2IjoxfQ",
+      }).nextCursor,
+    ).toBe("eyJ2IjoxfQ");
+    // A page without the cursor field is not what this version emits.
+    expect(
+      GetLibraryResponseSchema.safeParse({ list: "collection", items: [] })
+        .success,
+    ).toBe(false);
   });
 });

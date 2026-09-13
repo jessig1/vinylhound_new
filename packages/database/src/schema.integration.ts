@@ -8,6 +8,7 @@ import {
   MAX_PLAYLISTS_PER_USER,
   MAX_SCANS_PER_BATCH,
   type AnalyzeScanJob,
+  type LibraryItemResult,
 } from "@vinylhound/contracts";
 
 import { createDatabase } from "./database.ts";
@@ -29,6 +30,7 @@ import {
 import {
   deleteLibraryItem,
   getLibraryItemForUser,
+  iterateLibraryItemsForUser,
   listFavoriteLibraryItemsForUser,
   listLibraryItemsForUser,
   updateLibraryItem,
@@ -2264,6 +2266,409 @@ describe("favorites and playlists", () => {
     await database.db.delete(users).where(eq(users.id, ownerId));
     await database.db.delete(albums).where(eq(albums.id, album!.id));
   });
+});
+
+describe("full-library search and keyset pagination", () => {
+  // A dedicated account, so the counts below are exact whatever the other
+  // blocks in this file have saved for the shared user.
+  let ownerId: string;
+  const artists = ["Alice Coltrane", "Bill Evans", "Charles Mingus"] as const;
+  const seeded: { id: string; artist: string; title: string }[] = [];
+  const SEED_COUNT = 120;
+
+  async function place(input: {
+    artist: string;
+    title: string;
+    list?: "collection" | "wishlist";
+    ownerId?: string;
+  }) {
+    const { record } = await placeLibraryRelease(database.db, {
+      userId: input.ownerId ?? ownerId,
+      placement: {
+        artist: input.artist,
+        title: input.title,
+        releaseYear: null,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: input.list ?? "wishlist",
+        notes: null,
+        copy: null,
+      },
+    });
+    return record.libraryItem.id;
+  }
+
+  /** Walks every page under one sort and returns the ids in page order. */
+  async function walk(input: {
+    list?: "collection" | "wishlist";
+    query?: string;
+    sort?: "recent" | "artist" | "title";
+    limit: number;
+    favorites?: boolean;
+  }) {
+    const ids: string[] = [];
+    const pages: number[] = [];
+    const items: LibraryItemResult[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = input.favorites
+        ? await listFavoriteLibraryItemsForUser(database.db, {
+            userId: ownerId,
+            query: input.query,
+            sort: input.sort,
+            cursor,
+            limit: input.limit,
+          })
+        : await listLibraryItemsForUser(database.db, {
+            userId: ownerId,
+            list: input.list ?? "wishlist",
+            query: input.query,
+            sort: input.sort,
+            cursor,
+            limit: input.limit,
+          });
+      expect(page.items.length).toBeLessThanOrEqual(input.limit);
+      pages.push(page.items.length);
+      ids.push(...page.items.map((item) => item.id));
+      items.push(...page.items);
+      cursor = page.nextCursor ?? undefined;
+      // A continuation is only ever handed out for a full page.
+      if (cursor) expect(page.items.length).toBe(input.limit);
+    } while (cursor);
+    return { ids, pages, items };
+  }
+
+  beforeAll(async () => {
+    const [account] = await database.db.insert(users).values({}).returning();
+    ownerId = account!.id;
+    // Titles are zero-padded so their alphabetical order is the seed order
+    // and the 110th record is provably past the old 100-row fetch.
+    for (let index = 0; index < SEED_COUNT; index += 1) {
+      const artist = artists[index % artists.length]!;
+      const title = `Pagination Record ${String(index).padStart(3, "0")}`;
+      seeded.push({ id: await place({ artist, title }), artist, title });
+    }
+  }, 60_000);
+
+  it("finds a record past the first hundred rows and reports no false matches", async () => {
+    const target = seeded[110]!;
+    const found = await listLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "wishlist",
+      query: "pagination RECORD 110",
+    });
+    expect(found.items.map((item) => item.id)).toEqual([target.id]);
+    expect(found.nextCursor).toBeNull();
+
+    // LIKE wildcards in the query are literal characters, not patterns.
+    const wildcard = await listLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "wishlist",
+      query: "Pagination Record 1__",
+    });
+    expect(wildcard.items).toEqual([]);
+    const percent = await listLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "wishlist",
+      query: "%",
+    });
+    expect(percent.items).toEqual([]);
+  });
+
+  it("matches and orders by the confirmed artist and title, not the album row", async () => {
+    // A scan confirmation carries corrected values that differ from the
+    // shared album row the release was resolved to; search and sort must
+    // follow what the user confirmed and sees (ADR-0012).
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId: ownerId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `pagination-confirm-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    const confirmed = await confirmScan(database.db, {
+      userId: ownerId,
+      scanId: scan!.id,
+      idempotencyKey: `pagination-confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: "Aardvark Corrected Artist",
+        title: "Zz Corrected Title",
+        releaseYear: null,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "wishlist",
+        notes: null,
+        copy: null,
+      },
+    });
+    const itemId = confirmed.record.libraryItem.id;
+    // Change the album row underneath so it no longer matches what was
+    // confirmed — the equivalent of another user's copy sharing the row.
+    const [release] = await database.db
+      .select({ albumId: releases.albumId })
+      .from(releases)
+      .where(eq(releases.id, confirmed.record.release.id));
+    await database.db
+      .update(albums)
+      .set({ artist: "Zzz Album Row Artist", title: "Album Row Title" })
+      .where(eq(albums.id, release!.albumId));
+
+    const byConfirmed = await listLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "wishlist",
+      query: "aardvark corrected",
+    });
+    expect(byConfirmed.items.map((item) => item.id)).toEqual([itemId]);
+    expect(byConfirmed.items[0]!.release.artist).toBe(
+      "Aardvark Corrected Artist",
+    );
+    const byAlbumRow = await listLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "wishlist",
+      query: "album row",
+    });
+    expect(byAlbumRow.items).toEqual([]);
+
+    // Sorted by artist the corrected name comes first of everything; sorted
+    // by title it comes last — the album row's values place it nowhere near.
+    const byArtist = await walk({ sort: "artist", limit: 100 });
+    expect(byArtist.ids[0]).toBe(itemId);
+    const byTitle = await walk({ sort: "title", limit: 100 });
+    expect(byTitle.ids[byTitle.ids.length - 1]).toBe(itemId);
+
+    await deleteLibraryItem(database.db, { userId: ownerId, itemId });
+  });
+
+  it("pages every sort without duplicates or gaps, in a total order", async () => {
+    const expectedIds = new Set(seeded.map((record) => record.id));
+    for (const sort of ["recent", "artist", "title"] as const) {
+      const { ids, pages } = await walk({ sort, limit: 7 });
+      expect(ids, sort).toHaveLength(SEED_COUNT);
+      expect(new Set(ids).size, sort).toBe(SEED_COUNT);
+      expect(new Set(ids), sort).toEqual(expectedIds);
+      expect(pages, sort).toEqual([
+        ...Array<number>(Math.floor(SEED_COUNT / 7)).fill(7),
+        SEED_COUNT % 7,
+      ]);
+    }
+
+    // The name sorts order by lower-cased artist then title then id, and
+    // the page walk reproduces exactly that sequence.
+    const byArtist = await walk({ sort: "artist", limit: 7 });
+    const expectedByArtist = [...seeded].sort(
+      (a, b) =>
+        compare(a.artist, b.artist) ||
+        compare(a.title, b.title) ||
+        compare(a.id, b.id),
+    );
+    expect(byArtist.ids).toEqual(expectedByArtist.map((record) => record.id));
+
+    const byTitle = await walk({ sort: "title", limit: 7 });
+    const expectedByTitle = [...seeded].sort(
+      (a, b) =>
+        compare(a.title, b.title) ||
+        compare(a.artist, b.artist) ||
+        compare(a.id, b.id),
+    );
+    expect(byTitle.ids).toEqual(expectedByTitle.map((record) => record.id));
+
+    // A search walks the same way over only the matching rows.
+    const searched = await walk({
+      sort: "title",
+      limit: 7,
+      query: "bill evans",
+    });
+    expect(searched.ids).toEqual(
+      expectedByTitle
+        .filter((record) => record.artist === "Bill Evans")
+        .map((record) => record.id),
+    );
+  });
+
+  it("keeps a page sequence stable while records are added and edited between pages", async () => {
+    const firstPage = await listLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "wishlist",
+      sort: "recent",
+      limit: 10,
+    });
+    expect(firstPage.nextCursor).not.toBeNull();
+    const seen = new Set(firstPage.items.map((item) => item.id));
+
+    // A new record and an edit both move to the top of `recent`, which is
+    // before the cursor, so neither reappears on the pages still to come
+    // and nothing already there is skipped — unlike an offset.
+    const added = await place({
+      artist: "Late Addition",
+      title: "Arrived Between Pages",
+    });
+    const edited = firstPage.items[3]!.id;
+    await updateLibraryItem(database.db, {
+      userId: ownerId,
+      itemId: edited,
+      update: { notes: "edited mid-walk" },
+    });
+
+    const rest: string[] = [];
+    let cursor = firstPage.nextCursor ?? undefined;
+    while (cursor) {
+      const page = await listLibraryItemsForUser(database.db, {
+        userId: ownerId,
+        list: "wishlist",
+        sort: "recent",
+        cursor,
+        limit: 10,
+      });
+      rest.push(...page.items.map((item) => item.id));
+      cursor = page.nextCursor ?? undefined;
+    }
+    expect(rest).not.toContain(added);
+    expect(rest).not.toContain(edited);
+    for (const id of rest) expect(seen.has(id), id).toBe(false);
+    expect(seen.size + rest.length).toBe(SEED_COUNT);
+
+    await deleteLibraryItem(database.db, { userId: ownerId, itemId: added });
+  });
+
+  it("orders ties on the same millisecond deterministically", async () => {
+    // Every seeded row was inserted in one tight loop, so many share a
+    // millisecond and some may share a microsecond; the id tiebreak makes
+    // the recent walk identical whatever the page size.
+    const bySeven = await walk({ sort: "recent", limit: 7 });
+    const byThirteen = await walk({ sort: "recent", limit: 13 });
+    const byHundred = await walk({ sort: "recent", limit: 100 });
+    expect(byThirteen.ids).toEqual(bySeven.ids);
+    expect(byHundred.ids).toEqual(bySeven.ids);
+  });
+
+  it("pages favorites by when they were starred", async () => {
+    const starred = seeded.slice(20, 35);
+    for (const record of starred) {
+      await updateLibraryItem(database.db, {
+        userId: ownerId,
+        itemId: record.id,
+        update: { favorite: true },
+      });
+    }
+    const { ids, pages, items } = await walk({ favorites: true, limit: 4 });
+    expect(pages).toEqual([4, 4, 4, 3]);
+    expect(new Set(ids)).toEqual(new Set(starred.map((record) => record.id)));
+    // Most recently starred first, across page boundaries.
+    for (let index = 1; index < items.length; index += 1) {
+      expect(
+        items[index - 1]!.favoritedAt! >= items[index]!.favoritedAt!,
+        `${ids[index - 1]} before ${ids[index]}`,
+      ).toBe(true);
+    }
+
+    const searched = await walk({
+      favorites: true,
+      limit: 4,
+      query: "record 02",
+    });
+    expect(new Set(searched.ids)).toEqual(
+      new Set(
+        starred
+          .filter((record) => record.title.includes("Record 02"))
+          .map((record) => record.id),
+      ),
+    );
+  });
+
+  it("iterates every matching record for an export across page boundaries", async () => {
+    const pages: number[] = [];
+    const ids: string[] = [];
+    for await (const page of iterateLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "wishlist",
+      sort: "artist",
+      pageSize: 100,
+    })) {
+      pages.push(page.length);
+      ids.push(...page.map((item) => item.id));
+    }
+    expect(pages).toEqual([100, SEED_COUNT - 100]);
+    expect(new Set(ids).size).toBe(SEED_COUNT);
+
+    const none: unknown[] = [];
+    for await (const page of iterateLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "collection",
+    })) {
+      none.push(page);
+    }
+    expect(none).toEqual([]);
+  });
+
+  it("rejects a cursor it cannot read or that belongs to another sort", async () => {
+    const page = await listLibraryItemsForUser(database.db, {
+      userId: ownerId,
+      list: "wishlist",
+      sort: "artist",
+      limit: 5,
+    });
+    await expect(
+      listLibraryItemsForUser(database.db, {
+        userId: ownerId,
+        list: "wishlist",
+        sort: "title",
+        cursor: page.nextCursor!,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_cursor" });
+    await expect(
+      listLibraryItemsForUser(database.db, {
+        userId: ownerId,
+        list: "wishlist",
+        cursor: "not-a-cursor",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_cursor" });
+  });
+
+  it("never pages into another user's records", async () => {
+    const other = await place({
+      artist: "Alice Coltrane",
+      title: "Pagination Record 000",
+      ownerId: userId,
+    });
+    const { ids } = await walk({ sort: "artist", limit: 50 });
+    expect(ids).not.toContain(other);
+    expect(ids).toHaveLength(SEED_COUNT);
+    await deleteLibraryItem(database.db, { userId, itemId: other });
+  });
+
+  function compare(a: string, b: string) {
+    const left = a.toLowerCase();
+    const right = b.toLowerCase();
+    return left < right ? -1 : left > right ? 1 : 0;
+  }
 });
 
 describe("account export and deletion", () => {

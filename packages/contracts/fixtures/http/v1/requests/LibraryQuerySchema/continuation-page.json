@@ -1,0 +1,10 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Query parameters the collection page's \"Show more\" sends to GET /library since P3.4 Task 1 (ADR-0023, 2026-09-12): the cursor from the previous page under the same sort, and a limit as query-string text.",
+  "value": {
+    "list": "wishlist",
+    "sort": "title",
+    "cursor": "eyJ2IjoxLCJzb3J0IjoidGl0bGUiLCJrZXkiOlsiYSBsb3ZlIHN1cHJlbWUiLCJqb2huIGNvbHRyYW5lIiwiOWMwZDFlMmYtM2E0Yi00YzVkLThlN2YtOGE5YjBjMWQyZTE1Il19",
+    "limit": "50"
+  }
+}
