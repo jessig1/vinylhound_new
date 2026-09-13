@@ -8,6 +8,6 @@
     "check:compatibility": "tsx scripts/check-compatibility.ts"
   },
   "dependencies": {
-    "zod": "4.4.3"
+    "zod": "4.6.1"
   }
 }
