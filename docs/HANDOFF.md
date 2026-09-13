@@ -16,8 +16,14 @@ the log.
 ## Current state — verified 2026-09-12
 
 - **P3.3 Task 4 (version conventions and compatibility fixtures) is
-  complete (ADR-0022) and committed to `main` at the maintainer's request.
-  P3.3 is closed with it.** Versions are explicit and on the
+  complete (ADR-0022), committed as `e9945b0` and pushed. P3.3 is closed
+  with it. CI on `main` is green as of `3dd7f81`, including the new
+  contract compatibility step on a real push.** That second commit is
+  formatting only: CI had been red since `2d52fe3` (p3.3.2) because four
+  Task 2 files were never run through prettier, and the CRLF checkout
+  artifact hid those four real failures among 79 line-ending ones locally.
+  Check formatting with `npx prettier --check . --end-of-line auto` on
+  this machine — that is what CI sees. Versions are explicit and on the
   wire: `API_VERSION`/`API_BASE_PATH` name `/api/v1`; event topics are
   `<aggregate>.<action>.v<N>` with the same `N` as a literal in the payload
   (`parseEventTopic`, `defineEventContract`, `EVENT_CONTRACTS` in
@@ -1437,11 +1443,10 @@ DELETE` intended only to inspect response headers while manually verifying
      completes or is re-scoped. -->
 
 **Current, 2026-09-12 (second session): P3.3 is complete — Tasks 1–4 are
-checked in `docs/ROADMAP.md`. Task 4's work (ADR-0022) is committed and
-pushed.** On that push, the CI contract step compares against the pushed-over commit
-(`2d52fe3`), which predates the event registry, so its event fixtures report
-as "new in this version" and pass; from the next change on, the base has
-the registry and the forward check is live.
+checked in `docs/ROADMAP.md`. Task 4's work (ADR-0022) is committed as
+`e9945b0`, pushed, and CI is green on `main` at `3dd7f81` — the contract
+compatibility step has now run for real against a base with the event
+registry, so the forward check is live for every change from here on.**
 
 Next per `docs/ROADMAP.md`'s sequence is **P3.4 (complete the everyday
 experience)**, starting with Task 1 (full-library search instead of the
@@ -3370,7 +3375,10 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   `origin/main` and `8c692ed`, both failure paths in a throwaway
   worktree, and the build. Wrote the ADR, the fixtures README, and
   updated `docs/API.md`, `docs/TESTING.md`, `AGENTS.md`, and the roadmap.
-  Committed and pushed at the maintainer's request. Noted: a `git stash` round-trip
+  Committed as `e9945b0` and pushed at the maintainer's request; CI failed
+  at `npm run check` on a formatting problem that predates this work (four
+  Task 2 files, red since `2d52fe3`), fixed as `3dd7f81`, after which CI
+  passed end to end including the new contract step. Noted: a `git stash` round-trip
   on this checkout re-writes tracked files as CRLF (content unchanged);
   and `npm run build` rewrites `apps/web/next-env.d.ts` just as
   `test:e2e` does — reverted. **Follow-up, same session, on "can we fix
