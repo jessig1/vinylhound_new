@@ -6,6 +6,6 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@vinylhound/contracts": "0.1.0",
-    "zod": "4.4.3"
+    "zod": "4.6.1"
   }
 }
