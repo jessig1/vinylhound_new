@@ -15,8 +15,98 @@ the log.
 
 ## Current state — verified 2026-09-12
 
-- **P3.3 Task 2 (favorites and playlists) is complete (ADR-0021), uncommitted
-  in the working tree for the maintainer to review.** Contracts and domain
+- **P3.3 Task 4 (version conventions and compatibility fixtures) is
+  complete (ADR-0022) and committed to `main` at the maintainer's request.
+  P3.3 is closed with it.** Versions are explicit and on the
+  wire: `API_VERSION`/`API_BASE_PATH` name `/api/v1`; event topics are
+  `<aggregate>.<action>.v<N>` with the same `N` as a literal in the payload
+  (`parseEventTopic`, `defineEventContract`, `EVENT_CONTRACTS` in
+  `packages/contracts/src/{versioning,events}.ts`). **Producers are
+  strict, consumers are tolerant:** `ANALYZE_SCAN_JOB_CONTRACT` exposes
+  `producerSchema` (the strict `AnalyzeScanJobSchema`) and
+  `consumerSchema` (unknown keys stripped), and the six reader sites —
+  `scan-repository.ts` replay lookups and the outbox dispatcher,
+  `operations-repository.ts`'s republish scan, the SQS parser and the
+  BullMQ worker in `packages/queue` — now use the consumer schema. That
+  closes a real gap: all six parsed strictly, so the `correlationId`
+  addition (`66f0a78`) would have failed every new job on a worker still
+  on the previous version. The rule that follows: a field may be added
+  within a version only if optional and advisory (a previous reader
+  drops it, and the dispatcher forwards what it parsed); anything a
+  consumer must not lose is a new topic version, consumed alongside the
+  old one during the transition.
+  `packages/contracts/fixtures/` (README there) holds 35 frozen wire
+  samples — `http/v1/{requests,responses}/<Schema>/`, `events/<topic>/` —
+  reconstructed from git history with the introducing commit in each
+  `origin`: the single-scan request before batches, the upload request
+  before view types, the confirm body before pressing fields, the job
+  payload before correlation IDs, the library update before favorites, a
+  Spotify placement with `releaseId: null`, plus a current sample of every
+  response the browser parses strictly (seventeen, listed in
+  `compatibility.test.ts`), every mutating request body, both catalog
+  reads and the usage summary. **Fixtures are never edited in place**; a
+  shape that stops being supported is deleted with the decision cited.
+  Two checks: `src/compatibility/compatibility.test.ts` under `npm test`
+  (this tree accepts every fixture; responses round-trip unchanged; event
+  fixtures pass producer and consumer schemas; every registered topic and
+  browser-parsed response has a sample) and `npm run check:contracts`
+  (`packages/contracts/scripts/check-compatibility.ts`, its own CI step
+  in `ci.yml` with the PR base or pushed-over commit fetched first): it
+  extracts the base commit's `packages/contracts/src` into
+  `node_modules/.cache`, imports it with tsx, and proves the base's
+  consumers accept this tree's event payloads (enforced), reports HTTP
+  shapes the base would reject (stale-tab cost, not enforced), and fails
+  on any fixture modified in place (deletions listed). Against `8c692ed`
+  it names exactly the six request/response additions that were
+  stale-tab breaks when they shipped. `catalog.ts`, `usage.ts` and
+  `discovery.ts` gained contract tests.
+  Verified: `lint`, `typecheck`, `test` (283/283, +139 all in
+  `packages/contracts`: 66 → 205), `check:contracts` against
+  `origin/main` (passes; base predates the registry so event fixtures
+  count as new) and against `8c692ed` (reports six HTTP rejections,
+  passes), both enforced failure paths exercised in a throwaway worktree
+  (an in-place fixture edit → fail; an event fixture missing a field the
+  previous consumer requires → fail; an event fixture with an unknown
+  extra field → accepted by the previous tolerant consumer), and
+  `npm run build` (Turbopack banner, worker emit free of `.ts`
+  specifiers). `format:check` is prettier-clean on every changed file
+  with `--end-of-line auto`; the repo-wide run still fails on the
+  pre-existing CRLF checkout artifact, now also on the tracked files this
+  session touched after a `git stash` round-trip re-checked them out —
+  content-only in `git diff`, normalized on commit, do not "fix".
+  **Follow-up the same day, at the maintainer's request:** the one gap the
+  first pass left open is closed. `packages/contracts/src/tolerant.ts`
+  exports `tolerant(schema)` — the schema cloned into strip mode at every
+  depth via Zod 4's `schema.clone({...def, catchall: undefined})`, which
+  keeps refinements (checks live on the def); it walks objects, arrays,
+  optional/nullable/default/readonly/catch wrappers, unions, intersections,
+  records, maps, sets, tuples, pipes and lazies (a lazy's def caches its
+  resolved inner schema as `_cachedInner`, which the clone must drop — the
+  one non-obvious case), returns leaves as is, memoizes per schema, and
+  never mutates the original — and `parseResponse(schema, json)`. The 23
+  browser parse sites in `cover-art.tsx`, `dashboard/scan-activity-row.tsx`,
+  `discover/discovery-client.ts`, `discover/save-to-library.tsx`,
+  `scan/capture-session.tsx`, `scans/batch/[batchId]/page.tsx` and
+  `scans/[scanId]/page.tsx` now use `parseResponse`; the one client-side
+  `ConfirmScanRequestSchema.parse` (validating a body before sending) stays
+  strict on purpose, as do all server-side emits. `consumerSchema` is now
+  `tolerant(producerSchema)`. `resolveFixtureParser` judges response
+  fixtures with the namespace's own `tolerant()` when present, so the
+  forward check measures what that version's browser really did; the strict
+  round-trip test for response fixtures uses the strict export directly so
+  a stray key in a fixture is still caught. Verified: `tolerant.test.ts`
+  (7 cases, including a real four-level `GetScanResponse`), the package at
+  212/212, the throwaway-worktree probe (an added response field accepted by
+  the previous version's reader, a removed one reported), lint, typecheck,
+  the full suite, `check:contracts` against `origin/main` and `8c692ed`,
+  `build`, and `npm run test:e2e` (26/27 on mobile Chromium — every scan,
+  discover and saved-music flow now reads through `parseResponse`; the one
+  failure is the pre-existing `live-camera` flake). No `persisted` fixture family: the only JSON column typed
+  by a contract is the outbox payload, already covered as an event.
+
+- **P3.3 Task 2 (favorites and playlists) is complete (ADR-0021), committed
+  as `2d52fe3` by the maintainer; the description below is kept for the
+  rules it records.** Contracts and domain
   rules were written first, then migration 016, repositories, routes, UI,
   and tests, in that order. The two modelling decisions that shape
   everything: a **favorite is a nullable `library_items.favorited_at`**, not a
@@ -1346,7 +1436,42 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-12: P3.3 Tasks 1, 2 and 3 are done. Next is P3.3 Task 4
+**Current, 2026-09-12 (second session): P3.3 is complete — Tasks 1–4 are
+checked in `docs/ROADMAP.md`. Task 4's work (ADR-0022) is committed and
+pushed.** On that push, the CI contract step compares against the pushed-over commit
+(`2d52fe3`), which predates the event registry, so its event fixtures report
+as "new in this version" and pass; from the next change on, the base has
+the registry and the forward check is live.
+
+Next per `docs/ROADMAP.md`'s sequence is **P3.4 (complete the everyday
+experience)**, starting with Task 1 (full-library search instead of the
+first-100-rows read, which the favorites page inherits). Consult the roadmap
+before choosing; P3.5 follows product-scope stabilization, and Phase 4
+extraction now has its compatibility foundation (topic grammar, registry,
+producer/consumer split, fixture directory, CI check) — P4.2's versioned
+confirmation event should be registered through `defineEventContract` and
+get an `events/<topic>/` fixture in the same change.
+
+When the next contract change lands, follow `packages/contracts/fixtures/
+README.md`: freeze the pre-change shape if no fixture covers it, add the new
+one, never edit a fixture in place. Browser code reads responses with
+`parseResponse` (never `XResponseSchema.parse`) so an added response field
+is safe for open tabs; the seventeen response contracts listed in
+`compatibility.test.ts` are the ones where a removed, renamed or retyped
+field still costs a stale-tab reload, and `check:contracts` reports it.
+
+Still open from earlier sessions: the Spotify 403 Premium blocker (below) is
+unchanged — `/discover` shows Spotify's refusal until the app-owning account
+has Premium or the provider changes; migration 016 is applied locally only
+(staging/production need `npm run db:migrate`); the discovery cache is
+per-process; `e2e/live-camera.e2e.ts`'s first test is a pre-existing flake.
+
+---
+
+**Superseded, kept for the Spotify decision it records.** The resume point
+that follows was written before Task 4.
+
+**2026-09-12 (first session): P3.3 Tasks 1, 2 and 3 are done. Next is P3.3 Task 4
 — explicit HTTP/event version conventions and previous-deployed-version
 compatibility fixtures in `packages/contracts`, building on
 `scan.analyze.v1`, with catalog/usage coverage and a CI compatibility check.
@@ -1727,6 +1852,20 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 ## Known gaps and risks
 
+- **Nothing enforces that new browser code uses `parseResponse`.** A
+  future client component that calls `XResponseSchema.parse(await
+response.json())` directly is strict again and reintroduces the stale-tab
+  break for that response. The convention is in `AGENTS.md`, `docs/API.md`
+  and ADR-0022; a lint rule (forbid `*ResponseSchema.parse` under
+  `apps/web/src/app` outside `api/`) would make it structural and is cheap
+  to add if it ever slips.
+- **`tolerant()` and the forward check both lean on Zod 4 internals.**
+  `tolerant()` clones through `schema._zod.def` (Zod's documented
+  `clone(def)`), and `check:contracts` imports the previous commit's
+  contracts under this tree's `zod`. A zod major upgrade must re-run
+  `tolerant.test.ts` (every node kind, including the lazy `_cachedInner`
+  case) and may need the base pinned or the check skipped for that one
+  change, said so in the commit.
 - **Batch rollover is defined but not implemented.** A capture session cannot
   yet span more than one batch: `/scan` still hard-caps a session at
   `MAX_SCANS_PER_BATCH` (20) records client-side, so no session can reach the
@@ -3210,6 +3349,38 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   since that failure mode would only appear at production runtime. Full suite
   green apart from the pre-existing `live-camera` flake. Recorded the new
   import convention in `AGENTS.md` so Codex picks it up.
+
+- **2026-09-12 - Claude (second session).** Completed P3.3 Task 4
+  (ADR-0022), closing P3.3. Read the code before designing: found that all
+  six readers of the `scan.analyze.v1` payload parsed strictly, which made
+  the 2026-09-09 `correlationId` addition forward-incompatible with a
+  worker still on the previous version, and that the browser parses
+  seventeen responses strictly. Chose explicit on-the-wire versions per
+  family (`/api/v1` path; `<aggregate>.<action>.v<N>` topics with a
+  matching payload literal), a strict-producer/tolerant-consumer split
+  enforced by `defineEventContract`, and frozen fixtures as the
+  definition of compatibility: 35 samples reconstructed from git history,
+  a vitest suite for the backward direction, and a tsx script
+  (`check:contracts`, its own CI step) that extracts the base commit's
+  contracts from git and checks the forward direction — enforced for
+  events, reported for HTTP, plus a guard against editing fixtures in
+  place. Switched the six reader sites to `consumerSchema`; producers stay
+  strict. Added `usage.test.ts`, `discovery.test.ts`, and catalog cases.
+  Verified lint, typecheck, unit (283/283), the script against
+  `origin/main` and `8c692ed`, both failure paths in a throwaway
+  worktree, and the build. Wrote the ADR, the fixtures README, and
+  updated `docs/API.md`, `docs/TESTING.md`, `AGENTS.md`, and the roadmap.
+  Committed and pushed at the maintainer's request. Noted: a `git stash` round-trip
+  on this checkout re-writes tracked files as CRLF (content unchanged);
+  and `npm run build` rewrites `apps/web/next-env.d.ts` just as
+  `test:e2e` does — reverted. **Follow-up, same session, on "can we fix
+  the open issue?":** closed the strict-browser gap with a deep tolerant
+  reader (`tolerant`, `parseResponse`) in `@vinylhound/contracts`,
+  switched all 23 browser parse sites to it, made `consumerSchema` deep
+  rather than top-level, taught the forward check to judge responses with
+  the base version's own reader, and re-proved both directions in a
+  throwaway worktree. Updated ADR-0022, `docs/API.md`, the fixtures README,
+  `AGENTS.md`, the roadmap note and this file.
 
 - **2026-09-12 - Claude.** Completed P3.3 Task 2 (ADR-0021): release
   favorites and user-owned ordered playlists over saved records, contracts

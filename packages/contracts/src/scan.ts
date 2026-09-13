@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { CorrelationIdSchema } from "./common.ts";
+import { defineEventContract } from "./versioning.ts";
 import {
   ImageMimeTypeSchema,
   ImageViewTypeSchema,
@@ -104,6 +105,19 @@ export const AnalyzeScanJobSchema = z
   .strict();
 
 export const ANALYZE_SCAN_JOB = "scan.analyze.v1" as const;
+
+/**
+ * Producers (the outbox write, queue publication) validate with
+ * `AnalyzeScanJobSchema`; readers of a stored or delivered payload (the
+ * outbox dispatcher, replay lookups, the worker) parse with
+ * `consumerSchema` so a payload from the next deployed version is not
+ * rejected for carrying a field this version does not know (ADR-0022).
+ */
+export const ANALYZE_SCAN_JOB_CONTRACT = defineEventContract({
+  topic: ANALYZE_SCAN_JOB,
+  versionField: "jobVersion",
+  schema: AnalyzeScanJobSchema,
+});
 
 export type IngestionSource = z.infer<typeof IngestionSourceSchema>;
 export type ScanStatus = z.infer<typeof ScanStatusSchema>;

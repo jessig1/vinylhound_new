@@ -1,0 +1,11 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Sent since a1ac19d (2026-08-30) with the declared view of the photo; 7a111b4 (2026-08-26) made mimeType come from magic bytes rather than the file extension.",
+  "value": {
+    "filename": "back.webp",
+    "viewType": "back",
+    "mimeType": "image/webp",
+    "sizeBytes": 1048576,
+    "checksumSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+  }
+}

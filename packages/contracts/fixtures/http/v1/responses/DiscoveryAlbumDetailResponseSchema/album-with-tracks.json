@@ -1,0 +1,47 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /discovery/albums/{albumId} since f6e80e4 (2026-09-12): label and barcode are the only pressing-adjacent fields Spotify carries; catalog number, country, format and packaging are deliberately absent.",
+  "value": {
+    "album": {
+      "id": "4sb0eMpDn3upAFfyi4q2rw",
+      "title": "Kind of Blue",
+      "artist": "Miles Davis",
+      "artistIds": ["0kbYTNQb4Pb1rPbbaF0pT4"],
+      "albumType": "album",
+      "releaseDate": "1959-08-17",
+      "releaseYear": 1959,
+      "totalTracks": 5,
+      "coverUrl": "https://i.scdn.co/image/ab67616d0000b2730000000000000000deadbeef",
+      "externalUrl": "https://open.spotify.com/album/4sb0eMpDn3upAFfyi4q2rw",
+      "label": "Columbia/Legacy",
+      "barcode": "074646493526",
+      "genres": ["jazz"],
+      "tracks": [
+        {
+          "id": "1Nqv0wVvgtxqVOQpkr3cPB",
+          "title": "So What",
+          "artist": "Miles Davis",
+          "albumId": "4sb0eMpDn3upAFfyi4q2rw",
+          "albumTitle": "Kind of Blue",
+          "coverUrl": "https://i.scdn.co/image/ab67616d0000b2730000000000000000deadbeef",
+          "durationMs": 562000,
+          "trackNumber": 1,
+          "discNumber": 1,
+          "externalUrl": "https://open.spotify.com/track/1Nqv0wVvgtxqVOQpkr3cPB"
+        },
+        {
+          "id": "6Ugpb0YdPfhNTX9qUbsc0s",
+          "title": "Freddie Freeloader",
+          "artist": "Miles Davis",
+          "albumId": "4sb0eMpDn3upAFfyi4q2rw",
+          "albumTitle": "Kind of Blue",
+          "coverUrl": "https://i.scdn.co/image/ab67616d0000b2730000000000000000deadbeef",
+          "durationMs": 590000,
+          "trackNumber": 2,
+          "discNumber": 1,
+          "externalUrl": "https://open.spotify.com/track/6Ugpb0YdPfhNTX9qUbsc0s"
+        }
+      ]
+    }
+  }
+}

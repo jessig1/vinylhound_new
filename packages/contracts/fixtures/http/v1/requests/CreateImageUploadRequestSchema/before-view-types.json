@@ -1,0 +1,10 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "The single-image request shape from 8c692ed (2026-08-26) until a1ac19d (2026-08-30) added viewType, which defaults to front so this still parses.",
+  "value": {
+    "filename": "IMG_0421.jpg",
+    "mimeType": "image/jpeg",
+    "sizeBytes": 2481337,
+    "checksumSha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Every error body since 8c692ed (2026-08-26): a stable machine code, a human-readable message, and the request ID for support correlation.",
+  "value": {
+    "error": {
+      "code": "not_found",
+      "message": "Scan not found.",
+      "requestId": "9c0d1e2f-3a4b-4c5d-8e7f-8a9b0c1d2e17"
+    }
+  }
+}

@@ -10,6 +10,7 @@ import {
   ConfirmScanRequestSchema,
   ConfirmScanResponseSchema,
   GetScanResponseSchema,
+  parseResponse,
   RetryScanResponseSchema,
   SearchCatalogReleasesResponseSchema,
   type CatalogReference,
@@ -111,7 +112,7 @@ export default function ScanResultPage() {
             body.error?.message ?? "The scan could not be loaded.",
           );
         }
-        const nextScan = GetScanResponseSchema.parse(body);
+        const nextScan = parseResponse(GetScanResponseSchema, body);
         if (cancelled) return;
         setScan(nextScan);
         setLoadingError(null);
@@ -209,7 +210,7 @@ export default function ScanResultPage() {
         throw new Error(body.error?.message ?? "Catalog search failed.");
       }
       setCatalogResults(
-        SearchCatalogReleasesResponseSchema.parse(body).results,
+        parseResponse(SearchCatalogReleasesResponseSchema, body).results,
       );
       setCatalogSearched(true);
     } catch (caught) {
@@ -292,7 +293,7 @@ export default function ScanResultPage() {
           body.error?.message ?? "The confirmation could not be saved.",
         );
       }
-      const saved = ConfirmScanResponseSchema.parse(body);
+      const saved = parseResponse(ConfirmScanResponseSchema, body);
       setScan({
         ...scan,
         confirmation: {
@@ -330,7 +331,7 @@ export default function ScanResultPage() {
           body.error?.message ?? "The retry could not be started.",
         );
       }
-      RetryScanResponseSchema.parse(body);
+      parseResponse(RetryScanResponseSchema, body);
       draftInitialized.current = false;
       setScan({ ...scan, status: "queued", attempt: null, candidates: [] });
       setPollVersion((current) => current + 1);
@@ -362,7 +363,7 @@ export default function ScanResultPage() {
           body.error?.message ?? "The scan could not be canceled.",
         );
       }
-      CancelScanResponseSchema.parse(body);
+      parseResponse(CancelScanResponseSchema, body);
       setScan({ ...scan, status: "canceled" });
     } catch (caught) {
       setActionError(

@@ -17,6 +17,7 @@ OpenAI Codex is the primary implementation agent; Claude is the continuation and
 - `npm run dev` — start the web application.
 - `npm run dev:worker` — start the background worker skeleton.
 - `npm run check` — run formatting, linting, type checks, and tests.
+- `npm run check:contracts` — prove contract compatibility with the previous deployed version (needs git; CI runs it as its own step).
 - `npm run build` — build all implemented workspaces.
 
 ## Architectural boundaries
@@ -53,6 +54,7 @@ specifier will fail to resolve in `apps/web`. See ADR-0020.
 ## Change expectations
 
 - Update contracts before implementations when an API or job payload changes.
+- When a contract changes, add a fixture under `packages/contracts/fixtures/` (freeze the shape the previous version sent if none exists; add the new one) and never edit an existing fixture in place. Events are versioned by topic (`<aggregate>.<action>.v<N>`) and read with their tolerant `consumerSchema`; anything a consumer must not lose is a new topic version. Browser code reads a response with `parseResponse(schema, json)`, never `XResponseSchema.parse`, so an open tab survives an added field; the server keeps validating what it emits with the strict schema. See ADR-0022 and `docs/API.md`.
 - Add unit tests for domain rules and integration tests at provider boundaries.
 - Add representative, consented images to a private eval dataset rather than the public repository.
 - Run `npm run check` before handing off a change. Run `npm run build` for application changes.

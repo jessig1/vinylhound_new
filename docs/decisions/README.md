@@ -23,3 +23,4 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0019: Spotify is the discovery provider; MusicBrainz stays the catalog provider](0019-spotify-discovery-provider.md)
 - [ADR-0020: Relative imports name `.ts`; the web app builds with Turbopack](0020-typescript-import-specifiers-and-turbopack.md)
 - [ADR-0021: Favorites are an attribute of a saved record; playlists order saved records](0021-favorites-and-playlists.md)
+- [ADR-0022: Contract versions travel on the wire; compatibility is proved by frozen fixtures](0022-contract-versioning-and-compatibility.md)

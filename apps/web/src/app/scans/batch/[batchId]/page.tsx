@@ -8,6 +8,7 @@ import {
   CancelScanResponseSchema,
   ConfirmScanResponseSchema,
   GetBatchResponseSchema,
+  parseResponse,
   RetryScanResponseSchema,
   SignedImageReadSchema,
   type BatchScanSummary,
@@ -49,7 +50,7 @@ export default function BatchProgressPage() {
             body.error?.message ?? "The batch could not be loaded.",
           );
         }
-        const nextBatch = GetBatchResponseSchema.parse(body);
+        const nextBatch = parseResponse(GetBatchResponseSchema, body);
         if (cancelled) return;
         setBatch(nextBatch);
         setLoadingError(null);
@@ -91,7 +92,7 @@ export default function BatchProgressPage() {
           body.error?.message ?? "The scan could not be canceled.",
         );
       }
-      CancelScanResponseSchema.parse(body);
+      parseResponse(CancelScanResponseSchema, body);
       setBatch((current) => updateScanStatus(current, scanId, "canceled"));
     } catch (caught) {
       setItemErrors((current) => ({
@@ -123,7 +124,7 @@ export default function BatchProgressPage() {
           body.error?.message ?? "The retry could not be started.",
         );
       }
-      RetryScanResponseSchema.parse(body);
+      parseResponse(RetryScanResponseSchema, body);
       setBatch((current) => updateScanStatus(current, scanId, "queued"));
       setPollVersion((current) => current + 1);
     } catch (caught) {
@@ -167,7 +168,7 @@ export default function BatchProgressPage() {
       if (!response.ok) {
         throw new Error(body.error?.message ?? "The match could not be saved.");
       }
-      ConfirmScanResponseSchema.parse(body);
+      parseResponse(ConfirmScanResponseSchema, body);
       setConfirmedItems((current) => ({ ...current, [scan.scanId]: list }));
     } catch (caught) {
       setItemErrors((current) => ({
@@ -430,7 +431,7 @@ function BatchThumbnail({
     })
       .then(async (response) => {
         if (!response.ok) throw new Error("Thumbnail unavailable");
-        return SignedImageReadSchema.parse(await response.json());
+        return parseResponse(SignedImageReadSchema, await response.json());
       })
       .then((image) => {
         if (!cancelled) setUrl(image.url);

@@ -1,0 +1,7 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Sent by the favorite toggle since 2d52fe3 (2026-09-12); idempotent by identity, so a repeat is the same body.",
+  "value": {
+    "favorite": true
+  }
+}

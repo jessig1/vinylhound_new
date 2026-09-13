@@ -1,0 +1,10 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by POST /scans/{scanId}/submit since 8c692ed (2026-08-26); jobId is deterministic per attempt.",
+  "value": {
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "status": "queued",
+    "attemptNumber": 1,
+    "jobId": "scan-0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01-attempt-1"
+  }
+}

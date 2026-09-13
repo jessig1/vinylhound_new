@@ -1,0 +1,34 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Sent by scan review from b78b97d (2026-08-31) until f6e80e4 (2026-09-12) made releaseId nullable for Spotify. A MusicBrainz reference always names a pressing, so this shape is still what scan review sends.",
+  "value": {
+    "selectedCandidateId": null,
+    "artist": "Miles Davis",
+    "title": "Kind of Blue",
+    "releaseYear": 1959,
+    "label": "Columbia",
+    "catalogNumber": "CS 8163",
+    "barcode": null,
+    "releaseDate": "1959-08-17",
+    "country": "US",
+    "format": "12\" Vinyl",
+    "packaging": "Cardboard/Paper Sleeve",
+    "releaseStatus": "Official",
+    "catalogReference": {
+      "provider": "musicbrainz",
+      "releaseGroupId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d15",
+      "releaseId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d16",
+      "sourceUrl": "https://musicbrainz.org/release/8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d16",
+      "fetchedAt": "2026-09-01T14:00:00.000Z"
+    },
+    "list": "collection",
+    "notes": "Bought at the Sunday market.",
+    "copy": {
+      "mediaCondition": "very_good_plus",
+      "sleeveCondition": "very_good",
+      "location": "Shelf A",
+      "notes": null,
+      "acquiredAt": "2026-08-30"
+    }
+  }
+}

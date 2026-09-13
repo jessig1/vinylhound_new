@@ -1,0 +1,31 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /quota since c4a4ba4 (2026-09-09). Advisory: the same limits submit enforces transactionally, read without a lock.",
+  "value": {
+    "checkedAt": "2026-09-10T08:13:00.000Z",
+    "limits": {
+      "dailyAnalysisLimit": 50,
+      "activeScanLimit": 5,
+      "monthlySpendLimitUsd": 10,
+      "scanCostReservationUsd": 0.05
+    },
+    "dailyAnalysis": {
+      "used": 3,
+      "limit": 50,
+      "remaining": 47
+    },
+    "activeScans": {
+      "used": 1,
+      "limit": 5,
+      "remaining": 4
+    },
+    "monthlySpend": {
+      "used": 0.42,
+      "limit": 10,
+      "remaining": 9.58,
+      "reservedUsd": 0.05
+    },
+    "admissible": true,
+    "blockedBy": null
+  }
+}

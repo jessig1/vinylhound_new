@@ -1,0 +1,25 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /usage since 2a6f548 (2026-08-30): outcome counts and aggregated provider cost over the fixed 30-day window (ADR-0008).",
+  "value": {
+    "windowDays": 30,
+    "since": "2026-08-11T00:00:00.000Z",
+    "scanCount": 14,
+    "outcomes": {
+      "identified": 9,
+      "needsReview": 2,
+      "unresolved": 1,
+      "failed": 1,
+      "canceled": 0,
+      "inProgress": 1
+    },
+    "cost": {
+      "attemptCount": 15,
+      "totalInputTokens": 31400,
+      "totalOutputTokens": 4512,
+      "totalTokens": 35912,
+      "estimatedCostUsd": 0.1147,
+      "averageDurationMs": 11820
+    }
+  }
+}

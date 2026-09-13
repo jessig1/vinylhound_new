@@ -1,0 +1,14 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by POST /scans/{scanId}/uploads since 8c692ed (2026-08-26). The URL is a short-lived signed PUT; the client must send exactly the listed headers.",
+  "value": {
+    "imageId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c05",
+    "method": "PUT",
+    "url": "https://storage.example.test/uploads/scan/front?X-Amz-Signature=redacted",
+    "expiresAt": "2026-09-10T08:20:00.000Z",
+    "requiredHeaders": {
+      "Content-Type": "image/jpeg",
+      "x-amz-checksum-sha256": "n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg="
+    }
+  }
+}

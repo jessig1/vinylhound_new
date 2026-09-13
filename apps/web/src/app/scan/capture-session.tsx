@@ -14,6 +14,7 @@ import {
   IMAGE_SNIFF_BYTE_LENGTH,
   type ImageMimeType,
   MAX_SCANS_PER_BATCH,
+  parseResponse,
   type QuotaHeadroomReason,
   SignedUploadSchema,
   SubmitScanResponseSchema,
@@ -150,7 +151,8 @@ export function CaptureSession() {
 
   const refreshQuota = useRef(async () => {
     try {
-      const headroom = GetQuotaHeadroomResponseSchema.parse(
+      const headroom = parseResponse(
+        GetQuotaHeadroomResponseSchema,
         await requestJson("/api/v1/quota", { method: "GET" }),
       );
       setQuota(
@@ -613,7 +615,8 @@ export function CaptureSession() {
     if (rolloverRef.current) return rolloverRef.current;
     const creation = (async () => {
       const batchIndex = batchIdsRef.current.length;
-      const created = CreateBatchResponseSchema.parse(
+      const created = parseResponse(
+        CreateBatchResponseSchema,
         await requestJson("/api/v1/batches", {
           method: "POST",
           headers: {
@@ -702,7 +705,8 @@ export function CaptureSession() {
           ...item,
           batchId: recordBatchId,
         }));
-        const scan = CreateScanResponseSchema.parse(
+        const scan = parseResponse(
+          CreateScanResponseSchema,
           await requestJson("/api/v1/scans", {
             method: "POST",
             headers: {
@@ -723,7 +727,8 @@ export function CaptureSession() {
 
       if (!record.imageCompleted) {
         updateRecord(clientId, (item) => ({ ...item, stage: "preparing" }));
-        const signedUpload = SignedUploadSchema.parse(
+        const signedUpload = parseResponse(
+          SignedUploadSchema,
           await requestJson(`/api/v1/scans/${scanId}/uploads`, {
             method: "POST",
             headers: {
@@ -752,7 +757,8 @@ export function CaptureSession() {
           controller.signal,
         );
         updateRecord(clientId, (item) => ({ ...item, stage: "validating" }));
-        CompleteImageUploadResponseSchema.parse(
+        parseResponse(
+          CompleteImageUploadResponseSchema,
           await requestJson(
             `/api/v1/scans/${scanId}/uploads/${signedUpload.imageId}/complete`,
             {
@@ -770,7 +776,8 @@ export function CaptureSession() {
       }
 
       updateRecord(clientId, (item) => ({ ...item, stage: "submitting" }));
-      SubmitScanResponseSchema.parse(
+      parseResponse(
+        SubmitScanResponseSchema,
         await requestJson(`/api/v1/scans/${scanId}/submit`, {
           method: "POST",
           headers: { "idempotency-key": record.submitKey },

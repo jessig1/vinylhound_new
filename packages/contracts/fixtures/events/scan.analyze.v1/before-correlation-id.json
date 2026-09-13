@@ -1,0 +1,12 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Enqueued by every version from 8c692ed (2026-08-26) until 66f0a78 (2026-09-09) added the optional correlationId. An outbox row or queue backlog from that era can still be dispatched to any later worker, so this shape must stay accepted.",
+  "value": {
+    "jobVersion": 1,
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "userId": "5b7d9c3a-6e2f-4a1b-8c4d-7e9f0a1b2c03",
+    "attemptNumber": 1,
+    "imageIds": ["1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c05"],
+    "requestedAt": "2026-09-01T14:03:11.000Z"
+  }
+}

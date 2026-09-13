@@ -1,0 +1,9 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /scans/{scanId}/images/{imageId}/thumbnail since f5a829c (2026-08-31); isFallback marks an image completed before migration 009 that has no derived thumbnail.",
+  "value": {
+    "url": "https://storage.example.test/uploads/scan/front/thumbnail?X-Amz-Signature=redacted",
+    "expiresAt": "2026-09-10T08:14:00.000Z",
+    "isFallback": false
+  }
+}

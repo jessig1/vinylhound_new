@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CatalogLabelSchema,
   CatalogReferenceSchema,
+  CatalogReleaseCandidateSchema,
   CatalogReleaseDetailSchema,
+  CatalogTrackSchema,
   GetCatalogReleaseResponseSchema,
+  SearchCatalogReleasesResponseSchema,
 } from "./catalog.ts";
 
 const reference = {
@@ -148,5 +152,85 @@ describe("CatalogReferenceSchema across providers", () => {
         fetchedAt: "2026-08-31T12:00:00.000Z",
       }).success,
     ).toBe(true);
+  });
+});
+
+/** The search-hit shape: a detail without the group title and track listing. */
+const candidate = Object.fromEntries(
+  Object.entries(detail).filter(
+    ([key]) => key !== "releaseGroupTitle" && key !== "tracks",
+  ),
+);
+
+describe("CatalogReleaseCandidateSchema", () => {
+  it("accepts a search hit with a provider score and no track listing", () => {
+    expect(CatalogReleaseCandidateSchema.parse(candidate)).toEqual(candidate);
+  });
+
+  it("bounds the score to a percentage and the date to year precision or finer", () => {
+    expect(() =>
+      CatalogReleaseCandidateSchema.parse({ ...candidate, score: 101 }),
+    ).toThrow();
+    expect(
+      CatalogReleaseCandidateSchema.parse({ ...candidate, releaseDate: "1959" })
+        .releaseDate,
+    ).toBe("1959");
+    expect(() =>
+      CatalogReleaseCandidateSchema.parse({
+        ...candidate,
+        releaseDate: "August 1959",
+      }),
+    ).toThrow();
+  });
+
+  it("keeps a label's catalog number attached to the label that issued it", () => {
+    expect(
+      CatalogLabelSchema.parse({ name: "Columbia", catalogNumber: null }),
+    ).toEqual({ name: "Columbia", catalogNumber: null });
+    expect(() => CatalogLabelSchema.parse({ name: "" })).toThrow();
+  });
+});
+
+describe("SearchCatalogReleasesResponseSchema", () => {
+  it("returns up to 25 pressings, each with its own reference", () => {
+    const response = {
+      results: Array.from({ length: 25 }, (_, index) => ({
+        ...candidate,
+        score: 100 - index,
+      })),
+    };
+    expect(SearchCatalogReleasesResponseSchema.parse(response)).toEqual(
+      response,
+    );
+    expect(() =>
+      SearchCatalogReleasesResponseSchema.parse({
+        results: [...response.results, candidate],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts an empty result set", () => {
+    expect(SearchCatalogReleasesResponseSchema.parse({ results: [] })).toEqual({
+      results: [],
+    });
+  });
+});
+
+describe("CatalogTrackSchema", () => {
+  it("keeps vinyl-style positions as strings and allows an unknown length", () => {
+    expect(
+      CatalogTrackSchema.parse({
+        position: "B1",
+        title: "All Blues",
+        lengthMs: null,
+      }),
+    ).toEqual({ position: "B1", title: "All Blues", lengthMs: null });
+    expect(() =>
+      CatalogTrackSchema.parse({
+        position: "B1",
+        title: "All Blues",
+        lengthMs: 0,
+      }),
+    ).toThrow();
   });
 });

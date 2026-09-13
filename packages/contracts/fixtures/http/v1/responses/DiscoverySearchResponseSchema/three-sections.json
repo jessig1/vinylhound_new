@@ -1,0 +1,46 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /discovery/search since f6e80e4 (2026-09-12): artists, albums and tracks as three sections, echoing the query and type.",
+  "value": {
+    "query": "kind of blue",
+    "type": "all",
+    "artists": [
+      {
+        "id": "0kbYTNQb4Pb1rPbbaF0pT4",
+        "name": "Miles Davis",
+        "imageUrl": "https://i.scdn.co/image/ab6761610000e5eb0000000000000000deadbeef",
+        "genres": ["jazz", "cool jazz"],
+        "popularity": 72,
+        "externalUrl": "https://open.spotify.com/artist/0kbYTNQb4Pb1rPbbaF0pT4"
+      }
+    ],
+    "albums": [
+      {
+        "id": "4sb0eMpDn3upAFfyi4q2rw",
+        "title": "Kind of Blue",
+        "artist": "Miles Davis",
+        "artistIds": ["0kbYTNQb4Pb1rPbbaF0pT4"],
+        "albumType": "album",
+        "releaseDate": "1959-08-17",
+        "releaseYear": 1959,
+        "totalTracks": 5,
+        "coverUrl": "https://i.scdn.co/image/ab67616d0000b2730000000000000000deadbeef",
+        "externalUrl": "https://open.spotify.com/album/4sb0eMpDn3upAFfyi4q2rw"
+      }
+    ],
+    "tracks": [
+      {
+        "id": "1Nqv0wVvgtxqVOQpkr3cPB",
+        "title": "So What",
+        "artist": "Miles Davis",
+        "albumId": "4sb0eMpDn3upAFfyi4q2rw",
+        "albumTitle": "Kind of Blue",
+        "coverUrl": "https://i.scdn.co/image/ab67616d0000b2730000000000000000deadbeef",
+        "durationMs": 562000,
+        "trackNumber": 1,
+        "discNumber": 1,
+        "externalUrl": "https://open.spotify.com/track/1Nqv0wVvgtxqVOQpkr3cPB"
+      }
+    ]
+  }
+}

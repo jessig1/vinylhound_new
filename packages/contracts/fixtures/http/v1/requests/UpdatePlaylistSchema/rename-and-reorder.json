@@ -1,0 +1,11 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Sent by the playlist editor since 2d52fe3 (2026-09-12): entryIds must be the complete current order, so a stale order is 409 rather than a partial write.",
+  "value": {
+    "name": "Sunday mornings (vinyl)",
+    "entryIds": [
+      "7a8b9c0d-1e2f-4a3b-8c5d-6e7f8a9b0c14",
+      "7a8b9c0d-1e2f-4a3b-8c5d-6e7f8a9b0c13"
+    ]
+  }
+}

@@ -3,7 +3,12 @@
 ## Test layers
 
 - Unit: pure domain policy, normalization, state transitions, schema validation.
-- Contract: fixtures for HTTP/job schemas and backwards compatibility.
+- Contract: frozen wire fixtures under `packages/contracts/fixtures/` (ADR-0022).
+  `npm test` proves the current schemas accept every fixture a deployed
+  version sent; `npm run check:contracts` extracts the previous commit's
+  contracts from git and proves they accept this tree's event payloads, and
+  that no fixture was edited in place. The latter needs git and runs as its
+  own CI step.
 - Integration: PostgreSQL transactions/outbox, object-storage signing, queue redelivery, OpenAI adapter with recorded/synthetic responses.
 - End to end: WCAG 2 A/AA accessibility checks plus mobile and desktop browser
   flows for camera/file inputs, upload progress, refresh recovery, review, and
@@ -43,6 +48,7 @@ npm run test
 npm run typecheck
 npm run lint
 npm run check
+npm run check:contracts -- --base origin/main
 npm run build
 npm run test:integration
 npm run test:e2e

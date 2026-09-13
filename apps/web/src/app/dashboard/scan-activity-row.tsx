@@ -8,6 +8,7 @@ import {
   CancelScanResponseSchema,
   ConfirmScanResponseSchema,
   type LibraryList,
+  parseResponse,
 } from "@vinylhound/contracts";
 import type { listScansForUser } from "@vinylhound/database";
 
@@ -66,7 +67,7 @@ export function ScanActivityRow({ scan }: { scan: ScanActivitySummary }) {
       if (!response.ok) {
         throw new Error(body.error?.message ?? "The match could not be saved.");
       }
-      ConfirmScanResponseSchema.parse(body);
+      parseResponse(ConfirmScanResponseSchema, body);
       router.refresh();
     } catch (caught) {
       setError(
@@ -96,7 +97,7 @@ export function ScanActivityRow({ scan }: { scan: ScanActivitySummary }) {
           body.error?.message ?? "The scan could not be dismissed.",
         );
       }
-      CancelScanResponseSchema.parse(body);
+      parseResponse(CancelScanResponseSchema, body);
       router.refresh();
     } catch (caught) {
       setError(

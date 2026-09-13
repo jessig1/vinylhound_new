@@ -13,12 +13,47 @@ unaffected by which mode is active.
 
 ## Conventions
 
-- JSON over HTTPS under `/api/v1`.
+- JSON over HTTPS under `/api/v1` (`API_BASE_PATH` in `@vinylhound/contracts`).
 - Authenticated user identity comes from the server session, never a request body.
 - Mutating endpoints accept an `Idempotency-Key` header and return the original result on safe replay.
 - Error bodies use stable machine codes plus a human-readable message and request ID.
 - List endpoints use cursor pagination.
 - Timestamps are UTC ISO 8601 strings.
+
+## Versioning and compatibility
+
+Versions are explicit and travel on the wire (ADR-0022). The workspace
+`version` fields (`0.1.0` everywhere) are not compatibility identifiers.
+
+- **HTTP** is versioned by path: everything here is `v1`. A second major
+  version would be served under a second prefix alongside the first. Within
+  `v1`, a request body may gain optional fields and a response body may
+  gain fields. The browser reads every response through `parseResponse`
+  (the tolerant reader: known fields validated, unknown ones dropped, at
+  every depth), so a tab opened before the deploy is unaffected by a response
+  addition; the server reads requests strictly, so a request addition is
+  refused by a replica still on the previous version during a rolling deploy.
+  Removing, renaming or retyping a field, or adding a required request field,
+  breaks every client that predates it and is a decision to record, not a
+  routine change. Error codes are never reused with a different meaning.
+- **Events and jobs** are versioned by topic: `<aggregate>.<action>.v<N>`,
+  with the same `N` as a literal inside the payload (`jobVersion` for
+  `scan.analyze.v1`). `EVENT_CONTRACTS` registers every topic. Producers
+  validate with the strict `producerSchema`; readers of a stored or delivered
+  payload use the tolerant `consumerSchema` (`tolerant(producerSchema)`,
+  unknown keys stripped at every depth), so a worker still on the previous
+  version accepts what a newer web enqueues. A
+  field may therefore be added within a version only if it is optional and
+  advisory — a previous reader drops it, and the outbox dispatcher forwards
+  what it parsed. Anything a consumer must not lose is a new topic version,
+  consumed alongside the old one until no producer of the old one can be
+  deployed or rolled back to.
+- **Fixtures define "compatible".** `packages/contracts/fixtures/` holds
+  frozen samples that deployed versions actually sent (see its README).
+  `npm test` proves this tree still accepts all of them; `npm run
+check:contracts` proves the previous commit's consumers accept this tree's
+  event payloads and that no fixture was edited in place, and runs as its own
+  CI step. Change a contract, add a fixture.
 
 ## Scan endpoints
 
@@ -382,7 +417,10 @@ the reviewed attributes rather than from the provider reference.
 
 ## Queue contract
 
-The first job is `scan.analyze.v1`, defined by `AnalyzeScanJobSchema`. Payloads contain IDs, not image bytes or URLs. The worker retrieves authoritative rows and sends request-scoped Base64 image data at execution time; image bytes and data URLs are never persisted or logged.
+The first job is `scan.analyze.v1`, defined by `AnalyzeScanJobSchema` and
+registered as `ANALYZE_SCAN_JOB_CONTRACT` (see "Versioning and
+compatibility" above for the producer/consumer split and what a version
+promises). Payloads contain IDs, not image bytes or URLs. The worker retrieves authoritative rows and sends request-scoped Base64 image data at execution time; image bytes and data URLs are never persisted or logged.
 
 Job IDs should be deterministic per scan attempt. Redelivery checks the attempt state before spending provider tokens.
 

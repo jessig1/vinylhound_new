@@ -15,6 +15,7 @@ import {
 
 import {
   ANALYZE_SCAN_JOB,
+  ANALYZE_SCAN_JOB_CONTRACT,
   AnalyzeScanJobSchema,
   RETRYABLE_SCAN_STATUSES,
   MAX_SCANS_PER_BATCH,
@@ -617,7 +618,7 @@ export async function submitScan(
 
       return {
         record: scan,
-        job: AnalyzeScanJobSchema.parse(existing.payload),
+        job: ANALYZE_SCAN_JOB_CONTRACT.consumerSchema.parse(existing.payload),
         jobId: existing.idempotencyKey,
         created: false,
       } as const;
@@ -728,7 +729,9 @@ export async function retryScan(
         if (latestOutboxMessage) {
           return {
             record: scan,
-            job: AnalyzeScanJobSchema.parse(latestOutboxMessage.payload),
+            job: ANALYZE_SCAN_JOB_CONTRACT.consumerSchema.parse(
+              latestOutboxMessage.payload,
+            ),
             jobId: latestOutboxMessage.idempotencyKey,
             created: false,
           } as const;
@@ -1054,7 +1057,11 @@ export async function dispatchNextOutboxMessage(
 
     const nextAttempt = message.publishAttempts + 1;
     try {
-      const job = AnalyzeScanJobSchema.parse(message.payload);
+      // A stored payload may come from a newer web deployment; read it
+      // tolerantly so an unknown advisory field cannot poison the row.
+      const job = ANALYZE_SCAN_JOB_CONTRACT.consumerSchema.parse(
+        message.payload,
+      );
       await publish(job, message.idempotencyKey);
     } catch {
       const delayMs = Math.min(2 ** Math.min(nextAttempt, 6) * 1_000, 60_000);

@@ -1,0 +1,34 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by POST /library since f6e80e4 (2026-09-12): a wishlist placement creates no copy, and a Spotify-sourced release keeps every field the provider cannot answer null.",
+  "value": {
+    "release": {
+      "id": "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e09",
+      "artist": "Miles Davis",
+      "title": "Kind of Blue",
+      "releaseYear": 1959,
+      "label": "Columbia/Legacy",
+      "catalogNumber": null,
+      "barcode": "074646493526",
+      "releaseDate": null,
+      "country": null,
+      "format": null,
+      "packaging": null,
+      "releaseStatus": null,
+      "catalogReference": {
+        "provider": "spotify",
+        "releaseGroupId": "4sb0eMpDn3upAFfyi4q2rw",
+        "releaseId": null,
+        "sourceUrl": "https://open.spotify.com/album/4sb0eMpDn3upAFfyi4q2rw",
+        "fetchedAt": "2026-09-12T09:30:00.000Z"
+      }
+    },
+    "libraryItem": {
+      "id": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f10",
+      "list": "wishlist",
+      "notes": null,
+      "copy": null
+    },
+    "placedAt": "2026-09-12T09:30:05.000Z"
+  }
+}

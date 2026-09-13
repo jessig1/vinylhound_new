@@ -1,0 +1,48 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /catalog/releases/{releaseId} since 2ac0c86 (2026-09-11): one pressing's full detail, with releaseGroupTitle so a reissue subtitle is visible as such.",
+  "value": {
+    "release": {
+      "reference": {
+        "provider": "musicbrainz",
+        "releaseGroupId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d15",
+        "releaseId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d16",
+        "sourceUrl": "https://musicbrainz.org/release/8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d16",
+        "fetchedAt": "2026-09-01T14:00:00.000Z"
+      },
+      "artist": "Miles Davis",
+      "title": "Kind of Blue",
+      "releaseDate": "1959-08-17",
+      "country": "US",
+      "labels": [
+        {
+          "name": "Columbia",
+          "catalogNumber": "CS 8163"
+        }
+      ],
+      "barcode": null,
+      "formats": ["12\" Vinyl"],
+      "packaging": "Cardboard/Paper Sleeve",
+      "status": "Official",
+      "score": 98,
+      "releaseGroupTitle": "Kind of Blue",
+      "tracks": [
+        {
+          "position": "A1",
+          "title": "So What",
+          "lengthMs": 562000
+        },
+        {
+          "position": "A2",
+          "title": "Freddie Freeloader",
+          "lengthMs": 590000
+        },
+        {
+          "position": "B1",
+          "title": "All Blues",
+          "lengthMs": 693000
+        }
+      ]
+    }
+  }
+}

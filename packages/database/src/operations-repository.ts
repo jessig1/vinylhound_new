@@ -1,7 +1,7 @@
 import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 
 import {
-  AnalyzeScanJobSchema,
+  ANALYZE_SCAN_JOB_CONTRACT,
   type AnalyzeScanJob,
 } from "@vinylhound/contracts";
 
@@ -45,7 +45,7 @@ export async function listRepublishableAnalysisJobs(
     .limit(limit);
 
   return rows.map((row) => ({
-    job: AnalyzeScanJobSchema.parse(row.payload),
+    job: ANALYZE_SCAN_JOB_CONTRACT.consumerSchema.parse(row.payload),
     idempotencyKey: row.idempotencyKey,
   }));
 }

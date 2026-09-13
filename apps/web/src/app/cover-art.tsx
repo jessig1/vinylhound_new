@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  parseResponse,
   SignedImageReadSchema,
   type LibraryCoverImage,
 } from "@vinylhound/contracts";
@@ -55,7 +56,7 @@ export function CoverArt({
     )
       .then(async (response) => {
         if (!response.ok) throw new Error("Cover unavailable");
-        return SignedImageReadSchema.parse(await response.json());
+        return parseResponse(SignedImageReadSchema, await response.json());
       })
       .then((read) => {
         if (!cancelled) setUrl(read.url);

@@ -1,0 +1,56 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /catalog/releases since b78b97d (2026-08-31): each result is one MusicBrainz pressing, so releaseId is always present and two pressings of one album share a releaseGroupId.",
+  "value": {
+    "results": [
+      {
+        "reference": {
+          "provider": "musicbrainz",
+          "releaseGroupId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d15",
+          "releaseId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d16",
+          "sourceUrl": "https://musicbrainz.org/release/8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d16",
+          "fetchedAt": "2026-09-01T14:00:00.000Z"
+        },
+        "artist": "Miles Davis",
+        "title": "Kind of Blue",
+        "releaseDate": "1959-08-17",
+        "country": "US",
+        "labels": [
+          {
+            "name": "Columbia",
+            "catalogNumber": "CS 8163"
+          }
+        ],
+        "barcode": null,
+        "formats": ["12\" Vinyl"],
+        "packaging": "Cardboard/Paper Sleeve",
+        "status": "Official",
+        "score": 98
+      },
+      {
+        "reference": {
+          "provider": "musicbrainz",
+          "releaseGroupId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d15",
+          "releaseId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d15",
+          "sourceUrl": "https://musicbrainz.org/release/8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d15",
+          "fetchedAt": "2026-09-01T14:00:00.000Z"
+        },
+        "artist": "Miles Davis",
+        "title": "Kind of Blue (2015 Reissue)",
+        "releaseDate": "2015",
+        "country": "US",
+        "labels": [
+          {
+            "name": "Columbia",
+            "catalogNumber": "88875111921"
+          }
+        ],
+        "barcode": "888751119215",
+        "formats": ["12\" Vinyl"],
+        "packaging": "Cardboard/Paper Sleeve",
+        "status": "Official",
+        "score": 71
+      }
+    ]
+  }
+}

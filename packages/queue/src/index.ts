@@ -10,6 +10,7 @@ import {
 
 import {
   ANALYZE_SCAN_JOB,
+  ANALYZE_SCAN_JOB_CONTRACT,
   AnalyzeScanJobSchema,
   type AnalyzeScanJob,
 } from "@vinylhound/contracts";
@@ -103,7 +104,10 @@ export function parseSqsAnalyzeScanMessage(body: string) {
       typeof decoded.idempotencyKey === "string"
         ? decoded.idempotencyKey
         : undefined,
-    job: AnalyzeScanJobSchema.parse(decoded.job),
+    // Delivered payloads are read with the consumer schema (ADR-0022): a
+    // worker on the previous version must not fail a job the next version
+    // enqueued with an optional field it does not know.
+    job: ANALYZE_SCAN_JOB_CONTRACT.consumerSchema.parse(decoded.job),
   };
 }
 
@@ -197,11 +201,14 @@ export function createAnalyzeScanWorker(options: AnalyzeScanWorkerOptions) {
       if (job.name !== ANALYZE_SCAN_JOB) {
         throw new Error(`Unsupported job name: ${job.name}`);
       }
-      await options.onAnalyzeScan(AnalyzeScanJobSchema.parse(job.data), {
-        jobId: job.id!,
-        deliveryAttempt: job.attemptsMade + 1,
-        maxAttempts: job.opts.attempts ?? 1,
-      });
+      await options.onAnalyzeScan(
+        ANALYZE_SCAN_JOB_CONTRACT.consumerSchema.parse(job.data),
+        {
+          jobId: job.id!,
+          deliveryAttempt: job.attemptsMade + 1,
+          maxAttempts: job.opts.attempts ?? 1,
+        },
+      );
     },
     {
       concurrency: options.concurrency ?? 1,

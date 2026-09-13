@@ -20,4 +20,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      # Contract compatibility against the previous deployed version
+      # (ADR-0022): the PR base for pull requests, the pushed-over commit for
+      # main. `npm test` above already proved this tree accepts every frozen
+      # fixture; this step proves the base's consumers accept this tree's event
+      # payloads and that no frozen fixture was edited in place.
+      - name: Contract compatibility with the previous version
+        env:
+          CONTRACTS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "$CONTRACTS_BASE_REF" || "$CONTRACTS_BASE_REF" =~ ^0+$ ]]; then
+            echo "::notice title=Contract compatibility skipped::No previous commit to compare against (first push or forced history)."
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$CONTRACTS_BASE_REF"
+          npm run check:contracts
       - run: npm run build

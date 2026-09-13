@@ -1,0 +1,7 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "The only shape the client sent from 8c692ed (2026-08-26) until dd349a1 (2026-08-30) introduced batches; batchId did not exist and stays optional.",
+  "value": {
+    "source": "single_upload"
+  }
+}

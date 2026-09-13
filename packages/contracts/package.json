@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
+  "scripts": {
+    "check:compatibility": "tsx scripts/check-compatibility.ts"
+  },
   "dependencies": {
     "zod": "4.4.3"
   }

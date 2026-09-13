@@ -378,7 +378,7 @@ emulation does not prove real-camera behavior.
 - [x] **Task 3.** Add reviewed, idempotent catalog-to-wishlist placement without scanning,
       using existing library deduplication rules and no invented image history.
       Include new saved-music data in account export/deletion.
-- [ ] **Task 4.** Establish explicit HTTP/event version conventions and previous-deployed-
+- [x] **Task 4.** Establish explicit HTTP/event version conventions and previous-deployed-
       version compatibility fixtures in `packages/contracts`, building on
       `scan.analyze.v1`. Add catalog/usage coverage and CI compatibility checks;
       workspace version `0.1.0` is not a compatibility guarantee.
@@ -557,7 +557,61 @@ persistence → remove → rename → axe → index shows the count → delete �
 records survive; `/favorites` and `/playlists` added to the audited-route
 and 360px lists).
 
-Still open in P3.3: Task 4 (version conventions and compatibility fixtures).
+Task 4 completed 2026-09-12 (ADR-0022). Versions are explicit and travel on
+the wire: `API_VERSION`/`API_BASE_PATH` name the `/api/v1` surface, and event
+topics are `<aggregate>.<action>.v<N>` with the same `N` as a literal in the
+payload — `defineEventContract` refuses a topic and payload that disagree,
+and `EVENT_CONTRACTS` registers every topic (today: `scan.analyze.v1`).
+Workspace `0.1.0` is stated, in code and docs, to be no compatibility
+identifier. **Producers are strict, consumers are tolerant:** each event
+contract exposes `producerSchema` (strict) and `consumerSchema` (unknown keys
+stripped), and the six places that read a stored or delivered job payload —
+replay lookups, the outbox dispatcher, the republish scan, the SQS parser, the
+BullMQ worker — now use the consumer schema, closing a real gap: every one of
+them parsed strictly, so the `correlationId` addition on 2026-09-09 would have
+failed every new job on a worker still running the previous version. The rule
+that follows: a field may be added within a version only if optional and
+advisory; anything a consumer must not lose is a new topic version.
+`packages/contracts/fixtures/` holds 35 frozen wire samples reconstructed
+from git history (the single-scan request before batches, the upload request
+before view types, the confirm body before pressing fields, the job payload
+before correlation IDs, the library update before favorites, a Spotify
+placement with `releaseId: null`, plus a current sample of every response the
+browser parses strictly, every mutating request body, both catalog reads and
+the usage summary), each citing the commit that introduced its shape. Two
+checks: `compatibility.test.ts` under `npm test` proves this tree accepts
+every fixture, responses round-trip unchanged, and every registered topic
+and browser-parsed response has a sample; `npm run check:contracts` (its own
+CI step, base = PR base or the pushed-over commit) extracts the previous
+commit's `packages/contracts/src` from git and proves its consumers accept
+this tree's event payloads, fails on any fixture edited in place, and reports
+HTTP shapes the previous version would reject — run against the first
+vertical slice it names exactly the six additions that were stale-tab breaks
+when they shipped. `catalog.ts`, `usage.ts` and `discovery.ts` gained
+contract tests (+24); with the versioning helpers (+19) and the fixture
+suite (+96) the package goes from 66 to 205 tests and the repository from
+144 to 283. Verified: `lint`, `typecheck`,
+`test`, `check:contracts` against `origin/main` and against `8c692ed`, the
+in-place-edit and event-rejection failure paths in a throwaway worktree, and
+`build`. Same day, follow-up: the one gap the first pass left open — the
+browser parsed seventeen responses strictly, so an added response field
+broke a tab opened before the deploy until it reloaded — is closed.
+`tolerant(schema)` in `@vinylhound/contracts` clones a schema into strip
+mode at every depth (objects, arrays, wrappers, unions, records, tuples,
+pipes, lazies), keeping every refinement; `consumerSchema` is now
+`tolerant(producerSchema)` rather than a top-level `.strip()`, and the 23
+browser parse sites across seven client files read through
+`parseResponse(schema, json)`. The server still validates what it emits
+strictly. The forward check judges response fixtures with the base version's
+own `tolerant()` when it exports one, so a response rejection now means a
+removed, renamed or retyped field only — proved in a throwaway worktree
+where an added response field was accepted by the previous version and a
+removed one reported. `tolerant.test.ts` (+7) covers a real four-level
+response, refinements, memoization and every node kind; `npm run test:e2e`
+is 26/27 (the pre-existing `live-camera` flake), with every browser flow
+now reading through the tolerant reader.
+
+P3.3 is complete.
 
 Exit: separate browser tests complete search/details, favorite/unfavorite,
 playlist editing, and reviewed wishlist addition without a scan. Integration

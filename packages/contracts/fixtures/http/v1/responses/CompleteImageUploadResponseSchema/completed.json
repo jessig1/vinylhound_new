@@ -1,0 +1,13 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by POST /scans/{scanId}/uploads/{imageId}/complete since 8c692ed (2026-08-26); width and height describe the original as uploaded (ADR-0007 keeps the derived copies out of the contract).",
+  "value": {
+    "imageId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c05",
+    "status": "completed",
+    "viewType": "front",
+    "mimeType": "image/jpeg",
+    "sizeBytes": 2481337,
+    "width": 3024,
+    "height": 3024
+  }
+}

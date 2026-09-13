@@ -1,0 +1,75 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /scans/{scanId} since 8c692ed (2026-08-26) and extended since: batchId (dd349a1), per-image viewType (a1ac19d), outcomeReason and confirmation. This is the polling shape the scan page parses.",
+  "value": {
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "batchId": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c04",
+    "source": "batch_upload",
+    "status": "needs_review",
+    "createdAt": "2026-09-10T08:14:05.000Z",
+    "submittedAt": "2026-09-10T08:15:42.000Z",
+    "completedAt": "2026-09-10T08:15:58.000Z",
+    "images": [
+      {
+        "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c05",
+        "filename": "IMG_0421.jpg",
+        "viewType": "front",
+        "mimeType": "image/jpeg"
+      },
+      {
+        "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c06",
+        "filename": "back.webp",
+        "viewType": "back",
+        "mimeType": "image/webp"
+      }
+    ],
+    "attempt": {
+      "attemptNumber": 1,
+      "deliveryAttempt": 1,
+      "status": "succeeded",
+      "model": "gpt-5.6-sol",
+      "promptVersion": "v2",
+      "startedAt": "2026-09-10T08:15:45.000Z",
+      "completedAt": "2026-09-10T08:15:58.000Z",
+      "durationMs": 13000,
+      "usage": {
+        "inputTokens": 2210,
+        "outputTokens": 312,
+        "totalTokens": 2522
+      },
+      "error": null,
+      "observations": ["Blue-toned cover with a trumpet player in profile."],
+      "needsReviewReasons": ["Two candidates share the same artist and title."],
+      "outcomeReason": "ambiguous_candidates"
+    },
+    "candidates": [
+      {
+        "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d08",
+        "rank": 1,
+        "artist": "Miles Davis",
+        "title": "Kind of Blue",
+        "releaseYear": 1959,
+        "label": "Columbia",
+        "catalogNumber": "CS 8163",
+        "barcode": null,
+        "confidence": 0.62,
+        "evidence": ["Cover art matches the 1959 Columbia release."],
+        "warnings": ["Cover art alone does not establish the pressing."]
+      },
+      {
+        "id": "7a8b9c0d-1e2f-4a3b-8c5d-6e7f8a9b0c13",
+        "rank": 2,
+        "artist": "Miles Davis",
+        "title": "Kind of Blue",
+        "releaseYear": 1959,
+        "label": "Columbia",
+        "catalogNumber": "CL 1355",
+        "barcode": null,
+        "confidence": 0.35,
+        "evidence": ["Cover art matches the 1959 Columbia release."],
+        "warnings": ["Cover art alone does not establish the pressing."]
+      }
+    ],
+    "confirmation": null
+  }
+}

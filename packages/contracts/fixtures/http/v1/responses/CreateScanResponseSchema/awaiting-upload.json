@@ -1,0 +1,18 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by POST /scans since 8c692ed (2026-08-26); the limits block is how clients learn product limits instead of hard-coding them.",
+  "value": {
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "status": "awaiting_upload",
+    "limits": {
+      "acceptedMimeTypes": [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif"
+      ],
+      "maxImages": 12,
+      "maxImageSizeBytes": 10485760
+    }
+  }
+}

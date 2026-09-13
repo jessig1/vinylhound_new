@@ -1,0 +1,15 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "The confirm body from 8c692ed (2026-08-26): candidate, six reviewed fields, list, notes. Pressing fields (b78b97d, 2026-08-31), catalogReference and copy details all default when absent, so a client of that era still confirms.",
+  "value": {
+    "selectedCandidateId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d08",
+    "artist": "Miles Davis",
+    "title": "Kind of Blue",
+    "releaseYear": 1959,
+    "label": "Columbia",
+    "catalogNumber": "CS 8163",
+    "barcode": null,
+    "list": "collection",
+    "notes": null
+  }
+}

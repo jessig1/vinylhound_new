@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import {
+  parseResponse,
   PlaceLibraryReleaseResponseSchema,
   type DiscoveryAlbumDetail,
   type LibraryList,
@@ -70,7 +71,7 @@ export function SaveToLibrary({ album }: { album: DiscoveryAlbumDetail }) {
           body.error?.message ?? "The record could not be saved.",
         );
       }
-      const parsed = PlaceLibraryReleaseResponseSchema.parse(body);
+      const parsed = parseResponse(PlaceLibraryReleaseResponseSchema, body);
       setSaved(parsed.libraryItem.list);
     } catch (caught) {
       setError(

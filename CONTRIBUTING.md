@@ -38,6 +38,8 @@ npm run check
 npm run build
 ```
 
+Run `npm run check:contracts` for any change under `packages/contracts` — it
+compares against `origin/main` locally and is a separate CI step (ADR-0022).
 Run `npm run test:integration` for provider or persistence changes and the
 relevant Playwright command for browser-facing changes. Integration and e2e
 tests require the local Compose services.

@@ -1,0 +1,17 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Enqueued since 66f0a78 (2026-09-09) when the submitting request carried x-request-id; a second attempt over the multi-view images a1ac19d (2026-08-30) allowed. Also the sample the forward check validates against the previous version's consumer.",
+  "value": {
+    "jobVersion": 1,
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c02",
+    "userId": "5b7d9c3a-6e2f-4a1b-8c4d-7e9f0a1b2c03",
+    "attemptNumber": 2,
+    "imageIds": [
+      "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c05",
+      "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c06",
+      "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c07"
+    ],
+    "requestedAt": "2026-09-10T08:15:42.000Z",
+    "correlationId": "req_01J8ZC3T9K.retry-2"
+  }
+}

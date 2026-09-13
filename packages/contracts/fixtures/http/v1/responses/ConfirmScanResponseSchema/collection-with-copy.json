@@ -1,0 +1,45 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by POST /scans/{scanId}/confirm since 8c692ed (2026-08-26), with the pressing fields and catalogReference since b78b97d (2026-08-31) and the physical copy since ADR-0010.",
+  "value": {
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "selectedCandidateId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d08",
+    "release": {
+      "id": "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e09",
+      "artist": "Miles Davis",
+      "title": "Kind of Blue",
+      "releaseYear": 1959,
+      "label": "Columbia",
+      "catalogNumber": "CS 8163",
+      "barcode": null,
+      "releaseDate": "1959-08-17",
+      "country": "US",
+      "format": "12\" Vinyl",
+      "packaging": "Cardboard/Paper Sleeve",
+      "releaseStatus": "Official",
+      "catalogReference": {
+        "provider": "musicbrainz",
+        "releaseGroupId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d15",
+        "releaseId": "8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d16",
+        "sourceUrl": "https://musicbrainz.org/release/8b9c0d1e-2f3a-4b4c-9d6e-7f8a9b0c1d16",
+        "fetchedAt": "2026-09-01T14:00:00.000Z"
+      }
+    },
+    "libraryItem": {
+      "id": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f10",
+      "list": "collection",
+      "notes": "Bought at the Sunday market.",
+      "copy": {
+        "id": "5e6f7a8b-9c0d-4e1f-8a3b-4c5d6e7f8a11",
+        "mediaCondition": "very_good_plus",
+        "sleeveCondition": "very_good",
+        "location": "Shelf A",
+        "notes": null,
+        "acquiredAt": "2026-08-30",
+        "createdAt": "2026-09-10T08:20:00.000Z",
+        "updatedAt": "2026-09-10T08:20:00.000Z"
+      }
+    },
+    "confirmedAt": "2026-09-10T08:20:00.000Z"
+  }
+}

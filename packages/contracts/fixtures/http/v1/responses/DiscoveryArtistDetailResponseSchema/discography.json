@@ -1,0 +1,40 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by GET /discovery/artists/{artistId} since f6e80e4 (2026-09-12); the discography is collapsed per market by the adapter, one entry per album.",
+  "value": {
+    "artist": {
+      "id": "0kbYTNQb4Pb1rPbbaF0pT4",
+      "name": "Miles Davis",
+      "imageUrl": "https://i.scdn.co/image/ab6761610000e5eb0000000000000000deadbeef",
+      "genres": ["jazz", "cool jazz"],
+      "popularity": 72,
+      "externalUrl": "https://open.spotify.com/artist/0kbYTNQb4Pb1rPbbaF0pT4"
+    },
+    "albums": [
+      {
+        "id": "4sb0eMpDn3upAFfyi4q2rw",
+        "title": "Kind of Blue",
+        "artist": "Miles Davis",
+        "artistIds": ["0kbYTNQb4Pb1rPbbaF0pT4"],
+        "albumType": "album",
+        "releaseDate": "1959-08-17",
+        "releaseYear": 1959,
+        "totalTracks": 5,
+        "coverUrl": "https://i.scdn.co/image/ab67616d0000b2730000000000000000deadbeef",
+        "externalUrl": "https://open.spotify.com/album/4sb0eMpDn3upAFfyi4q2rw"
+      },
+      {
+        "id": "6Ugpb0YdPfhNTX9qUbsc0s",
+        "title": "Sketches of Spain",
+        "artist": "Miles Davis",
+        "artistIds": ["0kbYTNQb4Pb1rPbbaF0pT4"],
+        "albumType": "album",
+        "releaseDate": "1960",
+        "releaseYear": 1960,
+        "totalTracks": null,
+        "coverUrl": null,
+        "externalUrl": "https://open.spotify.com/album/6Ugpb0YdPfhNTX9qUbsc0s"
+      }
+    ]
+  }
+}

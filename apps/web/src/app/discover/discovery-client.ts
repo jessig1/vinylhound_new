@@ -7,6 +7,7 @@ import {
   type DiscoveryAlbum,
   type DiscoverySearchResponse,
   type DiscoverySearchType,
+  parseResponse,
 } from "@vinylhound/contracts";
 
 /**
@@ -43,7 +44,8 @@ export async function searchDiscovery(
     cache: "no-store",
     signal: options.signal,
   });
-  return DiscoverySearchResponseSchema.parse(
+  return parseResponse(
+    DiscoverySearchResponseSchema,
     await readJson(response, "The search could not be completed."),
   );
 }
@@ -56,7 +58,8 @@ export async function fetchDiscoveryArtist(
     `/api/v1/discovery/artists/${encodeURIComponent(artistId)}`,
     { cache: "no-store", signal: options.signal },
   );
-  return DiscoveryArtistDetailResponseSchema.parse(
+  return parseResponse(
+    DiscoveryArtistDetailResponseSchema,
     await readJson(response, "That artist could not be loaded."),
   );
 }
@@ -69,7 +72,8 @@ export async function fetchDiscoveryAlbum(
     `/api/v1/discovery/albums/${encodeURIComponent(albumId)}`,
     { cache: "no-store", signal: options.signal },
   );
-  return DiscoveryAlbumDetailResponseSchema.parse(
+  return parseResponse(
+    DiscoveryAlbumDetailResponseSchema,
     await readJson(response, "That album could not be loaded."),
   ).album;
 }

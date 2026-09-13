@@ -1,0 +1,8 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by POST /scans/{scanId}/cancel since dd349a1 (2026-08-30), including on replay of an already-canceled scan.",
+  "value": {
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "status": "canceled"
+  }
+}
