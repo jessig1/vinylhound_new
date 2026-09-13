@@ -157,8 +157,8 @@ export function PlaylistEditor({
           <p className="section-kicker">Playlist</p>
           <h1>{playlist.name}</h1>
           <p>
-            {count === 1 ? "1 record" : `${count} records`} · playlists
-            organize your saved music; they do not play it.
+            {count === 1 ? "1 record" : `${count} records`} · playlists organize
+            your saved music; they do not play it.
           </p>
         </div>
       </header>
@@ -280,8 +280,8 @@ export function PlaylistEditor({
       <section className="settings-card settings-card--danger">
         <h2>Delete this playlist</h2>
         <p>
-          Deleting a playlist removes only the list. The records in it stay
-          in your collection and wishlist.
+          Deleting a playlist removes only the list. The records in it stay in
+          your collection and wishlist.
         </p>
         {confirmingDelete ? (
           <div className="library-item-actions__confirm">

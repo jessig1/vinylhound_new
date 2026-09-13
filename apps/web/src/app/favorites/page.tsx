@@ -32,10 +32,11 @@ export default async function FavoritesPage({
 
   const context = getServerContext();
   const userId = await requireUserId(context);
-  const favorites = await listFavoriteLibraryItemsForUser(
-    context.database.db,
-    { userId, query, sort },
-  );
+  const favorites = await listFavoriteLibraryItemsForUser(context.database.db, {
+    userId,
+    query,
+    sort,
+  });
 
   return (
     <main className="content-page library-page">

@@ -43,7 +43,10 @@ export default async function PlaylistsPage() {
         <ul className="playlist-list" aria-label="Your playlists">
           {playlists.map((playlist) => (
             <li key={playlist.id}>
-              <Link className="playlist-card" href={`/playlists/${playlist.id}`}>
+              <Link
+                className="playlist-card"
+                href={`/playlists/${playlist.id}`}
+              >
                 <span className="playlist-card__icon">
                   <Icon name="playlist" size={20} />
                 </span>
@@ -69,8 +72,7 @@ export default async function PlaylistsPage() {
           </span>
           <h2>No playlists yet.</h2>
           <p>
-            Name one above, then add records to it from any saved record’s
-            page.
+            Name one above, then add records to it from any saved record’s page.
           </p>
         </section>
       )}

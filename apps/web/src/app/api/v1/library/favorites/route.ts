@@ -33,14 +33,11 @@ export const GET = withRoute(
     }
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await listFavoriteLibraryItemsForUser(
-      context.database.db,
-      {
-        userId,
-        query: parsedQuery.data.q,
-        sort: parsedQuery.data.sort,
-      },
-    );
+    const result = await listFavoriteLibraryItemsForUser(context.database.db, {
+      userId,
+      query: parsedQuery.data.q,
+      sort: parsedQuery.data.sort,
+    });
     const response = jsonResponse(
       GetFavoritesResponseSchema.parse(result),
       200,
