@@ -15,9 +15,89 @@ the log.
 
 ## Current state — verified 2026-09-12
 
+- **P3.4 Task 2 (per-copy editing completion: explicit last-copy rules,
+  copy additions, ownership, idempotency, mutation feedback, audit history)
+  is complete (ADR-0024) and uncommitted in the working tree for maintainer
+  review.** What existed: `PATCH`/`DELETE /library/{itemId}/copies/{copyId}`
+  and the detail-page editor, with no integration tests, no entry in
+  `docs/API.md` (which nonetheless said a second pressing is added "through
+  per-copy editing" — no such endpoint existed), and a dead-end after
+  removing the last copy ("Moving this record here from your wishlist adds
+  one automatically", on a record already in the collection). The decision
+  (ADR-0024): **copies are inventory, the list is intent.** Any copy can be
+  removed, the last included, and the record's list never changes with it;
+  a collection record with `copyCount: 0` is a real, explicit state
+  reachable only that way (every entry into the collection records a copy),
+  from which ADR-0011's move to the wishlist now succeeds and "I own this
+  now" records a first copy again. Auto-moving to the wishlist was rejected
+  because it would make `PATCH { list: "wishlist" }` a permanently dead
+  path (the same smell ADR-0018 removed); refusing the last removal was
+  rejected because it deadlocks with ADR-0011. New: `POST
+/library/{itemId}/copies` (`CreateLibraryCopySchema` =
+  `CopyDetailsInputSchema`, `{}` records a blank copy) **requires
+  `Idempotency-Key`** — a copy has no identity to converge on — with the key
+  and a body fingerprint stored on the copy (migration 017: two nullable
+  columns, a partial unique index per user, two checks); same key + same
+  body replays `200` with the same copy, same key + different body or record
+  is `409 conflict`, a wishlist record is `409 invalid_state`, the 101st
+  copy is `409 library_copy_limit` (new code; `MAX_LIBRARY_COPIES_PER_ITEM`
+  now names the bound `LibraryItemResultSchema.copies` always had). The
+  rule is `resolveCopyAddition` in `packages/domain` (unit-tested).
+  Ownership resolves `{ userId, itemId, copyId }` together under the parent
+  row lock; a stranger's copy or the caller's own copy through a different
+  record is `not_found` with nothing changed. Audit: removing the copy a
+  confirmation recorded clears `scan_confirmations.copy_id` (set-null FK
+  since migration 010) and nothing else — the scan still reads as confirmed
+  into the record with `libraryItem.copy: null`. UI: `library-copy-add.tsx`
+  ("Add a copy"/"Add another copy", one key per attempt held in a ref so a
+  retry replays), the copy editor settles its draft on the `PATCH` response
+  through `parseResponse` (so `LibraryCopySchema` joined
+  `BROWSER_PARSED_RESPONSES` with a fixture), a last-copy confirmation that
+  says the record stays owned, a "Copy removed." state until the refresh
+  drops the editor, the section heading "No copies recorded" with an honest
+  empty state, and — found by the new Playwright coverage — a fix to
+  `library-item-actions.tsx`, which never cleared `pending` after a
+  successful move and sat on "Moving…" disabled until a full reload; moves
+  now settle through `useTransition` with a "Moved to your …" status.
+  Fixtures: `requests/CreateLibraryCopySchema/{blank,with-details}`,
+  `responses/LibraryCopySchema/graded-copy`; `check:contracts` reports the
+  two request fixtures as new and nothing rejected. Verified: prettier
+  (`--end-of-line auto`), `lint`, `typecheck`, unit `test` (329/329, +18),
+  `npm run test:database` (55/55, +6 in "per-copy editing and last-copy
+  rules": full edit + replay + partial clear + read-back + `updatedAt`
+  bump; three ownership misses; audit survival + second delete `not_found`;
+  last copy → collection with 0 → wishlist → collection with 1; key replay
+  / body conflict / record conflict / distinct second key / other record
+  untouched; wishlist rejection + cap at 100), `check:contracts`, `npm run
+build`, and `npm run test:e2e` (29/30: the new `library-copies.e2e.ts`
+  passes both tests, `live-camera` flake only), and — after installing
+  Firefox and WebKit on this machine — `npm run test:e2e:matrix`
+  (116/120: every failure is the pre-existing `live-camera` first test,
+  once per profile; `library-copies.e2e.ts` is green on all four). The
+  matrix initially showed 108/120, and every extra failure was a spec
+  written against Chromium-only timing rather than an app defect: Firefox
+  aborts a `goto`/`reload` issued while a `router.refresh()` RSC fetch is
+  in flight (`NS_BINDING_ABORTED`; my copy spec, and three places in
+  `saved-music.e2e.ts`), mobile WebKit hydrates after Playwright's first
+  `fill` on a server-rendered input and React then adopts the DOM value as
+  its baseline so the text never becomes state and a same-text refill is
+  not a change (`discover.e2e.ts` ×4, the playlist-name fill in
+  `saved-music.e2e.ts`), and Firefox reports `2.65px` for any `3px`
+  outline (probed on a bare `<div>`), which the focus-ring assertion in
+  `accessibility.e2e.ts` matched as an exact string. Fixes are all
+  test-side: settle signals before navigating, a clear-then-refill loop
+  until a React-rendered signal appears (`search()` in the discover spec;
+  the enabled submit button for the playlist name), and the WCAG 2.4.13
+  floor (≥ 2 CSS px) instead of the literal `3px`. `docs/TESTING.md`
+  records the two engine rules. Docs: `docs/API.md` now documents all three copy endpoints and the
+  last-copy rule, ADR-0024 written and indexed, ADR-0010's status points to
+  it, `docs/TESTING.md`, `docs/ROADMAP.md` (Task 2 checked, partial-progress
+  note now Task 3/4 only). Migration 017 is applied to the local dev and
+  e2e databases only. `next-env.d.ts` reverted after the e2e run.
+
 - **P3.4 Task 1 (full-library search, keyset pagination, complete export)
-  is complete (ADR-0023) and uncommitted in the working tree for maintainer
-  review.** Every list read — `GET /library`, `GET /library/favorites`, the
+  is complete (ADR-0023), committed as `95d1f6c` and pushed; `origin/main`
+  is at that commit.** Every list read — `GET /library`, `GET /library/favorites`, the
   CSV export, and the collection/wishlist/favorites pages — used to fetch
   the first 100 rows and filter/sort in application code (ADR-0012, because
   the displayed artist/title prefers `scan_confirmations.reviewed_release`
@@ -1513,23 +1593,28 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-12 (third session): P3.4 Task 1 is done (ADR-0023) and
+**Current, 2026-09-12 (fourth session): P3.4 Task 2 is done (ADR-0024) and
 checked in `docs/ROADMAP.md`; the work is uncommitted in the working tree
-and should be reviewed and committed first** (`git status` lists it: the
-repository, cursor codec, contracts, four fixtures, three routes, the
-`LibraryGrid` client component, CSS, docs, and `package-lock.json`). Run
-`npm run check`, `npm run check:contracts` (expect the one reported
-`LibraryQuerySchema/continuation-page` rejection — intended, see ADR-0023)
-and `npm run test:database` to confirm before committing.
+and should be reviewed and committed first** (`git status` lists it:
+contracts + three fixtures, the domain rule, migration 017 + schema, the
+repository, the new `copies/route.ts`, three client components and the
+detail page, the integration and e2e specs, and docs). Run `npm run check`,
+`npm run check:contracts` (expect "2 new in this version" under requests and
+nothing rejected) and `npm run test:database` (applies migration 017 if the
+target database lacks it) to confirm before committing. Staging/production
+need `npm run db:migrate` for 016 and 017.
 
-Next per `docs/ROADMAP.md` is **P3.4 Task 2** (per-copy editing completion:
-explicit last-copy rules, deletion, ownership, idempotency, mutation
-feedback, audit history preserved) or **Task 3** (batch review navigation
-with P3.1 image reads, empty/loading/error states, accessibility, the
-privacy notice); both have partial progress recorded in the roadmap note
-under P3.4. Task 4 (five-participant test) comes last. When Task 2 touches
-`UpdateLibraryCopySchema`/`DeleteLibraryCopyResponseSchema`, follow the
-fixture rule below. The library grid now reads through `parseResponse` and
+Next per `docs/ROADMAP.md` is **P3.4 Task 3** (batch review navigation with
+P3.1 image reads — the batch page still uses its own `BatchThumbnail` —
+plus empty/loading/error states, accessible controls, and the privacy
+notice; scan history and the library grids already use `CoverArt`), then
+**Task 4** (the five-participant test, last). One follow-up from Task 2
+is deliberately not done and recorded under "Known gaps": the 100-copy cap
+is enforced on `POST .../copies` but not where a scan confirmation records
+a copy. The four-profile Playwright matrix now runs here (Firefox and
+WebKit installed) and is green apart from the `live-camera` flake; new
+specs must follow the two engine rules in `docs/TESTING.md` (settle a
+router refresh before navigating; prove React saw a fill). The library grid reads through `parseResponse` and
 the pages accept `q`/`sort` in the URL and page in place; a favorites
 filter on the list pages, "save and add to playlist", and drag-and-drop
 remain deliberately undone (P3.3 Task 2 note). P3.5 follows product-scope
@@ -1547,9 +1632,10 @@ field still costs a stale-tab reload, and `check:contracts` reports it.
 
 Still open from earlier sessions: the Spotify 403 Premium blocker (below) is
 unchanged — `/discover` shows Spotify's refusal until the app-owning account
-has Premium or the provider changes; migration 016 is applied locally only
-(staging/production need `npm run db:migrate`); the discovery cache is
-per-process; `e2e/live-camera.e2e.ts`'s first test is a pre-existing flake.
+has Premium or the provider changes; migrations 016 and 017 are applied
+locally only (staging/production need `npm run db:migrate`); the discovery
+cache is per-process; `e2e/live-camera.e2e.ts`'s first test is a
+pre-existing flake.
 
 ---
 
@@ -1943,6 +2029,20 @@ refresh()`) adds "Move to collection"/"Move to wishlist"/"Remove" buttons to
 
 ## Known gaps and risks
 
+- **The 100-copy cap is enforced only on `POST /library/{itemId}/copies`.**
+  `LibraryItemResultSchema.copies` is bounded at `MAX_LIBRARY_COPIES_PER_ITEM`
+  (100) and `createLibraryCopy` refuses the 101st with `library_copy_limit`
+  (ADR-0024), but `confirmScan` still records one copy per collection
+  confirmation (ADR-0010), so a hundred-and-first confirmed scan of one
+  release would make every list response containing that record fail
+  `LibraryItemResultSchema.parse` (500). Unlikely in practice; refusing a
+  confirmation on copy count needs its own review-page UX, so it was left.
+- **`live-camera.e2e.ts`'s first test fails on every profile, not only
+  mobile Chromium.** The four-profile matrix now runs on this machine and
+  that test is its only red (once per profile); it was red on clean `main`
+  before this session. P3.4's exit criterion names all four profiles, so
+  it needs a fix or an explicit skip with the reason before the phase
+  closes.
 - **Nothing enforces that new browser code uses `parseResponse`.** A
   future client component that calls `XResponseSchema.parse(await
 response.json())` directly is strict again and reintroduces the stale-tab
@@ -3496,6 +3596,42 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   while working: the Task 3 placement path had no integration test until
   this block seeded through it; and the Bash tool on this machine truncates
   very long inline commands (write scripts to a file instead).
+
+- **2026-09-12 - Claude (fourth session).** Completed P3.4 Task 2
+  (ADR-0024): per-copy editing completion. Read the copy path first and
+  found it half-built — routes and editor present, zero integration tests,
+  undocumented in `docs/API.md` (which promised an add-copy path that did
+  not exist), and a misleading dead-end after removing the last copy.
+  Decided the last-copy rule as "copies are inventory, the list is intent"
+  (removing the last copy keeps the record in the collection with zero
+  copies; the user moves or removes it explicitly) after ruling out
+  auto-move (kills `PATCH { list: "wishlist" }` as a live path) and
+  refusal (deadlocks with ADR-0011). Contracts first
+  (`CreateLibraryCopySchema`, `MAX_LIBRARY_COPIES_PER_ITEM`), then the
+  domain rule, migration 017 (`idempotency_key` + `request_fingerprint` on
+  `library_copies`), `createLibraryCopy` with advisory-locked key replay,
+  the `POST .../copies` route under `requireIdempotencyKey`, an `AddLibraryCopy`
+  component, the editor settling on the parsed `PATCH` response, and the
+  detail page's zero-copy state. Wrote the six-test integration block and a
+  two-test Playwright spec; the spec caught a real defect in
+  `library-item-actions.tsx` (a successful move left the buttons on
+  "Moving…" until a reload) which is fixed with `useTransition`. Verified
+  prettier, lint, typecheck, unit (329/329), database integration (55/55),
+  `check:contracts`, build, and e2e (29/30, `live-camera` flake only; the
+  new spec also green on desktop Chromium; Firefox/WebKit not installed).
+  Wrote ADR-0024, pointed ADR-0010 at it, documented all three copy
+  endpoints and the last-copy rule in `docs/API.md`, updated
+  `docs/TESTING.md`, the roadmap (Task 2 checked) and this file. Left
+  uncommitted for maintainer review, per convention. Continued 2026-09-13
+  at the maintainer's request: installed Firefox and WebKit and ran the
+  four-profile matrix. First run 108/120; the new copy spec failed on
+  Firefox because `page.reload()` raced the post-save `router.refresh()`.
+  Diagnosed each remaining failure before touching it (a bare-`<div>`
+  probe for Firefox's `2.65px` outline; a `networkidle` experiment and then
+  the value-tracker explanation for WebKit's lost fills) and fixed them
+  all test-side in `library-copies`, `saved-music`, `discover` and
+  `accessibility` specs. Final matrix 116/120, `live-camera` only.
+  Recorded the engine rules in `docs/TESTING.md`.
 
 - **2026-09-12 - Claude (third session).** Completed P3.4 Task 1
   (ADR-0023): full-library search, keyset pagination and complete export.

@@ -220,6 +220,9 @@ returns `not_found`.
 | GET    | `/library/export?list={collection,wishlist}&q=&sort=`         | Download every match as CSV     |
 | PATCH  | `/library/{itemId}`                                           | Change list, notes, or favorite |
 | DELETE | `/library/{itemId}`                                           | Remove a list item              |
+| POST   | `/library/{itemId}/copies`                                    | Record another owned copy       |
+| PATCH  | `/library/{itemId}/copies/{copyId}`                           | Edit one copy's details         |
+| DELETE | `/library/{itemId}/copies/{copyId}`                           | Remove one copy                 |
 
 A release now enters the library through two doors. `POST
 /scans/{scanId}/confirm` remains the atomic scan-confirmation command.
@@ -275,7 +278,58 @@ creates one blank copy if the item has none yet, matching confirmation's "first
 owned copy" rule. Moving a `collection` item to `wishlist` is rejected with
 `invalid_state` while it still has any copies, so a copy is never silently
 orphaned. Per-copy condition/location/notes/acquisition-date editing is not
-part of this endpoint (ADR-0010, ADR-0011).
+part of this endpoint (ADR-0010, ADR-0011); it has its own sub-resource,
+below.
+
+**Copies** (ADR-0010, ADR-0024). A copy is one physical pressing the user
+owns; the list is the user's statement of intent and the copies are its
+inventory. Every way into the collection records the first copy — a
+collection confirmation, a collection placement, a wishlist-to-collection
+move — and a repeated scan of the same release records another.
+
+- `POST /library/{itemId}/copies` (`CreateLibraryCopySchema`: optional
+  `mediaCondition`, `sleeveCondition`, `location`, `notes`, `acquiredAt`,
+  each defaulting to `null`, so `{}` records a blank copy) adds a copy to a
+  collection record: a second pressing, or a copy again after the last one
+  was removed. It **requires `Idempotency-Key`**, because a copy has no
+  natural identity to converge on — two blank copies of one record are
+  legitimately distinct. The first use of a key returns the copy with `201`;
+  the same key with the same body returns that copy with `200`; the same key
+  with a different body, or for a different record, is `409 conflict`. A
+  wishlist record is `409 invalid_state` (move it to the collection, which
+  records the first copy). A record holds at most 100 copies
+  (`MAX_LIBRARY_COPIES_PER_ITEM`, the bound on every `copies` array a list
+  response embeds); the 101st through this endpoint is
+  `409 library_copy_limit`.
+- `PATCH /library/{itemId}/copies/{copyId}` (`UpdateLibraryCopySchema`, at
+  least one field; `null` clears a field) edits one copy and returns it
+  (`LibraryCopySchema`). Idempotent by identity: the same body twice leaves
+  the same state. No `Idempotency-Key` is needed.
+- `DELETE /library/{itemId}/copies/{copyId}` removes one copy and returns
+  `{ id }`; a repeat is `404 not_found`, like removing a record twice.
+
+**The last-copy rule.** Any copy can be removed, the last one included, and
+removing it never changes the record's list. A collection record whose last
+copy was removed stays in the collection with `copyCount: 0` and `copies:
+[]` until the user moves it to the wishlist (now possible, since ADR-0011's
+"remove the copies first" condition is met with nothing to orphan) or
+removes it. Clearing inventory is not the decision to stop owning the
+release; that decision stays an explicit, separate step. The state is
+reachable only this way, since every entry into the collection records a
+copy, and the detail page names it and offers "Add a copy".
+
+Every copy command resolves `{ userId, itemId, copyId }` together: a copy
+belonging to another user, or to a different record of the same user, is
+`404 not_found` with nothing changed, and the parent record is row-locked
+for the command. Each command also moves the record's `updatedAt`, so the
+`recent` sort surfaces a record whose inventory changed.
+
+**Audit history survives copy removal.** `scan_confirmations.copy_id` is a
+nullable `on delete set null` reference (migration 010): removing the copy a
+confirmation recorded clears that pointer while the scan, the release, the
+`reviewed_release` snapshot and `confirmed_at` stay; the scan still reads as
+confirmed into the record (`libraryItem.copy` becomes `null` in
+`GET /scans/{scanId}`). Removing the record itself is ADR-0018, below.
 
 `DELETE /library/{itemId}` removes the item and cascades its copies. Any
 `scan_confirmations` row that pointed at it keeps every audit field while its
@@ -287,7 +341,8 @@ every real item permanently undeletable.
 
 Collection responses include `copyCount` and `copies`; each copy has optional
 media/sleeve condition, storage location, notes, and acquisition date. Wishlist
-items always contain zero copies. Every item also carries `coverImage`
+items always contain zero copies; a collection item contains zero only after
+its last copy was removed (the last-copy rule above). Every item also carries `coverImage`
 (`{ scanId, imageId }` or `null`) identifying the first completed image of the
 scan it was confirmed from, which the client exchanges for a short-lived read
 URL through `GET /scans/{scanId}/images/{imageId}/thumbnail`, and

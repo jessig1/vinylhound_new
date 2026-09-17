@@ -126,6 +126,20 @@ skipped without a provider call. Database coverage also proves that a scan
 completed before migration 009 falls back to its validated original object
 when no normalized analysis copy exists.
 
+Per-copy commands (ADR-0024) have their own database block, "per-copy
+editing and last-copy rules": every copy field edits and reads back through
+the record, a replayed edit converges, a copy addressed with another user's
+id or through a different record of the same user is `not_found` with
+nothing changed, removing the copy a confirmation recorded leaves the
+confirmation's scan, release, reviewed snapshot and time intact with only
+`copy_id` cleared while the scan still reads as confirmed, removing the last
+copy keeps the record in the collection with zero copies until it is moved
+(after which moving back records a first copy again), `createLibraryCopy`
+returns the same copy for a replayed `Idempotency-Key` and `conflict` for
+the same key with a different body or record, and a wishlist record or the
+101st copy is rejected. The rule itself (`resolveCopyAddition`) is unit
+tested in `packages/domain`.
+
 `npm run test:e2e` is the fast mobile-Chromium gate. It runs Playwright against
 a production build served from `.next-e2e` on port 3100; the harness copies the
 build's static assets into the standalone output so client components hydrate,
@@ -145,7 +159,16 @@ pre-upload rejection messaging for non-image and HEIC files.
 `POST /library` and proves the searched wishlist page shows one page then
 appends the rest on "Show more", that the API pages by cursor with every
 record once and in order, that an unreadable cursor is `400 invalid_cursor`,
-and that the CSV export carries every match. The suite also
+and that the CSV export carries every match. `library-copies.e2e.ts` places
+an owned record and walks the detail page: grading and placing the copy
+(the draft settles on the trimmed value the server kept and survives a
+reload), adding a second copy, removing it, removing the last copy through
+the confirmation that says the record stays owned, the zero-copy state with
+its axe check, the now-possible move to the wishlist with its settled
+feedback, and the move back that records a copy again; a second test proves
+`POST /library/{itemId}/copies` needs an `Idempotency-Key`, replays to the
+same copy, refuses a changed body under the same key, and that a removed
+copy is `404` on the next removal or edit. The suite also
 runs axe-core WCAG 2 A/AA checks against dashboard, scan, collection, wishlist,
 and account routes, and verifies a keyboard-visible focus target.
 
@@ -155,6 +178,25 @@ It requires the Docker Compose services and a one-time
 `npx playwright install chromium firefox webkit` (Linux/WSL also needs the
 browser's OS shared libraries: `sudo npx playwright install-deps` once per
 machine).
+
+Two engine differences shape how specs are written, because Chromium alone
+hides both:
+
+- **Let a router refresh land before navigating.** A client component that
+  calls `router.refresh()` after a mutation leaves an RSC fetch in flight;
+  Firefox aborts a `page.goto`/`page.reload` issued during it
+  (`NS_BINDING_ABORTED`). Wait for the component's settled signal (a button
+  that re-enables through `useTransition`, as the copy editor and list
+  actions do) or `page.waitForLoadState("networkidle")` first.
+- **Prove React saw a fill.** Mobile WebKit hydrates after Playwright's first
+  `fill` on a server-rendered input, and React then adopts the DOM value as
+  its baseline, so the text is silently not state and re-filling the same
+  text is not a change. `discover.e2e.ts`'s `search()` clears and refills
+  until a React-rendered signal (the clear button) appears.
+
+Computed styles also differ: Firefox reports `2.65px` for any `3px` outline,
+so the focus-ring check asserts the WCAG 2.4.13 floor (≥ 2 CSS px) rather
+than the stylesheet's literal value.
 
 ## Guided automatic capture: real-device protocol
 

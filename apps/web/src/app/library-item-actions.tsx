@@ -1,12 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import type { LibraryList } from "@vinylhound/contracts";
 
 import { Icon } from "./ui";
 
+/**
+ * List moves and removal. A move is idempotent by identity and settles when
+ * the refreshed page arrives, so the buttons re-enable with the new list
+ * rather than staying stuck on "Moving…"; removal leaves the page. Moving to
+ * the wishlist stays behind removing every copy first (ADR-0011), which the
+ * last-copy rule makes reachable (ADR-0024).
+ */
 export function LibraryItemActions({
   itemId,
   list,
@@ -20,14 +27,18 @@ export function LibraryItemActions({
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
+  const [refreshing, startRefresh] = useTransition();
+  const [moved, setMoved] = useState<LibraryList | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const blockedByCopies = list === "collection" && copyCount > 0;
+  const busy = pending || refreshing;
 
   async function moveTo(nextList: LibraryList) {
-    if (pending) return;
+    if (busy) return;
     setPending(true);
     setError(null);
+    setMoved(null);
     try {
       const response = await fetch(`/api/v1/library/${itemId}`, {
         method: "PATCH",
@@ -40,17 +51,19 @@ export function LibraryItemActions({
           body.error?.message ?? "The record could not be moved.",
         );
       }
-      router.refresh();
+      setMoved(nextList);
+      startRefresh(() => router.refresh());
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Something went wrong.",
       );
+    } finally {
       setPending(false);
     }
   }
 
   async function remove() {
-    if (pending) return;
+    if (busy) return;
     setPending(true);
     setError(null);
     try {
@@ -79,17 +92,17 @@ export function LibraryItemActions({
         {list === "wishlist" ? (
           <button
             className="primary-button"
-            disabled={pending}
+            disabled={busy}
             onClick={() => moveTo("collection")}
             type="button"
           >
             <Icon name="collection" size={17} />
-            {pending ? "Moving…" : "I own this now"}
+            {busy && !confirmingDelete ? "Moving…" : "I own this now"}
           </button>
         ) : (
           <button
             className="secondary-button"
-            disabled={pending || blockedByCopies}
+            disabled={busy || blockedByCopies}
             onClick={() => moveTo("wishlist")}
             title={
               blockedByCopies
@@ -99,9 +112,14 @@ export function LibraryItemActions({
             type="button"
           >
             <Icon name="heart" size={17} />
-            {pending ? "Moving…" : "Move to wishlist"}
+            {busy && !confirmingDelete ? "Moving…" : "Move to wishlist"}
           </button>
         )}
+        <span aria-live="polite" className="notes-editor__status">
+          {moved && !busy
+            ? `Moved to your ${moved === "wishlist" ? "wishlist" : "collection"}.`
+            : ""}
+        </span>
       </div>
 
       {blockedByCopies ? (
@@ -127,15 +145,15 @@ export function LibraryItemActions({
           <div className="library-item-actions__buttons">
             <button
               className="secondary-button"
-              disabled={pending}
+              disabled={busy}
               onClick={remove}
               type="button"
             >
-              {pending ? "Removing…" : "Yes, remove it"}
+              {busy ? "Removing…" : "Yes, remove it"}
             </button>
             <button
               className="text-button"
-              disabled={pending}
+              disabled={busy}
               onClick={() => setConfirmingDelete(false)}
               type="button"
             >
@@ -146,7 +164,7 @@ export function LibraryItemActions({
       ) : (
         <button
           className="text-button text-button--danger"
-          disabled={pending}
+          disabled={busy}
           onClick={() => setConfirmingDelete(true)}
           type="button"
         >

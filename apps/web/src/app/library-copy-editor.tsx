@@ -1,9 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-import type { LibraryCopy, RecordCondition } from "@vinylhound/contracts";
+import {
+  LibraryCopySchema,
+  parseResponse,
+  type LibraryCopy,
+  type RecordCondition,
+} from "@vinylhound/contracts";
 
 const CONDITIONS: Array<{ value: RecordCondition; label: string }> = [
   { value: "mint", label: "Mint" },
@@ -34,21 +39,34 @@ function draftFromCopy(copy: LibraryCopy): Draft {
   };
 }
 
+/**
+ * Edits and removes one physical copy. Saving is idempotent by identity, so
+ * a repeated save is harmless; the draft settles on what the server kept
+ * (trimmed text, nulls for blanks) rather than what was typed. Removing the
+ * last copy is allowed and says what follows: the record stays in the
+ * collection with no copies until the user moves or removes it (ADR-0024).
+ */
 export function LibraryCopyEditor({
   itemId,
   copy,
   index,
+  copyCount,
 }: {
   itemId: string;
   copy: LibraryCopy;
   index: number;
+  copyCount: number;
 }) {
   const router = useRouter();
   const [draft, setDraft] = useState<Draft>(() => draftFromCopy(copy));
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"PATCH" | "DELETE" | null>(null);
+  const [refreshing, startRefresh] = useTransition();
   const [saved, setSaved] = useState(false);
+  const [removed, setRemoved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lastCopy = copyCount === 1;
+  const busy = pending !== null || refreshing || removed;
 
   function edit(patch: Partial<Draft>) {
     setDraft((current) => ({ ...current, ...patch }));
@@ -56,7 +74,8 @@ export function LibraryCopyEditor({
   }
 
   async function request(method: "PATCH" | "DELETE", body?: unknown) {
-    setPending(true);
+    if (busy) return;
+    setPending(method);
     setError(null);
     setSaved(false);
     try {
@@ -83,14 +102,21 @@ export function LibraryCopyEditor({
               : "This copy could not be saved."),
         );
       }
-      if (method === "PATCH") setSaved(true);
-      router.refresh();
+      if (method === "PATCH") {
+        setDraft(draftFromCopy(parseResponse(LibraryCopySchema, payload)));
+        setSaved(true);
+      } else {
+        // The editor leaves the page with the refresh; until then it reads
+        // as removed rather than re-enabling a copy that no longer exists.
+        setRemoved(true);
+      }
+      startRefresh(() => router.refresh());
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Something went wrong.",
       );
     } finally {
-      setPending(false);
+      setPending(null);
     }
   }
 
@@ -172,10 +198,38 @@ export function LibraryCopyEditor({
         </p>
       ) : null}
 
+      {confirmingDelete && !removed ? (
+        <div className="library-item-actions__confirm copy-editor__confirm">
+          <p>
+            {lastCopy
+              ? "This is the only copy recorded. Removing it keeps the record in your collection with no copies; move it to your wishlist or remove it below if you no longer own it."
+              : `Remove copy ${index}? Its condition, location, and notes are deleted with it.`}
+          </p>
+          <div className="library-item-actions__buttons">
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => request("DELETE")}
+              type="button"
+            >
+              {pending === "DELETE" ? "Removing…" : `Yes, remove copy ${index}`}
+            </button>
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={() => setConfirmingDelete(false)}
+              type="button"
+            >
+              Keep it
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="copy-editor__actions">
         <button
           className="secondary-button"
-          disabled={pending}
+          disabled={busy}
           onClick={() =>
             request("PATCH", {
               mediaCondition: draft.mediaCondition || null,
@@ -187,31 +241,12 @@ export function LibraryCopyEditor({
           }
           type="button"
         >
-          {pending ? "Saving…" : "Save copy"}
+          {pending === "PATCH" ? "Saving…" : "Save copy"}
         </button>
-        {confirmingDelete ? (
-          <>
-            <button
-              className="text-button text-button--danger"
-              disabled={pending}
-              onClick={() => request("DELETE")}
-              type="button"
-            >
-              Yes, remove copy {index}
-            </button>
-            <button
-              className="text-button"
-              disabled={pending}
-              onClick={() => setConfirmingDelete(false)}
-              type="button"
-            >
-              Keep it
-            </button>
-          </>
-        ) : (
+        {confirmingDelete ? null : (
           <button
             className="text-button text-button--danger"
-            disabled={pending}
+            disabled={busy}
             onClick={() => setConfirmingDelete(true)}
             type="button"
           >
@@ -219,7 +254,7 @@ export function LibraryCopyEditor({
           </button>
         )}
         <span aria-live="polite" className="notes-editor__status">
-          {saved ? "Copy saved." : ""}
+          {removed ? "Copy removed." : saved ? "Copy saved." : ""}
         </span>
       </div>
     </details>

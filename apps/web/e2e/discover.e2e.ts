@@ -95,15 +95,32 @@ async function stubDiscovery(
   );
 }
 
+/**
+ * Types a query once React owns the box. The clear button is rendered from
+ * React state alone, so its appearance proves the keystrokes were seen. On
+ * mobile WebKit a fill straight after `goto` lands before hydration, and
+ * React then adopts the DOM's value as its baseline, so re-filling the same
+ * text is not a change it reports; each retry clears first so that, once
+ * hydrated, the fill is a real change.
+ */
+async function search(page: Page, query: string) {
+  const input = page.getByLabel("Search artists, albums, and tracks");
+  await expect(async () => {
+    await input.fill("");
+    await input.fill(query);
+    await expect(
+      page.getByRole("button", { name: "Clear search" }),
+    ).toBeVisible({ timeout: 1_000 });
+  }).toPass();
+}
+
 test("searches artists, albums and tracks from one free-text box", async ({
   page,
 }) => {
   await stubDiscovery(page);
 
   await page.goto("/discover");
-  await page
-    .getByLabel("Search artists, albums, and tracks")
-    .fill("miles davis");
+  await search(page, "miles davis");
 
   await expect(page.getByRole("heading", { name: "Artists" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Albums" })).toBeVisible();
@@ -123,9 +140,7 @@ test("keeps the query in the URL so a search can be shared and reopened", async 
   await stubDiscovery(page);
 
   await page.goto("/discover");
-  await page
-    .getByLabel("Search artists, albums, and tracks")
-    .fill("miles davis");
+  await search(page, "miles davis");
   await expect(page).toHaveURL(/\/discover\?q=miles%20davis/);
 
   // Reopening that URL restores the search rather than an empty page.
@@ -262,7 +277,7 @@ test("explains an unconfigured deployment instead of showing an error", async ({
   );
 
   await page.goto("/discover");
-  await page.getByLabel("Search artists, albums, and tracks").fill("miles");
+  await search(page, "miles");
 
   // The server's own explanation is shown, not fixed copy: "no credentials
   // configured" and "Spotify refused these credentials" need different fixes.
@@ -285,9 +300,7 @@ test("reports an empty result set without treating it as a failure", async ({
   });
 
   await page.goto("/discover");
-  await page
-    .getByLabel("Search artists, albums, and tracks")
-    .fill("nothing at all");
+  await search(page, "nothing at all");
 
   await expect(page.getByText(/Nothing found for/)).toBeVisible();
 });

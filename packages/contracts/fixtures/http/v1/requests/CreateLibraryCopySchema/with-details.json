@@ -1,0 +1,11 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Accepted by POST /library/{itemId}/copies since P3.4 Task 2 (ADR-0024, 2026-09-12): a second pressing recorded with every copy field, the same shape a scan confirmation's `copy` carries.",
+  "value": {
+    "mediaCondition": "very_good_plus",
+    "sleeveCondition": "very_good",
+    "location": "Shelf B",
+    "notes": "Second pressing, insert included",
+    "acquiredAt": "2026-08-30"
+  }
+}

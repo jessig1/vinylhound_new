@@ -41,7 +41,15 @@ test("camera and upload controls expose focus on their visible labels", async ({
     await input.focus();
     await expect(input).toBeFocused();
     await expect(input.locator("..")).toHaveCSS("outline-style", "solid");
-    await expect(input.locator("..")).toHaveCSS("outline-width", "3px");
+    // At least the WCAG 2.4.13 focus-appearance thickness (2 CSS px). The
+    // stylesheet says 3px; Firefox reports 2.65px for any 3px outline, so
+    // an exact match would fail there for a ring that is drawn as intended.
+    const outlineWidth = await input
+      .locator("..")
+      .evaluate((element) =>
+        parseFloat(getComputedStyle(element).outlineWidth),
+      );
+    expect(outlineWidth).toBeGreaterThanOrEqual(2);
     const target = await input.locator("..").boundingBox();
     expect(target?.height).toBeGreaterThanOrEqual(44);
   }

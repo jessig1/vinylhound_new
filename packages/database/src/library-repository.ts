@@ -15,6 +15,8 @@ import {
 import {
   LIBRARY_PAGE_SIZE_DEFAULT,
   LIBRARY_PAGE_SIZE_MAX,
+  MAX_LIBRARY_COPIES_PER_ITEM,
+  type CreateLibraryCopy,
   type GetFavoritesResponse,
   type GetLibraryResponse,
   type LibraryCoverImage,
@@ -25,10 +27,11 @@ import {
   type UpdateLibraryCopy,
   type UpdateLibraryItem,
 } from "@vinylhound/contracts";
-import { resolveFavoritedAt } from "@vinylhound/domain";
+import { resolveCopyAddition, resolveFavoritedAt } from "@vinylhound/domain";
 
 import type { Database } from "./database.ts";
 import { decodeLibraryCursor, encodeLibraryCursor } from "./library-cursor.ts";
+import { hashJson } from "./release-resolution.ts";
 import { DatabaseCommandError } from "./scan-repository.ts";
 import {
   albums,
@@ -399,6 +402,114 @@ export async function deleteLibraryItem(
   });
 }
 
+/**
+ * Records another copy of a record the user owns: a second pressing, or a
+ * copy again after the last one was removed (ADR-0024). Rejected on a
+ * wishlist record (`invalid_state` — converting it to the collection records
+ * the first copy) and at the per-record cap (`library_copy_limit`).
+ *
+ * Idempotent by key, not identity: two blank copies of one record are
+ * legitimately distinct, so a replay is recognized by the `Idempotency-Key`
+ * the request carried. The same key with the same body returns the copy it
+ * created (`created: false`); the same key with a different body or for a
+ * different record is `conflict`. The per-user advisory lock serializes two
+ * concurrent first uses of one key so exactly one of them inserts.
+ */
+export async function createLibraryCopy(
+  db: Database,
+  input: {
+    userId: string;
+    itemId: string;
+    idempotencyKey: string;
+    copy: CreateLibraryCopy;
+  },
+): Promise<{ copy: LibraryCopy; created: boolean }> {
+  const requestFingerprint = hashJson([
+    input.itemId,
+    input.copy.mediaCondition,
+    input.copy.sleeveCondition,
+    input.copy.location,
+    input.copy.notes,
+    input.copy.acquiredAt,
+  ]);
+  return db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`select pg_advisory_xact_lock(
+        hashtext(${input.userId}),
+        hashtext(${input.idempotencyKey})
+      )`,
+    );
+    const [replayed] = await transaction
+      .select()
+      .from(libraryCopies)
+      .where(
+        and(
+          eq(libraryCopies.userId, input.userId),
+          eq(libraryCopies.idempotencyKey, input.idempotencyKey),
+        ),
+      );
+    if (replayed) {
+      if (
+        replayed.libraryItemId !== input.itemId ||
+        replayed.requestFingerprint !== requestFingerprint
+      ) {
+        throw new DatabaseCommandError(
+          "conflict",
+          "That idempotency key was already used to add a different copy.",
+        );
+      }
+      return { copy: serializeLibraryCopy(replayed), created: false };
+    }
+
+    const item = await lockLibraryItem(transaction, input.userId, input.itemId);
+    const [{ copyCount }] = await transaction
+      .select({ copyCount: count() })
+      .from(libraryCopies)
+      .where(eq(libraryCopies.libraryItemId, item.id));
+    const outcome = resolveCopyAddition(item.list, Number(copyCount));
+    if (outcome.status === "rejected") {
+      if (outcome.reason === "wishlist") {
+        throw new DatabaseCommandError(
+          "invalid_state",
+          "A wishlist record has no copies. Move it to your collection to record the first one.",
+        );
+      }
+      throw new DatabaseCommandError(
+        "library_copy_limit",
+        `A record holds up to ${MAX_LIBRARY_COPIES_PER_ITEM} copies. Remove one to record another.`,
+      );
+    }
+
+    const now = new Date();
+    const [inserted] = await transaction
+      .insert(libraryCopies)
+      .values({
+        userId: input.userId,
+        libraryItemId: item.id,
+        releaseId: item.releaseId,
+        mediaCondition: input.copy.mediaCondition,
+        sleeveCondition: input.copy.sleeveCondition,
+        location: input.copy.location,
+        notes: input.copy.notes,
+        acquiredAt: input.copy.acquiredAt,
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint,
+        updatedAt: now,
+      })
+      .returning();
+    await transaction
+      .update(libraryItems)
+      .set({ updatedAt: now })
+      .where(eq(libraryItems.id, item.id));
+    return { copy: serializeLibraryCopy(inserted!), created: true };
+  });
+}
+
+/**
+ * Idempotent by identity: the same body applied twice leaves the copy in the
+ * same state. The parent record's `updated_at` moves with the copy so the
+ * `recent` sort surfaces a record whose inventory changed.
+ */
 export async function updateLibraryCopy(
   db: Database,
   input: {
@@ -438,6 +549,15 @@ export async function updateLibraryCopy(
   });
 }
 
+/**
+ * Removes one copy, the last one included (ADR-0024). The record's list is
+ * untouched: a collection record whose last copy is removed stays in the
+ * collection with none recorded until the user moves or removes it, because
+ * clearing inventory is not the decision to stop owning the release. Any
+ * `scan_confirmations.copy_id` that pointed at the copy clears itself while
+ * the confirmation keeps every audit field. A repeat call is `not_found`,
+ * like removing a record twice.
+ */
 export async function deleteLibraryCopy(
   db: Database,
   input: { userId: string; itemId: string; copyId: string },
@@ -471,7 +591,11 @@ async function lockLibraryItem(
   itemId: string,
 ) {
   const [item] = await transaction
-    .select({ id: libraryItems.id })
+    .select({
+      id: libraryItems.id,
+      list: libraryItems.list,
+      releaseId: libraryItems.releaseId,
+    })
     .from(libraryItems)
     .where(and(eq(libraryItems.id, itemId), eq(libraryItems.userId, userId)))
     .for("update");

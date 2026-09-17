@@ -1,0 +1,5 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Sent by the detail page's \"Add a copy\" button since P3.4 Task 2 (ADR-0024, 2026-09-12): an empty body records a blank copy, every field defaulting to null exactly as a collection placement does.",
+  "value": {}
+}

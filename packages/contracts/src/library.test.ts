@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   ConfirmScanRequestSchema,
+  CreateLibraryCopySchema,
   FavoritesQuerySchema,
   GetLibraryResponseSchema,
   LIBRARY_CURSOR_MAX_LENGTH,
   LIBRARY_PAGE_SIZE_DEFAULT,
   LIBRARY_PAGE_SIZE_MAX,
+  LibraryItemResultSchema,
   LibraryQuerySchema,
+  MAX_LIBRARY_COPIES_PER_ITEM,
+  UpdateLibraryCopySchema,
   UpdateLibraryItemSchema,
 } from "./library.ts";
 
@@ -126,6 +130,129 @@ describe("ConfirmScanRequestSchema", () => {
       UpdateLibraryItemSchema.parse({
         list: "collection",
         copy: { location: "Shelf B" },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("CreateLibraryCopySchema", () => {
+  it("records a blank copy from an empty body", () => {
+    expect(CreateLibraryCopySchema.parse({})).toEqual({
+      mediaCondition: null,
+      sleeveCondition: null,
+      location: null,
+      notes: null,
+      acquiredAt: null,
+    });
+  });
+
+  it("trims text fields and keeps a full grading", () => {
+    expect(
+      CreateLibraryCopySchema.parse({
+        mediaCondition: "very_good_plus",
+        sleeveCondition: "very_good",
+        location: "  Shelf B ",
+        notes: "Second pressing",
+        acquiredAt: "2026-08-30",
+      }),
+    ).toEqual({
+      mediaCondition: "very_good_plus",
+      sleeveCondition: "very_good",
+      location: "Shelf B",
+      notes: "Second pressing",
+      acquiredAt: "2026-08-30",
+    });
+  });
+
+  it("rejects an unknown grade, a blank location, and unknown fields", () => {
+    expect(() =>
+      CreateLibraryCopySchema.parse({ mediaCondition: "sealed" }),
+    ).toThrow();
+    expect(() => CreateLibraryCopySchema.parse({ location: "  " })).toThrow();
+    expect(() =>
+      CreateLibraryCopySchema.parse({ acquiredAt: "2026-08-30T00:00:00Z" }),
+    ).toThrow();
+    expect(() =>
+      CreateLibraryCopySchema.parse({ libraryItemId: "x" }),
+    ).toThrow();
+  });
+});
+
+describe("UpdateLibraryCopySchema", () => {
+  it("accepts a partial update and leaves omitted fields undefined", () => {
+    expect(
+      UpdateLibraryCopySchema.parse({ location: "Crate 2", notes: null }),
+    ).toEqual({ location: "Crate 2", notes: null });
+  });
+
+  it("requires at least one copy field", () => {
+    expect(() => UpdateLibraryCopySchema.parse({})).toThrow();
+  });
+
+  it("rejects a field the copy does not have", () => {
+    expect(() => UpdateLibraryCopySchema.parse({ list: "wishlist" })).toThrow();
+  });
+});
+
+describe("LibraryItemResultSchema", () => {
+  const item = {
+    id: "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f10",
+    list: "collection" as const,
+    notes: null,
+    release: {
+      id: "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e09",
+      artist: "Miles Davis",
+      title: "Kind of Blue",
+      releaseYear: 1959,
+      label: null,
+      catalogNumber: null,
+      barcode: null,
+      releaseDate: null,
+      country: null,
+      format: null,
+      packaging: null,
+      releaseStatus: null,
+      catalogReference: null,
+    },
+    confirmedFromScanId: null,
+    coverImage: null,
+    favoritedAt: null,
+    createdAt: "2026-09-12T10:00:00.000Z",
+    updatedAt: "2026-09-12T10:00:00.000Z",
+  };
+  const copy = (index: number) => ({
+    id: `5e6f7a8b-9c0d-4e1f-8a3b-${String(index).padStart(12, "0")}`,
+    mediaCondition: null,
+    sleeveCondition: null,
+    location: null,
+    notes: null,
+    acquiredAt: null,
+    createdAt: "2026-09-12T10:00:00.000Z",
+    updatedAt: "2026-09-12T10:00:00.000Z",
+  });
+
+  it("allows a collection record with no copies recorded (ADR-0024)", () => {
+    expect(
+      LibraryItemResultSchema.parse({ ...item, copyCount: 0, copies: [] }),
+    ).toMatchObject({ list: "collection", copyCount: 0 });
+  });
+
+  it("bounds copies at the per-item cap", () => {
+    const full = Array.from({ length: MAX_LIBRARY_COPIES_PER_ITEM }, (_, i) =>
+      copy(i),
+    );
+    expect(
+      LibraryItemResultSchema.parse({
+        ...item,
+        copyCount: full.length,
+        copies: full,
+      }).copies,
+    ).toHaveLength(MAX_LIBRARY_COPIES_PER_ITEM);
+    expect(() =>
+      LibraryItemResultSchema.parse({
+        ...item,
+        copyCount: full.length + 1,
+        copies: [...full, copy(full.length)],
       }),
     ).toThrow();
   });

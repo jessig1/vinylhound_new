@@ -16,6 +16,7 @@ import { AddToPlaylist } from "../../add-to-playlist";
 import { CoverArt } from "../../cover-art";
 import { FavoriteToggle } from "../../favorite-toggle";
 import { toneForId } from "../../library-album-card";
+import { AddLibraryCopy } from "../../library-copy-add";
 import { LibraryCopyEditor } from "../../library-copy-editor";
 import { LibraryItemActions } from "../../library-item-actions";
 import { LibraryNotesEditor } from "../../library-notes-editor";
@@ -131,14 +132,16 @@ export default async function LibraryItemPage({
           {wishlist ? null : (
             <section className="settings-card">
               <h2>
-                {item.copyCount} physical{" "}
-                {item.copyCount === 1 ? "copy" : "copies"}
+                {item.copyCount === 0
+                  ? "No copies recorded"
+                  : `${item.copyCount} physical ${item.copyCount === 1 ? "copy" : "copies"}`}
               </h2>
               {item.copies.length ? (
                 <div className="copy-list">
                   {item.copies.map((copy, index) => (
                     <LibraryCopyEditor
                       copy={copy}
+                      copyCount={item.copyCount}
                       index={index + 1}
                       itemId={item.id}
                       key={copy.id}
@@ -146,11 +149,16 @@ export default async function LibraryItemPage({
                   ))}
                 </div>
               ) : (
+                // Reached only by removing the last copy: every way into the
+                // collection records one. The record stays owned until the
+                // user says otherwise below (ADR-0024).
                 <p className="field-help">
-                  No copies are recorded yet. Moving this record here from your
-                  wishlist adds one automatically.
+                  Every copy of this record has been removed. It stays in your
+                  collection until you move it to your wishlist or remove it
+                  below; if you still own a copy, add it here.
                 </p>
               )}
+              <AddLibraryCopy copyCount={item.copyCount} itemId={item.id} />
             </section>
           )}
 

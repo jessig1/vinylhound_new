@@ -43,6 +43,7 @@ export type DatabaseCommandErrorCode =
   | "conflict"
   | "invalid_cursor"
   | "invalid_state"
+  | "library_copy_limit"
   | "not_found"
   | "playlist_entry_limit"
   | "playlist_limit"

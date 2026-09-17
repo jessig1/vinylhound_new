@@ -47,6 +47,9 @@ test("favorites a saved record and lists it across both lists", async ({
   await expect(
     page.getByRole("button", { name: "Remove from favorites" }),
   ).toBeVisible();
+  // The toggle's router refresh is fire-and-forget; navigating while it is
+  // in flight aborts the navigation on Firefox, so let it land first.
+  await page.waitForLoadState("networkidle");
 
   // A wishlist record shows up on the favorites page: a favorite is an
   // attribute of the saved record, not a third list.
@@ -65,6 +68,7 @@ test("favorites a saved record and lists it across both lists", async ({
   await expect(
     page.getByRole("button", { name: "Add to favorites" }),
   ).toBeVisible();
+  await page.waitForLoadState("networkidle");
 
   await page.goto("/favorites");
   await expect(page.getByRole("link", { name: new RegExp(title) })).toHaveCount(
@@ -83,8 +87,17 @@ test("creates, fills, reorders, renames, and deletes a playlist", async ({
   const betaId = await placeRecord(page, { title: beta, list: "wishlist" });
 
   await page.goto("/playlists");
-  await page.getByLabel("Playlist name").fill(playlistName);
-  await page.getByRole("button", { name: "Create playlist" }).click();
+  // The submit button enables from React state alone, so it proves the name
+  // was seen. Mobile WebKit hydrates after the first fill and then adopts the
+  // DOM value as its baseline, so each retry clears before filling again.
+  const nameField = page.getByLabel("Playlist name");
+  const create = page.getByRole("button", { name: "Create playlist" });
+  await expect(async () => {
+    await nameField.fill("");
+    await nameField.fill(playlistName);
+    await expect(create).toBeEnabled({ timeout: 1_000 });
+  }).toPass();
+  await create.click();
   await page.waitForURL(/\/playlists\/[0-9a-f-]{36}$/);
   await expect(
     page.getByRole("heading", { level: 1, name: playlistName }),
@@ -103,6 +116,7 @@ test("creates, fills, reorders, renames, and deletes a playlist", async ({
     await expect(
       page.getByRole("link", { name: playlistName, exact: true }),
     ).toBeVisible();
+    await page.waitForLoadState("networkidle");
   }
 
   await page.goto(playlistUrl);
@@ -114,6 +128,7 @@ test("creates, fills, reorders, renames, and deletes a playlist", async ({
   // Reorder, then reload to prove the order was persisted, not just drawn.
   await page.getByRole("button", { name: `Move ${beta} up` }).click();
   await expect(entries.nth(0)).toContainText(beta);
+  await page.waitForLoadState("networkidle");
   await page.reload();
   await expect(page.locator(".playlist-entry").nth(0)).toContainText(beta);
   await expect(page.locator(".playlist-entry").nth(1)).toContainText(alpha);
@@ -130,6 +145,7 @@ test("creates, fills, reorders, renames, and deletes a playlist", async ({
   await expect(
     page.getByRole("heading", { level: 1, name: renamed }),
   ).toBeVisible();
+  await page.waitForLoadState("networkidle");
 
   const accessibility = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])

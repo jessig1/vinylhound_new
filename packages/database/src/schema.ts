@@ -613,6 +613,11 @@ export const libraryCopies = pgTable(
     location: varchar("location", { length: 255 }),
     notes: text("notes"),
     acquiredAt: date("acquired_at", { mode: "string" }),
+    // Set only on copies added through POST /library/{itemId}/copies
+    // (ADR-0024): the key that request carried and a fingerprint of its
+    // body, so a retry returns this copy instead of recording another.
+    idempotencyKey: text("idempotency_key"),
+    requestFingerprint: char("request_fingerprint", { length: 64 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -626,9 +631,20 @@ export const libraryCopies = pgTable(
       table.createdAt,
     ),
     index("library_copies_release_id_idx").on(table.releaseId),
+    uniqueIndex("library_copies_user_idempotency_key_unique")
+      .on(table.userId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
     check(
       "library_copies_notes_length_check",
       sql`${table.notes} is null or char_length(${table.notes}) <= 2000`,
+    ),
+    check(
+      "library_copies_idempotency_key_length_check",
+      sql`${table.idempotencyKey} is null or char_length(${table.idempotencyKey}) between 1 and 255`,
+    ),
+    check(
+      "library_copies_idempotency_fingerprint_check",
+      sql`(${table.idempotencyKey} is null) = (${table.requestFingerprint} is null)`,
     ),
   ],
 );

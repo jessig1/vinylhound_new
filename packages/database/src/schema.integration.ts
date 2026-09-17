@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  MAX_LIBRARY_COPIES_PER_ITEM,
   MAX_PLAYLIST_ENTRIES,
   MAX_PLAYLISTS_PER_USER,
   MAX_SCANS_PER_BATCH,
@@ -28,11 +29,14 @@ import {
   getScanConfirmationForUser,
 } from "./confirmation-repository.ts";
 import {
+  createLibraryCopy,
+  deleteLibraryCopy,
   deleteLibraryItem,
   getLibraryItemForUser,
   iterateLibraryItemsForUser,
   listFavoriteLibraryItemsForUser,
   listLibraryItemsForUser,
+  updateLibraryCopy,
   updateLibraryItem,
 } from "./library-repository.ts";
 import { placeLibraryRelease } from "./placement-repository.ts";
@@ -1273,6 +1277,388 @@ describe("direct library item management", () => {
       query: `no such artist ${suffix}`,
     });
     expect(noMatches.items).toEqual([]);
+  });
+});
+
+describe("per-copy editing and last-copy rules", () => {
+  const blankCopy = {
+    mediaCondition: null,
+    sleeveCondition: null,
+    location: null,
+    notes: null,
+    acquiredAt: null,
+  };
+
+  /** Confirms a scan into the collection, which records the first copy. */
+  async function confirmOwnedRecord(owner = userId) {
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId: owner,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `copy-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    const result = await confirmScan(database.db, {
+      userId: owner,
+      scanId: scan!.id,
+      idempotencyKey: `copy-confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: `Copy Rules Artist ${randomUUID()}`,
+        title: "Copy Rules Title",
+        releaseYear: 1977,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "collection",
+        notes: null,
+        copy: null,
+      },
+    });
+    return {
+      scanId: scan!.id,
+      itemId: result.record.libraryItem.id,
+      copyId: result.record.libraryItem.copy!.id,
+    };
+  }
+
+  it("edits every copy field, converges when replayed, and reads back through the record", async () => {
+    const { itemId, copyId } = await confirmOwnedRecord();
+    const before = await getLibraryItemForUser(database.db, {
+      userId,
+      itemId,
+    });
+    const update = {
+      mediaCondition: "very_good_plus" as const,
+      sleeveCondition: "very_good" as const,
+      location: "Shelf B",
+      notes: "Insert included",
+      acquiredAt: "2026-08-30",
+    };
+
+    const edited = await updateLibraryCopy(database.db, {
+      userId,
+      itemId,
+      copyId,
+      update,
+    });
+    expect(edited).toMatchObject({ id: copyId, ...update });
+
+    // Idempotent by identity: the same body again changes nothing.
+    const replayed = await updateLibraryCopy(database.db, {
+      userId,
+      itemId,
+      copyId,
+      update,
+    });
+    expect(replayed).toMatchObject({ id: copyId, ...update });
+
+    // A partial update touches only the named field.
+    const cleared = await updateLibraryCopy(database.db, {
+      userId,
+      itemId,
+      copyId,
+      update: { location: null },
+    });
+    expect(cleared).toMatchObject({ ...update, location: null });
+
+    const after = await getLibraryItemForUser(database.db, { userId, itemId });
+    expect(after.copies).toHaveLength(1);
+    expect(after.copies[0]).toMatchObject({ ...update, location: null });
+    expect(after.copyCount).toBe(1);
+    // The record surfaces under `recent` when its inventory changes.
+    expect(new Date(after.updatedAt).getTime()).toBeGreaterThan(
+      new Date(before.updatedAt).getTime(),
+    );
+  });
+
+  it("rejects editing or removing a copy the caller does not own, or through another record", async () => {
+    const mine = await confirmOwnedRecord();
+    const other = await confirmOwnedRecord();
+    const strangerId = randomUUID();
+    await database.db.insert(users).values({ id: strangerId });
+    const stranger = await confirmOwnedRecord(strangerId);
+
+    // Another user's copy, named with its own record: not found, unchanged.
+    await expect(
+      updateLibraryCopy(database.db, {
+        userId,
+        itemId: stranger.itemId,
+        copyId: stranger.copyId,
+        update: { location: "Not mine" },
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      deleteLibraryCopy(database.db, {
+        userId,
+        itemId: stranger.itemId,
+        copyId: stranger.copyId,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    // My own copy addressed through a different record of mine: the copy
+    // belongs to exactly one record, so the pair does not resolve.
+    await expect(
+      updateLibraryCopy(database.db, {
+        userId,
+        itemId: other.itemId,
+        copyId: mine.copyId,
+        update: { location: "Wrong record" },
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      deleteLibraryCopy(database.db, {
+        userId,
+        itemId: other.itemId,
+        copyId: mine.copyId,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    // A stranger addressing my record and copy correctly still gets nothing.
+    await expect(
+      createLibraryCopy(database.db, {
+        userId: strangerId,
+        itemId: mine.itemId,
+        idempotencyKey: `stranger-${randomUUID()}`,
+        copy: blankCopy,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    const [untouched] = await database.db
+      .select()
+      .from(libraryCopies)
+      .where(eq(libraryCopies.id, stranger.copyId));
+    expect(untouched).toMatchObject({ id: stranger.copyId, location: null });
+    expect(
+      (
+        await getLibraryItemForUser(database.db, {
+          userId,
+          itemId: mine.itemId,
+        })
+      ).copies,
+    ).toHaveLength(1);
+    await database.db.delete(users).where(eq(users.id, strangerId));
+  });
+
+  it("removes a copy while its confirmation keeps every audit field", async () => {
+    const { scanId, itemId, copyId } = await confirmOwnedRecord();
+    const [before] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    expect(before).toMatchObject({ libraryItemId: itemId, copyId });
+
+    expect(
+      await deleteLibraryCopy(database.db, { userId, itemId, copyId }),
+    ).toEqual({ id: copyId });
+
+    // The decision survives intact; only the pointer to the removed copy
+    // clears, and the scan still reads as confirmed into this record.
+    const [after] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    expect(after).toMatchObject({
+      scanId,
+      libraryItemId: itemId,
+      copyId: null,
+      releaseId: before!.releaseId,
+      selectedCandidateId: before!.selectedCandidateId,
+      confirmedAt: before!.confirmedAt,
+    });
+    expect(after!.reviewedRelease).toEqual(before!.reviewedRelease);
+    const summary = await getScanConfirmationForUser(database.db, {
+      userId,
+      scanId,
+    });
+    expect(summary).toMatchObject({
+      libraryItem: { id: itemId, list: "collection", copy: null },
+    });
+
+    // Removing it again is not found, like removing a record twice.
+    await expect(
+      deleteLibraryCopy(database.db, { userId, itemId, copyId }),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("keeps a record in the collection with no copies after its last copy is removed, until the user moves it", async () => {
+    const { itemId, copyId } = await confirmOwnedRecord();
+    await deleteLibraryCopy(database.db, { userId, itemId, copyId });
+
+    // The list is the user's statement; clearing inventory does not change it.
+    const emptied = await getLibraryItemForUser(database.db, {
+      userId,
+      itemId,
+    });
+    expect(emptied).toMatchObject({ list: "collection", copyCount: 0 });
+    expect(emptied.copies).toEqual([]);
+    const page = await listLibraryItemsForUser(database.db, {
+      userId,
+      list: "collection",
+      query: emptied.release.artist,
+    });
+    expect(page.items.map((item) => item.id)).toEqual([itemId]);
+
+    // From here the ADR-0011 move applies with nothing to orphan, and moving
+    // back records a first copy again.
+    const wished = await updateLibraryItem(database.db, {
+      userId,
+      itemId,
+      update: { list: "wishlist" },
+    });
+    expect(wished).toMatchObject({ list: "wishlist", copyCount: 0 });
+    const owned = await updateLibraryItem(database.db, {
+      userId,
+      itemId,
+      update: { list: "collection" },
+    });
+    expect(owned).toMatchObject({ list: "collection", copyCount: 1 });
+    expect(owned.copies[0]!.id).not.toBe(copyId);
+  });
+
+  it("records another copy once per idempotency key", async () => {
+    const { itemId } = await confirmOwnedRecord();
+    const other = await confirmOwnedRecord();
+    const before = await getLibraryItemForUser(database.db, {
+      userId,
+      itemId,
+    });
+    const key = `copy-${randomUUID()}`;
+    const details = {
+      ...blankCopy,
+      mediaCondition: "near_mint" as const,
+      location: "Shelf C",
+    };
+
+    const first = await createLibraryCopy(database.db, {
+      userId,
+      itemId,
+      idempotencyKey: key,
+      copy: details,
+    });
+    expect(first.created).toBe(true);
+    expect(first.copy).toMatchObject({
+      mediaCondition: "near_mint",
+      location: "Shelf C",
+    });
+
+    // The same key with the same body returns the copy already recorded.
+    const replay = await createLibraryCopy(database.db, {
+      userId,
+      itemId,
+      idempotencyKey: key,
+      copy: details,
+    });
+    expect(replay).toEqual({ copy: first.copy, created: false });
+
+    // The same key with a different body, or for a different record, is a
+    // conflict rather than a silent second copy.
+    await expect(
+      createLibraryCopy(database.db, {
+        userId,
+        itemId,
+        idempotencyKey: key,
+        copy: { ...details, location: "Shelf D" },
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await expect(
+      createLibraryCopy(database.db, {
+        userId,
+        itemId: other.itemId,
+        idempotencyKey: key,
+        copy: details,
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+
+    // A different key records a genuinely distinct copy, blank or not.
+    const second = await createLibraryCopy(database.db, {
+      userId,
+      itemId,
+      idempotencyKey: `copy-${randomUUID()}`,
+      copy: blankCopy,
+    });
+    expect(second.created).toBe(true);
+    expect(second.copy.id).not.toBe(first.copy.id);
+
+    const after = await getLibraryItemForUser(database.db, { userId, itemId });
+    expect(after.copyCount).toBe(3);
+    expect(after.copies.map((copy) => copy.id)).toEqual([
+      before.copies[0]!.id,
+      first.copy.id,
+      second.copy.id,
+    ]);
+    expect(new Date(after.updatedAt).getTime()).toBeGreaterThan(
+      new Date(before.updatedAt).getTime(),
+    );
+    expect(
+      (
+        await getLibraryItemForUser(database.db, {
+          userId,
+          itemId: other.itemId,
+        })
+      ).copyCount,
+    ).toBe(1);
+  });
+
+  it("rejects a copy on a wishlist record and past the per-record cap", async () => {
+    const { itemId, copyId } = await confirmOwnedRecord();
+    await deleteLibraryCopy(database.db, { userId, itemId, copyId });
+    await updateLibraryItem(database.db, {
+      userId,
+      itemId,
+      update: { list: "wishlist" },
+    });
+    await expect(
+      createLibraryCopy(database.db, {
+        userId,
+        itemId,
+        idempotencyKey: `copy-${randomUUID()}`,
+        copy: blankCopy,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_state" });
+
+    const owned = await updateLibraryItem(database.db, {
+      userId,
+      itemId,
+      update: { list: "collection" },
+    });
+    await database.db.insert(libraryCopies).values(
+      Array.from({ length: MAX_LIBRARY_COPIES_PER_ITEM - 1 }, () => ({
+        userId,
+        libraryItemId: itemId,
+        releaseId: owned.release.id,
+      })),
+    );
+    await expect(
+      createLibraryCopy(database.db, {
+        userId,
+        itemId,
+        idempotencyKey: `copy-${randomUUID()}`,
+        copy: blankCopy,
+      }),
+    ).rejects.toMatchObject({ code: "library_copy_limit" });
+    const full = await getLibraryItemForUser(database.db, { userId, itemId });
+    expect(full.copyCount).toBe(MAX_LIBRARY_COPIES_PER_ITEM);
+    expect(full.copies).toHaveLength(MAX_LIBRARY_COPIES_PER_ITEM);
   });
 });
 

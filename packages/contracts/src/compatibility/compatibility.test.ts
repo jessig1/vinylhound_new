@@ -41,6 +41,7 @@ const BROWSER_PARSED_RESPONSES = [
   "GetLibraryResponseSchema",
   "GetQuotaHeadroomResponseSchema",
   "GetScanResponseSchema",
+  "LibraryCopySchema",
   "PlaceLibraryReleaseResponseSchema",
   "RetryScanResponseSchema",
   "SearchCatalogReleasesResponseSchema",

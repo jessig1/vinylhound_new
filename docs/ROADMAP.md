@@ -625,24 +625,29 @@ the compatibility foundation separately before Phase 4 extraction.
       stable cursor pagination/sorting, and export of all matching records.
       Preserve effective user-corrected artist/title matching and ordering.
       (ADR-0023, 2026-09-12)
-- [ ] **Task 2.** Complete per-copy condition/location/notes/acquisition-date editing and
+- [x] **Task 2.** Complete per-copy condition/location/notes/acquisition-date editing and
       deletion, ownership checks, idempotency, and mutation feedback. Define
       last-copy rules explicitly and preserve confirmation audit history.
+      (ADR-0024, 2026-09-12)
 - [ ] **Task 3.** Use P3.1 image reads in scan history and batch review navigation. Complete
       empty/loading/error states, accessible controls, and the privacy notice.
 - [ ] **Task 4.** Test five new participants on a fixed task list: capture/review a record,
       recover a failed scan, find an older library entry, and edit a copy.
       Record completion, assistance, and failures per task without personal data.
 
-Partial progress, 2026-09-09 (not enough to check Task 2 or Task 3 above): a
-library item detail page at `/library/{itemId}` now carries per-copy editing
-with real mutation feedback, notes editing, and removal (part of Task 2), and
-P3.1 image reads are wired into scan history and both library grids (part of
-Task 3). Still outstanding for these tasks: batch review navigation, explicit
-last-copy rules, Playwright coverage for the new page, and the participant
-testing. Saved records became removable via ADR-0018, which supersedes
-ADR-0011's delete restriction while preserving confirmation audit history.
-Task 1 (2026-09-12) closed full-library search and pagination.
+Partial progress, 2026-09-09 (not enough to check Task 3 above): a library
+item detail page at `/library/{itemId}` now carries per-copy editing with
+real mutation feedback, notes editing, and removal, and P3.1 image reads are
+wired into scan history and both library grids (part of Task 3). Still
+outstanding for Task 3: batch review navigation; and the participant
+testing for Task 4. Saved records became removable via ADR-0018, which
+supersedes ADR-0011's delete restriction while preserving confirmation audit
+history. Task 1 (2026-09-12) closed full-library search and pagination.
+Task 2 (2026-09-12, ADR-0024) closed the copy commands: the last-copy rule
+(removing the last copy keeps the record in the collection with none
+recorded until the user moves or removes it), `POST /library/{itemId}/copies`
+under an `Idempotency-Key`, integration tests for ownership, idempotency and
+audit survival, and Playwright coverage of the detail page.
 
 Exit: tests find/export records beyond a 100-item fixture, paginate without
 duplicates, and verify copy mutations/audit protection. All four browser profiles

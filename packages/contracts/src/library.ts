@@ -12,6 +12,12 @@ export const LIBRARY_SEARCH_QUERY_MAX_LENGTH = 200;
 export const LIBRARY_PAGE_SIZE_DEFAULT = 50;
 export const LIBRARY_PAGE_SIZE_MAX = 100;
 export const LIBRARY_CURSOR_MAX_LENGTH = 1024;
+/**
+ * Physical copies one saved record can hold. Bounds the `copies` array every
+ * list response embeds, so it is enforced where copies are added rather than
+ * discovered when a response fails to serialize.
+ */
+export const MAX_LIBRARY_COPIES_PER_ITEM = 100;
 
 /**
  * Search, sort and page parameters shared by every read of saved records.
@@ -182,6 +188,16 @@ export const PlaceLibraryReleaseResponseSchema = z
   })
   .strict();
 
+/**
+ * Body of `POST /library/{itemId}/copies`: a second pressing of a record the
+ * user already owns, or a copy recorded again after the last one was removed
+ * (ADR-0024). Every field is optional and defaults to null, so `{}` records a
+ * blank copy exactly as a collection placement does. The request needs an
+ * `Idempotency-Key`: a copy has no natural identity — two blank copies are
+ * legitimately distinct — so a retried request is recognized by its key.
+ */
+export const CreateLibraryCopySchema = CopyDetailsInputSchema;
+
 export const UpdateLibraryCopySchema = z
   .object({
     mediaCondition: RecordConditionSchema.nullable().optional(),
@@ -242,8 +258,12 @@ export const LibraryItemResultSchema = z
     list: LibraryListSchema,
     notes: z.string().nullable(),
     release: ConfirmedReleaseSchema,
+    // Zero for a wishlist record, and for a collection record whose copies
+    // were all removed: the list is the user's statement of ownership, the
+    // copies are its inventory, and removing the last copy changes only the
+    // inventory (ADR-0024).
     copyCount: z.number().int().nonnegative(),
-    copies: z.array(LibraryCopySchema).max(100),
+    copies: z.array(LibraryCopySchema).max(MAX_LIBRARY_COPIES_PER_ITEM),
     confirmedFromScanId: z.string().uuid().nullable(),
     coverImage: LibraryCoverImageSchema.nullable(),
     // When the user marked this record a favorite; null when they have not.
@@ -326,6 +346,7 @@ export type DeleteLibraryItemResponse = z.infer<
 export type RecordCondition = z.infer<typeof RecordConditionSchema>;
 export type CopyDetailsInput = z.infer<typeof CopyDetailsInputSchema>;
 export type LibraryCopy = z.infer<typeof LibraryCopySchema>;
+export type CreateLibraryCopy = z.infer<typeof CreateLibraryCopySchema>;
 export type UpdateLibraryCopy = z.infer<typeof UpdateLibraryCopySchema>;
 export type ConfirmScanRequest = z.infer<typeof ConfirmScanRequestSchema>;
 export type ConfirmedRelease = z.infer<typeof ConfirmedReleaseSchema>;

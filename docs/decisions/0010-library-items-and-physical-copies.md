@@ -1,6 +1,7 @@
 # ADR-0010: Library relationships and physical copies are separate
 
-- Status: accepted
+- Status: accepted; the deferred copy commands are decided in
+  [ADR-0024](0024-last-copy-rules-and-copy-additions.md) (2026-09-12)
 - Date: 2026-08-31
 
 ## Context

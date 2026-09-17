@@ -1,0 +1,14 @@
+{
+  "frozenAt": "2026-09-12",
+  "origin": "Emitted by PATCH /library/{itemId}/copies/{copyId} since f5a829c (2026-08-31) and by POST /library/{itemId}/copies since P3.4 Task 2 (ADR-0024, 2026-09-12); the copy editor reads it through parseResponse to settle its draft on what the server kept.",
+  "value": {
+    "id": "5e6f7a8b-9c0d-4e1f-8a3b-4c5d6e7f8a11",
+    "mediaCondition": "near_mint",
+    "sleeveCondition": null,
+    "location": "Shelf A",
+    "notes": null,
+    "acquiredAt": "2026-08-30",
+    "createdAt": "2026-08-31T18:00:00.000Z",
+    "updatedAt": "2026-09-12T10:15:00.000Z"
+  }
+}
