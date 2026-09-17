@@ -15,6 +15,77 @@ the log.
 
 ## Current state — verified 2026-09-17
 
+- **P3.5 Task 1 (first reconciled monthly spend baseline) is complete and
+  uncommitted in the working tree for maintainer review.** Full detail is in
+  `docs/OPERATIONS.md`'s new "Reconciled monthly budget (P3.5 Task 1)"
+  section and `docs/ROADMAP.md`'s Task 1 note; only the headline is repeated
+  here. The AWS CLI session was expired at session start
+  (`aws sts get-caller-identity` failed); the maintainer reauthenticated live
+  so this reconciliation could use real Cost Explorer/resource-state pulls
+  rather than list-price estimates. **The `docs/PHASE_3_4_PLAN_REVIEW.md`
+  tension — a $20 per-user AI default consuming 80% of the $25 budget — does
+  not exist in the real deployment.** `packages/config`'s
+  `USER_MONTHLY_SPEND_LIMIT_USD` default is 20 and `.env.example` repeats it,
+  but every environment that can spend real money already overrides it to
+  **5**: `infra/terraform/environment/variables.tf:105-108` and
+  `infra/terraform/production/variables.tf`'s Terraform variable defaults,
+  and `.github/workflows/deploy-development.yml:145`'s injected Lambda
+  environment. The 20 is reachable only via a local `npm run dev` session run
+  with a real key and no override — discouraged by
+  CLAUDE.md/AGENTS.md already. `.env.example` now has a comment saying so.
+  Measured persistent baseline (six clean non-activation days, 2026-09-11
+  through 2026-09-16): ~$5.60/month, dominated by Secrets Manager
+  ($4.80/month for **twelve** secrets, not the nine a stale
+  `docs/OPERATIONS.md` line claimed — `infra/terraform/development/
+  main.tf:107-115` is one `for_each` Terraform resource that creates four
+  real secrets, not one; corrected in place) plus a real but small ECR
+  image-storage cost that the original P3.1 Task 7 inventory missed entirely
+  (bounded by a live, Terraform-absent 20-image-per-repo lifecycle policy —
+  worth moving into Terraform someday so it isn't lost). Reconciled total at
+  today's single-tester, pre-public-usage scale: $5.60 baseline + $5 AI
+  ceiling = **$10.60/month** steady state (development always-live,
+  staging/production both confirmed inactive live via `aws rds`/`ecs`/`eks`
+  during this session), with **$14.40/month of headroom** before any
+  staging/production activation. Staging activation measured at ~$0.30-0.45
+  per full lifecycle run from real historical `deploy-staging.yml` runs
+  (`gh run list`); declared allowance is **up to 10 hours/month**. Production
+  rehearsal hours are stated separately per the task's requirement: all five
+  historical `deploy-production.yml` attempts (2026-09-06/07) failed before
+  completing, gated on issues #8/#9/#10, so no real per-hour figure exists
+  yet — only a planning-level EKS/NAT/ALB rate-card estimate
+  (~$0.50-1.00/hour). Projected total using both declared allowances: ~$21/
+  month, under $25 with margin. **No scope, hour, or allowance reduction was
+  needed** — the fix was identifying which AI-cap number was real, not
+  cutting anything.
+  Also found and excluded from the reconciliation: this AWS account carries
+  non-VinylHound resources — a pre-existing `siliconforest.io` Route 53
+  zone/registration (VinylHound only reads it as a `data` source and adds
+  records; it does not create or pay for the zone) and an unreferenced
+  ~$3.72/month Lightsail charge with no Terraform source and no live
+  instances/static IPs/distributions/domains found via `aws lightsail`.
+  **Flagged for the maintainer to confirm and cancel the Lightsail charge if
+  it is abandoned** — this session could not determine what it is.
+  Left explicitly unresolved, carried forward rather than guessed at: where
+  the development database is hosted/billed (external to these Terraform
+  roots, "managed externally" per `docs/OPERATIONS.md`'s AWS topology
+  section; identifying the provider would have meant reading the stored
+  connection string, which this session's own Bash permission classifier
+  correctly blocked — the maintainer should state the provider and its cost
+  directly) and real historical OpenAI spend (no OpenAI billing API access
+  from this session; the $5 figure used throughout is the enforced ceiling,
+  not measured actual spend — actual spend is very likely well below it
+  since only manual test scans have run so far, but that is an inference,
+  not a pulled number).
+  Changed: `docs/OPERATIONS.md` (secret count correction, new ECR line item,
+  the non-VinylHound-cost callout, and the full "Reconciled monthly budget"
+  section), `docs/ROADMAP.md` (Task 1 checked with a full note),
+  `.env.example` (clarifying comment on `USER_MONTHLY_SPEND_LIMIT_USD`). No
+  application code changed; nothing needed to change, since the real
+  deployed configuration already reconciles under $25. Not run: `npm run
+  check`/`build` (no application, contract, or workspace file touched — this
+  was a documentation/infrastructure-inventory task). Left uncommitted for
+  the maintainer's review per this repository's convention.
+
 - **P3.4 Task 3 (batch review navigation on P3.1 image reads, empty/loading/
   error states, accessible controls, and the privacy notice) is complete and
   committed. P3.4 now has Tasks 1-3 checked; Task 4 (the five-participant
@@ -3800,3 +3871,41 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   an empty file). Did not touch `docs/ROADMAP.md` — this was a CI/infra
   fix, not roadmap work. Left uncommitted for the maintainer's review per
   this repository's convention.
+
+- **2026-09-17 - Claude.** Asked to work on P3.5 Task 1 (first reconciled
+  monthly spend baseline). Read `docs/HANDOFF.md`, `AGENTS.md`, and
+  `docs/ROADMAP.md` per session-start convention, then `docs/OPERATIONS.md`'s
+  existing "Persistent spend inventory (pre-P3.5)" section (P3.1 Task 7) to
+  see what was already known versus still an open unknown. The local AWS CLI
+  session was expired (`aws sts get-caller-identity` → "reauthenticate using
+  aws login"); asked the maintainer via `AskUserQuestion` whether to
+  reauthenticate for real Cost Explorer numbers or proceed on list-price
+  estimates — they chose to reauthenticate, and did so live in-session.
+  Pulled real `aws ce get-cost-and-usage` data (monthly and daily, grouped by
+  service, July-September 2026) and cross-checked it against live resource
+  state (`aws rds describe-db-clusters`, `aws ecs list-clusters`/
+  `list-services`, `aws eks list-clusters`, `aws s3 ls --summarize`,
+  `aws secretsmanager list-secrets`, `aws ecr describe-images`/
+  `get-lifecycle-policy`, `aws logs describe-log-groups`, `aws route53
+  list-hosted-zones`, `aws lightsail get-instances`/`get-static-ips`/
+  `get-distributions`/`get-domains`) and `gh run list` for both deploy
+  workflows' real historical run history/durations. Full findings and
+  figures are recorded once, in `docs/OPERATIONS.md`'s new "Reconciled
+  monthly budget (P3.5 Task 1)" section; "Current state" above has the
+  headline. One boundary respected deliberately: attempted to read the
+  development database's connection-string secret via `aws secretsmanager
+  get-secret-value` to identify just the hosting provider's hostname (not
+  read any credential) for the "development database hosting" unknown this
+  reconciliation was meant to close — this session's own Bash permission
+  classifier blocked it, which was the correct outcome for an agent reading
+  a stored secret regardless of intent; left as an open unknown for the
+  maintainer to state directly rather than working around the block. Did not
+  change any application code — the real deployed spend configuration
+  already reconciles comfortably under the $25 target, so no scope/hour/
+  allowance reduction was warranted; the actual finding was that a
+  previously-assumed number (`packages/config`'s $20 AI-cap default) was
+  never the one actually deployed. Changed `docs/OPERATIONS.md`,
+  `docs/ROADMAP.md` (Task 1 checked with a full note), and `.env.example`
+  (a clarifying comment). Did not run `npm run check`/`build`: no
+  application, contract, or workspace file changed. Left uncommitted for the
+  maintainer's review per this repository's convention.

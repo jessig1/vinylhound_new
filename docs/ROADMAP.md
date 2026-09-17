@@ -704,13 +704,13 @@ listed task without coaching; fix and retest blocking failures.
 
 ### P3.5 — Reproducible performance, delivery, and cost baseline
 
-- [ ] **Task 1.** First reconcile persistent monthly spend: development, both retained Aurora
+- [x] **Task 1.** First reconcile persistent monthly spend: development, both retained Aurora
       data planes/foundations, storage/backups/logging, capped aggregate AI usage,
       and a declared number of staging activation hours. State production rehearsal
       hours separately. Reconcile the $20 per-user AI default with a $25 total
       monthly target; alarms are not spending caps. If projected total exceeds
       $25, reduce scope/hours/allowances or record a revised budget decision before
-      adding recurring infrastructure.
+      adding recurring infrastructure. (2026-09-17)
 - [ ] **Task 2.** Commit benchmark scripts and sanitized results specifying commit,
       hardware/tier, dataset, multiple synthetic users and batches, cache state,
       warmup, sample counts, concurrency, and at least three repeated runs. Avoid
@@ -727,6 +727,48 @@ listed task without coaching; fix and retest blocking failures.
       and conservative full-check fallback. Record the tooling decision before
       adoption. Measure clean/cached builds before and after this optimization so
       Phase 4 does not attribute its gains to extraction.
+
+Task 1 completed 2026-09-17. Full detail, method, and every figure below are in
+`docs/OPERATIONS.md`'s "Reconciled monthly budget (P3.5 Task 1)" section,
+built from real AWS Cost Explorer pulls and live resource state (not
+list-price estimates) after the maintainer reauthenticated an expired AWS CLI
+session so this session could use real figures. Headline result: the tension
+`docs/PHASE_3_4_PLAN_REVIEW.md` flagged — a $20 per-user AI default consuming
+80% of the $25 target — turned out not to exist in the real deployment.
+`packages/config`'s `USER_MONTHLY_SPEND_LIMIT_USD` default is 20, but every
+environment that can spend real money (development's Lambda via
+`deploy-development.yml`'s injected env, staging and production via their
+Terraform variable defaults) already overrides it to **5**; the 20 is reachable
+only through a local `npm run dev` session with a manually-set real key, which
+CLAUDE.md/AGENTS.md already discourage. Measured persistent baseline across
+Secrets Manager (twelve secrets, not the nine a stale doc line claimed — a
+real correction, `infra/terraform/development/main.tf`'s one `for_each`
+resource creates four, not one), ECR image storage (a real, previously
+undocumented cost, bounded by a live 20-image-per-repo lifecycle policy),
+Aurora storage, S3, and CloudWatch Logs is ~$5.60/month from six clean
+non-activation days. Reconciled total at current single-tester,
+pre-public-usage scale: $5.60 baseline + $5 AI ceiling = $10.60/month steady
+state, with $14.40/month of headroom before any staging/production
+activation. Staging activation measured at ~$0.30-0.45 per full lifecycle run
+from real historical `deploy-staging.yml` runs; declared allowance is up to
+10 hours/month. Production rehearsal hours are stated separately per the
+task's own requirement: all five historical `deploy-production.yml` attempts
+failed before completing (gated on issues #8/#9/#10), so no real per-hour
+figure exists yet — only a planning-level rate-card estimate. Projected total
+in a month using both declared allowances is ~$21/month, under $25 with
+margin; **no scope, hour, or allowance reduction was needed** — the fix was
+correcting which AI-cap number was real, not cutting anything. Also found and
+excluded: this AWS account carries non-VinylHound resources (a pre-existing
+`siliconforest.io` Route 53 zone/registration and an unreferenced ~$3.72/month
+Lightsail charge with no Terraform source, flagged to the maintainer to
+confirm/cancel) that would have inflated the reconciliation if left in.
+Left explicitly unresolved rather than guessed at: where the development
+database is hosted/billed (external to these Terraform roots; identifying the
+provider would have meant reading a stored secret, which this session's own
+safety controls correctly blocked) and real historical OpenAI spend (no
+billing API access from this session — the $5 figure used throughout is the
+enforced ceiling, not measured actual spend). Both are carried forward for
+whoever picks up next.
 
 Exit: another contributor can reproduce the workload/report with committed
 commands. Results include sanitized samples, percentiles, run conditions, and
