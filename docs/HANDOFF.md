@@ -13,7 +13,59 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-12
+## Current state — verified 2026-09-17
+
+- **P3.4 Task 3 (batch review navigation on P3.1 image reads, empty/loading/
+  error states, accessible controls, and the privacy notice) is complete and
+  committed. P3.4 now has Tasks 1-3 checked; Task 4 (the five-participant
+  test) remains.** The batch review page at `/scans/batch/{batchId}` was the
+  one screen still reading thumbnails through its own fetch-and-`<img>`
+  `BatchThumbnail`, duplicating what P3.1's signed-thumbnail endpoint already
+  gave every other screen through the shared `CoverArt` component (scan
+  history and both library grids already used it). It now renders through
+  `CoverArt`, with a per-card `toneFor` hash for the placeholder tone —
+  matching the convention already duplicated across `scans/page.tsx`,
+  `dashboard/page.tsx`, `dashboard/scan-activity-row.tsx`,
+  `discover/discovery-client.ts`, and `library-album-card.tsx`; a sixth copy
+  here follows the existing pattern rather than introducing a new shared
+  helper for it. Each card's title is now an `h2` (was a bare `<strong>`),
+  giving the batch grid a heading per record like the equivalent library and
+  scan-history rows. The "This isn't a match" disclosure now sets
+  `aria-expanded`/`aria-controls`, and its target stays mounted with the
+  `hidden` attribute instead of being conditionally rendered, so the
+  `aria-controls` reference always resolves to a real element (needed a
+  `.batch-scan-card__mismatch-actions[hidden]{display:none}` override since
+  the class's own `display:grid` otherwise wins over the attribute's default
+  at equal specificity). A `batch.scans.length === 0` branch (every scan in
+  the batch was canceled or never uploaded) now renders the same
+  `library-empty` pattern used elsewhere instead of a silently empty grid;
+  the page's existing loading/error states were reviewed and left as-is —
+  they already matched `/scans/{scanId}`'s pattern (`aria-live="polite"`
+  spinner; a message card with a link back, while polling keeps retrying
+  underneath on its own).
+  **Found and fixed a real, unrelated bug while wiring `/privacy` into the
+  accessibility audit list:** `apps/web/src/proxy.ts`'s Clerk
+  `isPublicRoute` matcher never included `/privacy`, so in
+  `AUTH_MODE=production` clicking "Privacy notice" from the public landing
+  page (signed out) redirected to sign-in instead of showing the notice —
+  exactly backwards for a privacy notice. `AUTH_MODE=development` (every
+  local/CI/e2e run) skips this middleware entirely, which is why nothing
+  caught it before. Fixed by adding `/privacy` to the matcher alongside `/`,
+  `/sign-in(.*)`, `/sign-up(.*)`. The notice itself (shipped in Milestone 4
+  Task 2) was otherwise accurate and complete; it was just unreachable from
+  inside the authenticated app, so `/account` gained a "Privacy notice" link
+  next to "Usage and cost" on both the Clerk and development account pages.
+  `/scans`, `/privacy`, and the batch page (a new axe check added at the
+  point `scan-flow.e2e.ts`'s existing two-record test is already sitting on
+  `/scans/batch/{batchId}` with everything finished) now run the
+  zero-WCAG-2-A/AA-violations check in `accessibility.e2e.ts`; `/privacy`
+  was also added to the 360px no-horizontal-overflow check. Verified:
+  `lint`, `typecheck`, `test` (329/329, unchanged — no contract change),
+  `npx prettier --check --end-of-line auto` on every changed file, `npm run
+build`, and `npm run test:e2e` (mobile Chromium, 31/32 — the one failure is
+  the pre-existing `live-camera` flake, reproduced on clean `main` by every
+  prior session that has looked at it). `docs/ROADMAP.md` (Task 3 checked)
+  and this file are updated.
 
 - **P3.4 Task 2 (per-copy editing completion: explicit last-copy rules,
   copy additions, ownership, idempotency, mutation feedback, audit history)
@@ -1593,27 +1645,26 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-12 (fourth session): P3.4 Task 2 is done (ADR-0024) and
-checked in `docs/ROADMAP.md`; the work is uncommitted in the working tree
-and should be reviewed and committed first** (`git status` lists it:
-contracts + three fixtures, the domain rule, migration 017 + schema, the
-repository, the new `copies/route.ts`, three client components and the
-detail page, the integration and e2e specs, and docs). Run `npm run check`,
-`npm run check:contracts` (expect "2 new in this version" under requests and
-nothing rejected) and `npm run test:database` (applies migration 017 if the
-target database lacks it) to confirm before committing. Staging/production
-need `npm run db:migrate` for 016 and 017.
+**Current, 2026-09-17 (fifth session): P3.4 Task 3 is done and committed**
+(batch review page on `CoverArt`, an empty state for a zero-scan batch, an
+accessible mismatch disclosure, `/privacy` reachable pre-auth and linked
+from `/account`, and the new routes added to the WCAG/360px checks — see
+"Current state" above for the full account, including the `proxy.ts`
+public-route bug found and fixed along the way).
 
-Next per `docs/ROADMAP.md` is **P3.4 Task 3** (batch review navigation with
-P3.1 image reads — the batch page still uses its own `BatchThumbnail` —
-plus empty/loading/error states, accessible controls, and the privacy
-notice; scan history and the library grids already use `CoverArt`), then
-**Task 4** (the five-participant test, last). One follow-up from Task 2
-is deliberately not done and recorded under "Known gaps": the 100-copy cap
-is enforced on `POST .../copies` but not where a scan confirmation records
-a copy. The four-profile Playwright matrix now runs here (Firefox and
-WebKit installed) and is green apart from the `live-camera` flake; new
-specs must follow the two engine rules in `docs/TESTING.md` (settle a
+Next per `docs/ROADMAP.md` is **P3.4 Task 4** (the five-participant test:
+fixed task list — capture/review a record, recover a failed scan, find an
+older library entry, edit a copy — completion/assistance/failure recorded
+per task, no personal data; at least four of five must finish every task
+without coaching). That is a real-user protocol to design and run, not a
+code change; nothing in the codebase currently blocks it. One follow-up from
+Task 2 is deliberately not done and recorded under "Known gaps": the
+100-copy cap is enforced on `POST .../copies` but not where a scan
+confirmation records a copy. The four-profile Playwright matrix (Firefox and
+WebKit installed) was last run clean apart from the `live-camera` flake on
+2026-09-12/13; this session ran only the mobile-Chromium profile (also
+31/32, same flake) since nothing in Task 3 touched browser-specific timing.
+New specs must follow the two engine rules in `docs/TESTING.md` (settle a
 router refresh before navigating; prove React saw a fill). The library grid reads through `parseResponse` and
 the pages accept `q`/`sort` in the URL and page in place; a favorites
 filter on the list pages, "save and add to playlist", and drag-and-drop
@@ -3662,3 +3713,50 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   tradeoff superseded, updated `docs/API.md`, `docs/TESTING.md`, the
   roadmap (Task 1 checked, partial-progress note trimmed) and this file.
   Left uncommitted for maintainer review, per convention.
+
+- **2026-09-17 - Claude (fifth session).** Asked to work on P3.4 Task 3.
+  Read this file and the roadmap first; found P3.4 Task 2's work already
+  committed as `35dd3fd` (clean tree at session start, so no review/commit
+  step was needed before starting). The resume point's parenthetical named
+  the concrete gap precisely: the batch review page
+  (`/scans/batch/{batchId}`) still fetched thumbnails through its own
+  `BatchThumbnail` rather than the shared `CoverArt` component P3.1 built
+  and every other screen already used. Swapped it in, added a `toneFor`
+  hash matching the pattern already duplicated five other places in the
+  codebase (deliberately did not extract a shared helper — an existing,
+  repeated convention, not a new abstraction to introduce mid-task),
+  promoted each card's title from `<strong>` to `<h2>`, made the "This
+  isn't a match" disclosure set `aria-expanded`/`aria-controls` with its
+  target kept mounted via the `hidden` attribute (with a CSS
+  `[hidden]{display:none}` override, since the class's own `display:grid`
+  otherwise wins over the attribute default at equal specificity — a real
+  gotcha, not assumed), and added a `library-empty`-style branch for a
+  batch whose scans are all canceled/never-uploaded.
+  While wiring `/privacy` into the accessibility audit list, found a real
+  bug rather than just adding coverage: `apps/web/src/proxy.ts`'s Clerk
+  `isPublicRoute` matcher never listed `/privacy`, so in
+  `AUTH_MODE=production` an unauthenticated visitor following the landing
+  page's "Privacy notice" link was bounced to sign-in instead of reading
+  it. Confirmed why no test had caught it — `AUTH_MODE=development` (every
+  local/CI/e2e run) skips this middleware entirely — before fixing it, and
+  also added an in-app path to the same page: `/account` gained a "Privacy
+  notice" link on both the Clerk and development variants. Added `/scans`,
+  `/privacy`, and (via a new axe check in `scan-flow.e2e.ts`, at the point
+  its existing two-record test already sits on the finished batch page) the
+  batch page itself to `accessibility.e2e.ts`'s WCAG 2 A/AA list; added
+  `/privacy` to the 360px overflow check.
+  Docker Desktop was not running at session start (`docker compose ps`
+  failed with a named-pipe connection error); started it, waited for the
+  engine, then `docker compose up -d` before `npm run test:e2e` — noting
+  this since a future session on this machine may hit the same thing.
+  Verified: `lint`, `typecheck`, `test` (329/329, unchanged — no contract
+  touched this session), `npx prettier --check --end-of-line auto` on every
+  changed file, `npm run build`, and `npm run test:e2e` (mobile Chromium,
+  31/32 — the one failure is the pre-existing `live-camera` flake every
+  prior session has also seen on a clean tree). Did not run the full
+  four-browser matrix: nothing this session touched cross-browser timing,
+  and the matrix was last confirmed clean (apart from the same flake) on
+  2026-09-12/13. Checked P3.4 Task 3 in `docs/ROADMAP.md`, updated this
+  file's "Current state" and "Resume point". Did not commit; left for the
+  maintainer's review per this repository's convention of leaving finished
+  work uncommitted in the tree.

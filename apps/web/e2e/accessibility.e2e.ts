@@ -4,12 +4,14 @@ import { expect, test } from "@playwright/test";
 const auditedRoutes = [
   { path: "/dashboard", name: "dashboard" },
   { path: "/scan", name: "scan" },
+  { path: "/scans", name: "scan history" },
   { path: "/collection", name: "collection" },
   { path: "/wishlist", name: "wishlist" },
   { path: "/account", name: "account" },
   { path: "/discover", name: "discover" },
   { path: "/favorites", name: "favorites" },
   { path: "/playlists", name: "playlists" },
+  { path: "/privacy", name: "privacy notice" },
 ];
 
 for (const route of auditedRoutes) {
@@ -66,6 +68,7 @@ test("scan and library controls fit a narrow phone viewport", async ({
     "/discover",
     "/favorites",
     "/playlists",
+    "/privacy",
   ]) {
     await page.goto(path);
     await expect(page.locator("main")).toBeVisible();

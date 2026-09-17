@@ -1527,19 +1527,11 @@ a.album-card:focus-visible {
   border-radius: 12px;
   background: #faf9f5;
 }
-.batch-scan-card__art {
+.batch-scan-card .album-art {
   width: 112px;
   height: 112px;
-  object-fit: cover;
-  background: #ece9df;
-}
-.batch-scan-card__art--empty {
-  display: grid;
-  place-content: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.64rem;
-  text-align: center;
+  align-self: start;
+  box-shadow: none;
 }
 .batch-scan-card__body,
 .batch-scan-card__heading,
@@ -1551,13 +1543,15 @@ a.album-card:focus-visible {
 .batch-scan-card__body {
   padding: 14px;
 }
-.batch-scan-card__identity strong,
+.batch-scan-card__identity h2,
 .batch-scan-card__identity small {
   display: block;
 }
-.batch-scan-card__identity strong {
+.batch-scan-card__identity h2 {
+  margin: 0;
   overflow: hidden;
   font-size: 1rem;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1589,6 +1583,9 @@ a.album-card:focus-visible {
   display: grid;
   grid-column: 1 / -1;
   gap: 8px;
+}
+.batch-scan-card__mismatch-actions[hidden] {
+  display: none;
 }
 .batch-scan-card__mismatch-actions .secondary-button {
   justify-content: center;

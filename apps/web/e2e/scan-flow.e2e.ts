@@ -148,6 +148,11 @@ test("groups two front-cover photos into an independently trackable batch", asyn
     page.getByText("All records in this batch have finished."),
   ).toBeVisible();
 
+  const batchAccessibility = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  expect(batchAccessibility.violations).toEqual([]);
+
   const secondBatchScanId = await page
     .locator(".batch-scan-card")
     .first()

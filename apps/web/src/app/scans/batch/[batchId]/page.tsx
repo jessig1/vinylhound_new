@@ -10,12 +10,12 @@ import {
   GetBatchResponseSchema,
   parseResponse,
   RetryScanResponseSchema,
-  SignedImageReadSchema,
   type BatchScanSummary,
   type GetBatchResponse,
   type LibraryList,
 } from "@vinylhound/contracts";
 
+import { CoverArt } from "../../../cover-art";
 import { Icon } from "../../../ui";
 
 const ACTIVE_STATUSES = new Set(["awaiting_upload", "queued", "processing"]);
@@ -211,6 +211,29 @@ export default function BatchProgressPage() {
   }
   if (!batch) return null;
 
+  if (batch.scans.length === 0) {
+    return (
+      <main className="content-page library-page">
+        <header className="page-heading">
+          <div>
+            <p className="section-kicker">Batch scan</p>
+            <h1>This batch has no records.</h1>
+          </div>
+        </header>
+        <section className="library-empty">
+          <span className="upload-card__icon">
+            <Icon name="camera" size={27} />
+          </span>
+          <h2>Nothing to review here.</h2>
+          <p>Every photo in this batch was canceled or never uploaded.</p>
+          <Link className="primary-button" href="/scan">
+            <Icon name="camera" size={18} /> Start a new scan
+          </Link>
+        </section>
+      </main>
+    );
+  }
+
   const activeCount = batch.scans.filter((scan) =>
     ACTIVE_STATUSES.has(scan.status),
   ).length;
@@ -292,10 +315,20 @@ function BatchItemCard({
     (scan.status === "identified" || scan.status === "needs_review") &&
     scan.topCandidate &&
     !confirmedList;
+  const mismatchActionsId = `mismatch-actions-${scan.scanId}`;
+  const title = scan.topCandidate?.title ?? "Untitled scan";
 
   return (
     <article className="batch-scan-card" data-scan-id={scan.scanId}>
-      <BatchThumbnail imageId={scan.thumbnailImageId} scanId={scan.scanId} />
+      <CoverArt
+        image={
+          scan.thumbnailImageId
+            ? { scanId: scan.scanId, imageId: scan.thumbnailImageId }
+            : null
+        }
+        title={title}
+        tone={toneFor(scan.scanId)}
+      />
       <div className="batch-scan-card__body">
         <div className="batch-scan-card__heading">
           <span className={`status ${statusTone(scan.status)}`}>
@@ -303,7 +336,7 @@ function BatchItemCard({
           </span>
           {scan.topCandidate ? (
             <div className="batch-scan-card__identity">
-              <strong>{scan.topCandidate.title}</strong>
+              <h2>{title}</h2>
               <small>{scan.topCandidate.artist}</small>
               <CandidateFacts candidate={scan.topCandidate} />
             </div>
@@ -342,6 +375,8 @@ function BatchItemCard({
                 <Icon name="heart" size={16} /> Add to wishlist
               </button>
               <button
+                aria-controls={mismatchActionsId}
+                aria-expanded={showMismatchActions}
                 className="text-button batch-scan-card__mismatch"
                 disabled={pending}
                 onClick={() => setShowMismatchActions((current) => !current)}
@@ -349,20 +384,22 @@ function BatchItemCard({
               >
                 This isn&apos;t a match
               </button>
-            </>
-          ) : null}
-          {showMismatchActions ? (
-            <div className="batch-scan-card__mismatch-actions">
-              <Link className="secondary-button" href="/scan">
-                Scan again
-              </Link>
-              <Link
-                className="secondary-button"
-                href={`/scans/${scan.scanId}?manual=1`}
+              <div
+                className="batch-scan-card__mismatch-actions"
+                hidden={!showMismatchActions}
+                id={mismatchActionsId}
               >
-                Enter details manually
-              </Link>
-            </div>
+                <Link className="secondary-button" href="/scan">
+                  Scan again
+                </Link>
+                <Link
+                  className="secondary-button"
+                  href={`/scans/${scan.scanId}?manual=1`}
+                >
+                  Enter details manually
+                </Link>
+              </div>
+            </>
           ) : null}
           {!canConfirm && !confirmedList ? (
             <Link className="text-button" href={`/scans/${scan.scanId}`}>
@@ -414,52 +451,25 @@ function CandidateFacts({
   );
 }
 
-function BatchThumbnail({
-  scanId,
-  imageId,
-}: {
-  scanId: string;
-  imageId: string | null;
-}) {
-  const [url, setUrl] = useState<string | null>(null);
+const tones = [
+  "blue",
+  "cream",
+  "sun",
+  "crosswalk",
+  "classroom",
+  "chrome",
+  "ocean",
+  "green",
+  "snow",
+  "red",
+  "rainbow",
+  "water",
+] as const;
 
-  useEffect(() => {
-    if (!imageId) return;
-    let cancelled = false;
-    void fetch(`/api/v1/scans/${scanId}/images/${imageId}/thumbnail`, {
-      cache: "no-store",
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Thumbnail unavailable");
-        return parseResponse(SignedImageReadSchema, await response.json());
-      })
-      .then((image) => {
-        if (!cancelled) setUrl(image.url);
-      })
-      .catch(() => {
-        if (!cancelled) setUrl(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [imageId, scanId]);
-
-  if (!url) {
-    return (
-      <div className="batch-scan-card__art batch-scan-card__art--empty">
-        <Icon name="collection" size={30} />
-        <span>Cover preview</span>
-      </div>
-    );
-  }
-  return (
-    <img
-      alt="Scanned album cover"
-      className="batch-scan-card__art"
-      onError={() => setUrl(null)}
-      src={url}
-    />
-  );
+function toneFor(id: string) {
+  let value = 0;
+  for (const character of id) value = (value + character.charCodeAt(0)) % 997;
+  return tones[value % tones.length]!;
 }
 
 function statusLabel(status: BatchScanSummary["status"]) {

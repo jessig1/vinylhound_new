@@ -629,8 +629,9 @@ the compatibility foundation separately before Phase 4 extraction.
       deletion, ownership checks, idempotency, and mutation feedback. Define
       last-copy rules explicitly and preserve confirmation audit history.
       (ADR-0024, 2026-09-12)
-- [ ] **Task 3.** Use P3.1 image reads in scan history and batch review navigation. Complete
+- [x] **Task 3.** Use P3.1 image reads in scan history and batch review navigation. Complete
       empty/loading/error states, accessible controls, and the privacy notice.
+      (2026-09-17)
 - [ ] **Task 4.** Test five new participants on a fixed task list: capture/review a record,
       recover a failed scan, find an older library entry, and edit a copy.
       Record completion, assistance, and failures per task without personal data.
@@ -648,6 +649,53 @@ Task 2 (2026-09-12, ADR-0024) closed the copy commands: the last-copy rule
 recorded until the user moves or removes it), `POST /library/{itemId}/copies`
 under an `Idempotency-Key`, integration tests for ownership, idempotency and
 audit survival, and Playwright coverage of the detail page.
+
+Task 3 completed 2026-09-17: the batch review page (`/scans/batch/{batchId}`)
+was the one screen still reading thumbnails through its own fetch-and-`<img>`
+`BatchThumbnail`, duplicating what P3.1's signed-thumbnail endpoint already
+gives every other screen through the shared `CoverArt` component (scan
+history and both library grids already used it, per the 2026-09-09 note
+above). It now renders through `CoverArt` like the rest of the app, with a
+per-card `toneFor` hash for the placeholder tone matching the convention
+already duplicated across `scans/page.tsx`, `dashboard/page.tsx`,
+`dashboard/scan-activity-row.tsx`, `discover/discovery-client.ts`, and
+`library-album-card.tsx`. Each card's title is now an `h2` (was a bare
+`<strong>`) so the batch grid exposes a heading per record, matching
+`library-album-card.tsx` and `scans/page.tsx`'s own row markup. The
+"This isn't a match" disclosure now sets `aria-expanded`/`aria-controls` and
+keeps its target `<div>` mounted with the `hidden` attribute rather than
+conditionally rendering it, so the `aria-controls` reference always resolves
+to a real element (a `[hidden]` CSS override was needed since the class
+already declared `display: grid`, which otherwise beats the attribute's
+default `display: none` at equal specificity). A `batch.scans.length === 0`
+branch (a batch whose only scans were canceled or never uploaded) now renders
+the same `library-empty` empty state pattern used elsewhere instead of
+silently rendering a zero-item grid; the existing loading/error states
+(`aria-live="polite"` spinner; a message card with a "Back to scan history"
+link, while polling keeps retrying underneath) were reviewed and left as
+they already matched the pattern used by `/scans/{scanId}`.
+
+Found and fixed a real, unrelated bug while adding `/privacy` to the WCAG
+audit list: `apps/web/src/proxy.ts`'s Clerk `isPublicRoute` matcher never
+included `/privacy`, so in `AUTH_MODE=production` an unauthenticated visitor
+clicking "Privacy notice" from the public landing page was redirected to
+sign-in instead of reading the notice — the opposite of what a privacy
+notice is for. `AUTH_MODE=development` (used by every local/CI/e2e run) never
+applies this middleware at all, which is why no existing test caught it.
+Fixed by adding `/privacy` alongside `/`, `/sign-in(.*)`, and `/sign-up(.*)`.
+The privacy notice itself (`/privacy`, shipped in Milestone 4 Task 2) was
+otherwise complete and accurate; it was just unreachable from inside the
+authenticated app, so `/account` gained a "Privacy notice" link next to
+"Usage and cost" on both the Clerk and development account pages.
+`/scans`, `/privacy`, and the batch page (via a new axe check in
+`scan-flow.e2e.ts`, at the point the existing two-record test is already
+sitting on `/scans/batch/{batchId}` with everything finished) now run the
+zero-WCAG-2-A/AA-violations check in `accessibility.e2e.ts`, alongside the
+existing dashboard/scan/collection/wishlist/account/discover/favorites/
+playlists routes; `/privacy` was also added to the 360px no-overflow check.
+Verified: `lint`, `typecheck`, `test` (329/329, unchanged — no contract
+change), `format:check` on every changed file with `--end-of-line auto`,
+`npm run build`, and `npm run test:e2e` (mobile Chromium).
 
 Exit: tests find/export records beyond a 100-item fixture, paginate without
 duplicates, and verify copy mutations/audit protection. All four browser profiles

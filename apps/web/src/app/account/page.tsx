@@ -54,6 +54,9 @@ function ClerkAccountPage() {
       <Link className="text-button" href="/account/usage">
         <Icon name="sparkle" size={18} /> Usage and cost
       </Link>
+      <Link className="text-button" href="/privacy">
+        <Icon name="info" size={18} /> Privacy notice
+      </Link>
       <AccountDataActions />
       <button
         className="signout-button"
@@ -81,6 +84,9 @@ function DevelopmentAccountPage() {
       </header>
       <Link className="text-button" href="/account/usage">
         <Icon name="sparkle" size={18} /> Usage and cost
+      </Link>
+      <Link className="text-button" href="/privacy">
+        <Icon name="info" size={18} /> Privacy notice
       </Link>
       <AccountDataActions />
     </main>
