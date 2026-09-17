@@ -40,6 +40,13 @@ ENV NODE_ENV=production \
 # Next.js image to Lambda HTTP events in the always-on development environment.
 COPY --from=lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
 
+# The pinned base image predates Debian's libpcre2-8-0 security backport
+# (10.42-1+deb12u1, already in bookworm-security); pull it in explicitly
+# instead of waiting on a new base image digest.
+RUN apt-get update \
+    && apt-get upgrade -y libpcre2-8-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # The runtime needs Node, not npm/corepack. Removing package-manager tooling
 # eliminates its transitive vulnerability surface from the shipped image.
 RUN rm -rf /usr/local/lib/node_modules/npm \

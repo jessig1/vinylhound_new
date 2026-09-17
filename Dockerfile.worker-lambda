@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
-ARG LAMBDA_NODE_IMAGE=public.ecr.aws/lambda/nodejs:22@sha256:55578081d7ad85eb91bb8926c59774091eda6439820340ae58a7ae443e73d7a4
+ARG LAMBDA_NODE_IMAGE=public.ecr.aws/lambda/nodejs:22@sha256:5a56ad90aea87910b0babc885cdf80302a06cfb56822a0e128a2ab4d996c8450
 
 FROM ${NODE_IMAGE} AS build
 WORKDIR /workspace

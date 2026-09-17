@@ -3760,3 +3760,43 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   file's "Current state" and "Resume point". Did not commit; left for the
   maintainer's review per this repository's convention of leaving finished
   work uncommitted in the tree.
+
+- **2026-09-17 - Claude.** Maintainer asked to fix the failing GitHub Actions
+  after `dad8e90` (p 3.4.3) pushed to `main`. The `Platform` workflow's
+  `containers` job failed all three matrix legs (`web`, `worker`,
+  `worker-lambda`) on the Trivy `exit-code: 1` gate — a base-image drift
+  issue, not an application defect: `Dockerfile.web` and `Dockerfile.worker`
+  both build their runtime stage from the pinned
+  `node:22-bookworm-slim@sha256:83f487e0...` digest, which still ships
+  `libpcre2-8-0 10.42-1` even though Debian's `bookworm-security` repo has
+  carried the fix (`10.42-1+deb12u1`, CVE-2026-86145/89157/89161) since
+  before this digest was pinned — confirmed by pulling the same tag locally
+  and diffing `apt-cache policy` (no newer `node:22-bookworm-slim` digest
+  exists yet, so a version bump can't fix it). `Dockerfile.worker-lambda`
+  had a different cause: 18 HIGH CVEs in `openssl-fips-provider-latest` /
+  `openssl-snapsafe-libs`, all fixed at `1:3.5.8-1.amzn2023.0.1`; the pinned
+  `public.ecr.aws/lambda/nodejs:22` digest predates that fix, and the
+  existing `.trivyignore` waiver for `CVE-2026-14456` (added by a prior
+  session, expiring 2026-10-05, with a comment to remove it once "AWS
+  publishes a consumable fixed base/package") was already stale — pulling
+  the current `public.ecr.aws/lambda/nodejs:22` tag today (both `amd64`,
+  what the `ubuntu-latest` CI runner actually builds/scans, and `arm64`,
+  what `deploy-staging`/`deploy-development` ship) showed AWS has since
+  published `3.5.8-1.amzn2023.0.1` for both platforms. Fix: bumped
+  `LAMBDA_NODE_IMAGE` in `Dockerfile.worker-lambda` to the new manifest-list
+  digest (`sha256:5a56ad90...`) and removed the now-resolved `.trivyignore`
+  waiver; added an explicit `apt-get upgrade -y libpcre2-8-0` step to the
+  runtime stage of `Dockerfile.web` and `Dockerfile.worker` (before the
+  existing npm/corepack-removal `RUN`, while still root) rather than waiting
+  on a new base-image digest. Verified by building all three images locally
+  from the edited Dockerfiles and scanning each with
+  `aquasec/trivy:0.70.0 image --ignore-unfixed --severity CRITICAL,HIGH`
+  (the same flags the workflow passes) — all three now exit `0` with zero
+  vulnerabilities, versus 3/3/18 HIGH before. Did not run `npm run
+  check`/`build`: no application, workspace, or TypeScript file changed,
+  only `Dockerfile.web`, `Dockerfile.worker`, `Dockerfile.worker-lambda`,
+  and `.trivyignore` (now empty; kept as a zero-byte file since
+  `platform.yml` still passes `trivyignores: .trivyignore` and Trivy accepts
+  an empty file). Did not touch `docs/ROADMAP.md` — this was a CI/infra
+  fix, not roadmap work. Left uncommitted for the maintainer's review per
+  this repository's convention.
