@@ -711,10 +711,10 @@ listed task without coaching; fix and retest blocking failures.
       monthly target; alarms are not spending caps. If projected total exceeds
       $25, reduce scope/hours/allowances or record a revised budget decision before
       adding recurring infrastructure. (2026-09-17)
-- [ ] **Task 2.** Commit benchmark scripts and sanitized results specifying commit,
+- [x] **Task 2.** Commit benchmark scripts and sanitized results specifying commit,
       hardware/tier, dataset, multiple synthetic users and batches, cache state,
       warmup, sample counts, concurrency, and at least three repeated runs. Avoid
-      measuring only one user's quota lock or one batch-row lock.
+      measuring only one user's quota lock or one batch-row lock. (2026-09-17)
 - [ ] **Task 3.** Measure API p50/p95, error rate, upload/normalization, queue age, attempt
       duration, end-to-end latency, throughput, and estimated AI cost. Reconcile
       signals with `OPERATIONS.md`; reuse persisted attempts and optional queue
@@ -769,6 +769,45 @@ safety controls correctly blocked) and real historical OpenAI spend (no
 billing API access from this session — the $5 figure used throughout is the
 enforced ceiling, not measured actual spend). Both are carried forward for
 whoever picks up next.
+
+Task 2 completed 2026-09-17: `scripts/benchmark/` (`npm run bench:load`, see
+its `README.md`) drives the real HTTP API — batch create, scan create, signed
+upload, a real MinIO PUT, upload completion (readback/validate/normalize),
+and submit — against a local production standalone build, with every batch
+owned by one of several distinct synthetic users and every run using fresh
+random user IDs, specifically so `enforceScanQuota`'s
+`pg_advisory_xact_lock(hashtext(userId))` and `createOrGetScan`'s batch-row
+`SELECT ... FOR UPDATE` (`packages/database/src/scan-repository.ts`) are
+exercised across many independent lock targets rather than one, per
+`docs/PHASE_3_4_PLAN_REVIEW.md`'s explicit warning about that confound. The
+worker under test is `apps/worker/src/e2e-worker.ts` (the same
+synthetic-identifier worker the Playwright e2e suite uses), so the benchmark
+makes zero billable OpenAI calls. Driving traffic as distinct synthetic users
+required one small, explicitly gated product change: `AUTH_MODE=development`
+previously resolved every request to the same fixed `DEVELOPMENT_USER_ID`
+with no way to address a different user over HTTP.
+`DEVELOPMENT_BENCH_USER_HEADER_ENABLED` (new config flag, default `false`,
+never consulted when `AUTH_MODE=production`) lets `requireUserId`
+(`apps/web/src/server/auth.ts`) honor an `X-Vinylhound-Bench-User-Id` header
+instead; the benchmark sets it itself and no other caller does, so default
+behavior for development, CI, and e2e is unchanged. Committed sanitized
+results from three consecutive timed runs (5 users × 2 batches × 5 scans =
+50 scans/run, concurrency 10, one discarded warmup pass, single long-lived
+warm process across all runs) are in
+`scripts/benchmark/results/2026-09-17T21-07-11-939Z/` (`report.json` and
+`summary.md`): 150/150 scans succeeded, full-pipeline p50 ranged 320–363 ms
+and p95 360–416 ms across the three runs, run-to-run throughput was
+consistent (27.9–29.9 scans/s) on this maintainer's development laptop (not
+a dedicated benchmark machine — absolute numbers are illustrative, not a
+performance claim). Deeper metric reconciliation against `OPERATIONS.md`,
+provider-stub-versus-live-run separation, and worker-concurrency comparisons
+are explicitly out of scope here and remain Tasks 3 and 4. Verified `lint`,
+`typecheck` (added `scripts/benchmark/**/*.ts` to the root `tsconfig.json`
+project so the benchmark is typechecked like application code), `test`
+(329/329, unchanged), `build`, and `test:e2e` mobile-chromium (31/32, the
+same pre-existing `live-camera` flake every prior session has also hit on a
+clean tree) to confirm the `auth.ts` change didn't regress the existing
+unauthenticated dev-mode path.
 
 Exit: another contributor can reproduce the workload/report with committed
 commands. Results include sanitized samples, percentiles, run conditions, and

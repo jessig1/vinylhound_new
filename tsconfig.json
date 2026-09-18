@@ -31,9 +31,16 @@
     "apps/**/*.ts",
     "apps/**/*.tsx",
     "packages/**/*.ts",
+    "scripts/benchmark/**/*.ts",
     "eslint.config.mjs",
     "prettier.config.mjs",
     "vitest.config.ts"
   ],
-  "exclude": ["**/node_modules", "**/.next", "**/.next-e2e", "**/dist"]
+  "exclude": [
+    "**/node_modules",
+    "**/.next",
+    "**/.next-e2e",
+    "**/.next-bench",
+    "**/dist"
+  ]
 }

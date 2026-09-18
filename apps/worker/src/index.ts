@@ -20,9 +20,11 @@ import { writeFile } from "node:fs/promises";
 
 import { createScanAnalysisHandler } from "./analysis-handler.ts";
 import { startQueueMetricsPublisher } from "./metrics.ts";
+import { requireOpenAiApiKey } from "./require-openai-key.ts";
 
 const shutdownSignals = ["SIGINT", "SIGTERM"] as const;
 const config = loadQueueWorkerConfig();
+requireOpenAiApiKey(config.OPENAI_API_KEY);
 const database = createDatabase(databaseOptionsFromConfig(config));
 const queue =
   config.QUEUE_DRIVER === "sqs"
@@ -47,7 +49,7 @@ const onAnalyzeScan = createScanAnalysisHandler({
   database: database.db,
   storage,
   identifier: createOpenAIAlbumIdentifier({
-    apiKey: config.OPENAI_API_KEY ?? "disabled",
+    apiKey: config.OPENAI_API_KEY,
     model: config.OPENAI_VISION_MODEL,
     imageDetail: config.OPENAI_IMAGE_DETAIL,
     timeoutMs: config.OPENAI_TIMEOUT_MS,
@@ -55,8 +57,8 @@ const onAnalyzeScan = createScanAnalysisHandler({
   configuredModel: config.OPENAI_VISION_MODEL,
   promptVersion: ALBUM_IDENTIFICATION_PROMPT_VERSION,
 });
-const analysisWorker = config.OPENAI_API_KEY
-  ? config.QUEUE_DRIVER === "sqs"
+const analysisWorker =
+  config.QUEUE_DRIVER === "sqs"
     ? createSqsAnalyzeScanWorker({
         queueUrl: config.SQS_QUEUE_URL!,
         maxAttempts: config.SQS_MAX_RECEIVE_COUNT,
@@ -78,8 +80,7 @@ const analysisWorker = config.OPENAI_API_KEY
             errorName: error.name,
           });
         },
-      })
-  : undefined;
+      });
 
 let stopping = false;
 let nextPoll: NodeJS.Timeout | undefined;
@@ -210,7 +211,7 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
   }
   console.info(`[worker] received ${signal}; shutting down cleanly`);
   await Promise.allSettled([
-    analysisWorker?.close(),
+    analysisWorker.close(),
     activePoll,
     activeCleanupPoll,
   ]);
@@ -228,7 +229,6 @@ console.info("[worker] started", {
   deploymentVersion: config.DEPLOYMENT_VERSION,
   queueDriver: config.QUEUE_DRIVER,
   outboxPollIntervalMs: config.OUTBOX_POLL_INTERVAL_MS,
-  analysisEnabled: Boolean(analysisWorker),
   analysisConcurrency: config.ANALYSIS_CONCURRENCY,
   cloudWatchMetricsEnabled: config.CLOUDWATCH_METRICS_ENABLED,
   abandonedUploadTtlHours: config.ABANDONED_UPLOAD_TTL_HOURS,

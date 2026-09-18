@@ -15,6 +15,142 @@ the log.
 
 ## Current state — verified 2026-09-17
 
+- **Two follow-up fixes from the P3.5 Task 2 session, uncommitted: the
+  production worker's silent-stall bug is fixed, and CI is green again.**
+  1. **`apps/worker/src/index.ts` now fails fast instead of silently
+     no-opping when `OPENAI_API_KEY` is unset**, closing the bug the P3.5
+     Task 2 session found and deliberately left unfixed (see the old resume
+     point below for the original writeup). Previously, `analysisWorker` was
+     `undefined` in that case while the outbox dispatcher kept publishing
+     jobs into Redis/SQS regardless, so submitted scans piled up unprocessed
+     forever with nothing surfaced anywhere. `apps/worker/src/lambda.ts`
+     already had exactly this guard (`if (!config.OPENAI_API_KEY) throw
+...`) — `index.ts` was the one inconsistent entrypoint missing it.
+     Extracted the shared, unit-tested assertion
+     `requireOpenAiApiKey` (new `apps/worker/src/require-openai-key.ts`, an
+     `asserts` function so `config.OPENAI_API_KEY` narrows to `string` for
+     the rest of each module) so both entrypoints use one guard instead of
+     drifting independently; both now call it immediately after
+     `loadQueueWorkerConfig()`, before any database/queue/storage client is
+     constructed. Simplified the now-dead conditionals downstream in
+     `index.ts` (`apiKey: config.OPENAI_API_KEY ?? "disabled"` →
+     `config.OPENAI_API_KEY`; `analysisWorker` is no longer `| undefined`;
+     removed the now-always-`true` `analysisEnabled` log field).
+     `apps/worker/src/e2e-worker.ts` (used by both the e2e suite and the
+     P3.5 Task 2 benchmark) is unaffected — it is a separate entrypoint that
+     never reads `OPENAI_API_KEY` at all and always starts a real consumer
+     with a synthetic identifier. Manually verified the new failure mode
+     directly (`tsx apps/worker/src/index.ts` with every other env var valid
+     and `OPENAI_API_KEY=""`): the process now crashes immediately with a
+     clear message, before touching the database, instead of booting
+     "successfully" and silently stalling. New test:
+     `apps/worker/src/require-openai-key.test.ts` (3 cases).
+  2. **CI's `validate` job (`npm run check` → `format:check`) has been
+     failing on every push since at least `hotfix-ci-failures`
+     (2026-09-17T16:36) and `p3.5.1` (2026-09-17T20:12) — confirmed via `gh
+run list`/`gh run view --log-failed` on both runs — purely because
+     `docs/HANDOFF.md` itself had pre-existing Prettier formatting drift**
+     (five spots: over-indented continuation lines under a few bullets, and
+     one `*emphasis*` that should have been `_emphasis_`), unrelated to any
+     application code. This is a different, real issue from this session's
+     own local-only false positive: plain `npm run check`/`prettier --check
+.` on this Windows checkout flags ~75 files it shouldn't, because
+     `core.autocrlf=true` here checks files out with CRLF while the repo is
+     LF and Prettier's default `endOfLine: "lf"` then disagrees with the
+     bytes on disk — `npx prettier --check --end-of-line auto .` is the
+     correct local proxy for what the Linux CI runner actually sees (per the
+     `git-stash-rewrites-crlf` guidance this repository already follows),
+     and that command was clean before this fix except for the five real
+     `docs/HANDOFF.md` spots, which `gh run view`'s CI log reproduced
+     exactly. Fixed with `npx prettier --write --end-of-line auto
+docs/HANDOFF.md` (targeted at that one file, not a repo-wide reformat).
+     Re-verified against CI's exact step sequence
+     (`.github/workflows/ci.yml`): `npx prettier --check --end-of-line auto
+.`, `npm run lint`, `npm run typecheck`, `npm test` (332/332), `npm run
+check:contracts` (against `origin/main` at `1f5602c`), and `npm run
+build` all pass clean. The `Platform`/`Security`/`Deploy development`
+     workflows are already green on `main` — only `CI` was red, and only for
+     this one reason.
+     Changed: `apps/worker/src/index.ts`, `apps/worker/src/lambda.ts`, new
+     `apps/worker/src/require-openai-key.ts` +
+     `require-openai-key.test.ts`, and `docs/HANDOFF.md` (the formatting fix,
+     bundled into this same entry rather than a separate commit-sized diff).
+     Left uncommitted for the maintainer's review per this repository's
+     convention — once committed, the next CI run on `main` should go green
+     again.
+
+- **P3.5 Task 2 (benchmark scripts and sanitized results) is complete and
+  uncommitted in the working tree for maintainer review.** `scripts/benchmark/`
+  (`npm run bench:load`, documented in its own `README.md`) drives the real
+  HTTP API end to end — `POST /batches`, `POST /scans`, a signed upload plus
+  the real MinIO PUT, `POST .../uploads/{imageId}/complete` (real
+  readback/validate/sharp-normalize), and `POST .../submit` — against a local
+  production standalone build (`next build` into a dedicated `.next-bench`
+  dist dir, mirroring how `apps/web/playwright.config.ts` builds for e2e).
+  The worker under test is `apps/worker/src/e2e-worker.ts`, the same
+  synthetic-identifier worker the Playwright e2e suite already uses, so the
+  benchmark makes zero billable OpenAI calls.
+  **Multiple synthetic users and batches, deliberately:**
+  `docs/PHASE_3_4_PLAN_REVIEW.md` warned that a load test driven by one
+  synthetic user or one batch measures `enforceScanQuota`'s
+  `pg_advisory_xact_lock(hashtext(userId))` or `createOrGetScan`'s batch-row
+  `SELECT ... FOR UPDATE` (`packages/database/src/scan-repository.ts`) rather
+  than real throughput. Every run creates several distinct synthetic users
+  with several batches each, generates fresh random user IDs every run (so
+  no quota/active-scan state carries over), and shuffles the (user, batch)
+  pairs before dispatch so concurrent requests land on many independent lock
+  targets. Driving traffic as distinct synthetic users required one small,
+  explicitly gated product change, since `AUTH_MODE=development` previously
+  resolved every request to the same fixed `DEVELOPMENT_USER_ID` with no way
+  to address a different user over HTTP: a new
+  `DEVELOPMENT_BENCH_USER_HEADER_ENABLED` config flag (default `false`,
+  `packages/config/src/index.ts`), which only when true lets
+  `requireUserId` (`apps/web/src/server/auth.ts`) honor an
+  `X-Vinylhound-Bench-User-Id` request header (read via `next/headers`,
+  so no call site's signature changed) instead of the fixed ID. The
+  benchmark is the only thing that sets this flag; it is never consulted
+  when `AUTH_MODE=production` (Clerk resolves identity there), so default
+  behavior for development, CI, and e2e is unchanged. This design choice —
+  add the header versus benchmark the repository layer directly, bypassing
+  HTTP — was confirmed with the maintainer before implementation.
+  Committed sanitized results from three consecutive timed runs (5 users ×
+  2 batches × 5 scans = 50 scans/run, concurrency 10, one discarded warmup
+  pass, single long-lived warm web+worker process across all three runs, no
+  restart between them) are in
+  `scripts/benchmark/results/2026-09-17T21-07-11-939Z/report.json` and
+  `summary.md`: 150/150 scans succeeded (zero errors), full-pipeline p50
+  ranged 320–363 ms and p95 360–416 ms across the three runs, throughput was
+  consistent run to run (27.9–29.9 scans/s). Measured on this maintainer's
+  development laptop (Intel Core 7 150U, 12 logical cores, 15.7 GiB RAM,
+  Windows) — not a dedicated benchmark machine, so absolute numbers are
+  illustrative and the point is reproducibility, not a performance claim.
+  Per-step (scans.create, uploads.create, storage.put, uploads.complete,
+  scans.submit) p50/p95/p99/min/max/mean are also recorded per run.
+  Deliberately out of scope here, left for Tasks 3 and 4: reconciling these
+  signals against `OPERATIONS.md`, separating deterministic provider-stub
+  runs from a capped real OpenAI run, and comparing single- versus
+  multi-worker concurrency.
+  Verified: `lint`, `typecheck` (added `scripts/benchmark/**/*.ts` to the
+  root `tsconfig.json` project so the benchmark is typechecked like
+  application code, not left as an unchecked script), `test` (329/329,
+  unchanged — no contract touched), `build`, and `test:e2e` mobile-chromium
+  (31/32, the same pre-existing `live-camera` flake every prior session has
+  also hit on a clean tree) to confirm the `auth.ts` change didn't regress
+  the existing unauthenticated dev-mode path that every other test already
+  depends on.
+  Changed: `packages/config/src/index.ts` (new flag),
+  `apps/web/src/server/auth.ts` (header-gated resolution), `.env.example`
+  (documents the flag, default `false`), `tsconfig.json` (typechecks the
+  benchmark), `eslint.config.mjs`/`.gitignore` (ignore `.next-bench`),
+  `package.json` (`bench:load` script), the new `scripts/benchmark/*.ts` +
+  `README.md`, one committed results directory, and `docs/ROADMAP.md`
+  (Task 2 checked with a full note). Left uncommitted for the maintainer's
+  review per this repository's convention. Two local, gitignored side
+  effects from running it: a `vinylhound_e2e_bench` PostgreSQL database
+  (separate from both the developer's own database and the e2e suite's
+  `vinylhound_e2e`) and an `apps/web/.next-bench` build directory — both are
+  safe to delete and will be recreated on the next `npm run bench:load`.
+
 - **P3.5 Task 1 (first reconciled monthly spend baseline) is complete and
   uncommitted in the working tree for maintainer review.** Full detail is in
   `docs/OPERATIONS.md`'s new "Reconciled monthly budget (P3.5 Task 1)"
@@ -37,7 +173,7 @@ the log.
   through 2026-09-16): ~$5.60/month, dominated by Secrets Manager
   ($4.80/month for **twelve** secrets, not the nine a stale
   `docs/OPERATIONS.md` line claimed — `infra/terraform/development/
-  main.tf:107-115` is one `for_each` Terraform resource that creates four
+main.tf:107-115` is one `for_each` Terraform resource that creates four
   real secrets, not one; corrected in place) plus a real but small ECR
   image-storage cost that the original P3.1 Task 7 inventory missed entirely
   (bounded by a live, Terraform-absent 20-image-per-repo lifecycle policy —
@@ -82,7 +218,7 @@ the log.
   `.env.example` (clarifying comment on `USER_MONTHLY_SPEND_LIMIT_USD`). No
   application code changed; nothing needed to change, since the real
   deployed configuration already reconciles under $25. Not run: `npm run
-  check`/`build` (no application, contract, or workspace file touched — this
+check`/`build` (no application, contract, or workspace file touched — this
   was a documentation/infrastructure-inventory task). Left uncommitted for
   the maintainer's review per this repository's convention.
 
@@ -1716,33 +1852,61 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-17 (fifth session): P3.4 Task 3 is done and committed**
-(batch review page on `CoverArt`, an empty state for a zero-scan batch, an
-accessible mismatch disclosure, `/privacy` reachable pre-auth and linked
-from `/account`, and the new routes added to the WCAG/360px checks — see
-"Current state" above for the full account, including the `proxy.ts`
-public-route bug found and fixed along the way).
+**Current, 2026-09-17 (this session, second pass): the worker silent-stall
+bug is fixed and CI is green again, both uncommitted** — see "Current state"
+above for the full account of both. In short: `apps/worker/src/index.ts` now
+refuses to start without `OPENAI_API_KEY` (matching `lambda.ts`'s existing
+guard) instead of silently never processing jobs, and `docs/HANDOFF.md`'s
+own pre-existing Prettier drift — which had been failing CI's `validate` job
+on every push since `hotfix-ci-failures` — is fixed. **Before committing
+anything from this repository on this machine, use `npx prettier --check
+--end-of-line auto .`, not plain `npm run check`/`prettier --check .`** —
+the latter falsely flags ~75 files here because `core.autocrlf=true`
+checks them out as CRLF while the repo is LF; it is not a real signal and
+chasing it would reformat files that are actually fine.
 
-Next per `docs/ROADMAP.md` is **P3.4 Task 4** (the five-participant test:
-fixed task list — capture/review a record, recover a failed scan, find an
-older library entry, edit a copy — completion/assistance/failure recorded
-per task, no personal data; at least four of five must finish every task
-without coaching). That is a real-user protocol to design and run, not a
-code change; nothing in the codebase currently blocks it. One follow-up from
-Task 2 is deliberately not done and recorded under "Known gaps": the
-100-copy cap is enforced on `POST .../copies` but not where a scan
-confirmation records a copy. The four-profile Playwright matrix (Firefox and
-WebKit installed) was last run clean apart from the `live-camera` flake on
-2026-09-12/13; this session ran only the mobile-Chromium profile (also
-31/32, same flake) since nothing in Task 3 touched browser-specific timing.
-New specs must follow the two engine rules in `docs/TESTING.md` (settle a
-router refresh before navigating; prove React saw a fill). The library grid reads through `parseResponse` and
-the pages accept `q`/`sort` in the URL and page in place; a favorites
-filter on the list pages, "save and add to playlist", and drag-and-drop
-remain deliberately undone (P3.3 Task 2 note). P3.5 follows product-scope
-stabilization; P4.2's versioned confirmation event should be registered
-through `defineEventContract` and get an `events/<topic>/` fixture in the
-same change.
+**Earlier in this session, P3.5 Task 2 was completed** (reproducible
+benchmark harness at `scripts/benchmark/`, three sanitized timed runs
+committed under `scripts/benchmark/results/`, and the
+`DEVELOPMENT_BENCH_USER_HEADER_ENABLED`-gated auth change that made
+multi-user HTTP load testing possible in `AUTH_MODE=development` — see
+"Current state" above for the full account). P3.5 now has Task 1 and Task 2
+checked; Tasks 3-5 remain.
+
+Next per `docs/ROADMAP.md` is **P3.5 Task 3** (measure API p50/p95, error
+rate, upload/normalization, queue age, attempt duration, end-to-end latency,
+throughput, and estimated AI cost; reconcile signals with `OPERATIONS.md`;
+reuse persisted attempts and optional queue CloudWatch metrics). Task 2's
+harness already produces per-step p50/p95/p99 for four of those
+(scans.create/uploads.create/storage.put/uploads.complete/scans.submit) — Task
+3's job is reconciling that shape against real persisted-attempt/queue-age
+signals and `OPERATIONS.md`, not building a second harness from scratch.
+Tasks 4 (deterministic-stub versus capped live run, held provider
+concurrency) and 5 (affected-workspace build/test selection) remain after
+that. **P3.4 Task 4 (the five-participant usability test) is still open and
+not being treated as a blocker for P3.5** — it is a real-user protocol to
+design and run, not a code change, and nothing in the codebase depends on it;
+it should still get picked up when there's a maintainer available to run it.
+One follow-up from P3.4 Task 2 is deliberately not done and recorded under
+"Known gaps": the 100-copy cap is enforced on `POST .../copies` but not where
+a scan confirmation records a copy. The four-profile Playwright matrix
+(Firefox and WebKit installed) was last run clean apart from the
+`live-camera` flake on 2026-09-12/13; this and the prior two sessions ran
+only the mobile-Chromium profile (also 31/32, same flake) since neither
+touched browser-specific timing. New specs must follow the two engine rules
+in `docs/TESTING.md` (settle a router refresh before navigating; prove React
+saw a fill). The library grid reads through `parseResponse` and the pages
+accept `q`/`sort` in the URL and page in place; a favorites filter on the
+list pages, "save and add to playlist", and drag-and-drop remain
+deliberately undone (P3.3 Task 2 note). P4.2's versioned confirmation event
+should be registered through `defineEventContract` and get an
+`events/<topic>/` fixture in the same change.
+
+The worker silent-stall bug flagged earlier in this file's history is now
+**fixed**, not just flagged — see "Current state" above. `apps/worker/src/
+index.ts` and `lambda.ts` both now call the shared `requireOpenAiApiKey`
+(`apps/worker/src/require-openai-key.ts`) immediately after
+`loadQueueWorkerConfig()`, and the fix is manually verified and unit tested.
 
 When the next contract change lands, follow `packages/contracts/fixtures/
 README.md`: freeze the pre-change shape if no fixture covers it, add the new
@@ -3864,7 +4028,7 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   `aquasec/trivy:0.70.0 image --ignore-unfixed --severity CRITICAL,HIGH`
   (the same flags the workflow passes) — all three now exit `0` with zero
   vulnerabilities, versus 3/3/18 HIGH before. Did not run `npm run
-  check`/`build`: no application, workspace, or TypeScript file changed,
+check`/`build`: no application, workspace, or TypeScript file changed,
   only `Dockerfile.web`, `Dockerfile.worker`, `Dockerfile.worker-lambda`,
   and `.trivyignore` (now empty; kept as a zero-byte file since
   `platform.yml` still passes `trivyignores: .trivyignore` and Trivy accepts
@@ -3887,14 +4051,14 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   `list-services`, `aws eks list-clusters`, `aws s3 ls --summarize`,
   `aws secretsmanager list-secrets`, `aws ecr describe-images`/
   `get-lifecycle-policy`, `aws logs describe-log-groups`, `aws route53
-  list-hosted-zones`, `aws lightsail get-instances`/`get-static-ips`/
+list-hosted-zones`, `aws lightsail get-instances`/`get-static-ips`/
   `get-distributions`/`get-domains`) and `gh run list` for both deploy
   workflows' real historical run history/durations. Full findings and
   figures are recorded once, in `docs/OPERATIONS.md`'s new "Reconciled
   monthly budget (P3.5 Task 1)" section; "Current state" above has the
   headline. One boundary respected deliberately: attempted to read the
   development database's connection-string secret via `aws secretsmanager
-  get-secret-value` to identify just the hosting provider's hostname (not
+get-secret-value` to identify just the hosting provider's hostname (not
   read any credential) for the "development database hosting" unknown this
   reconciliation was meant to close — this session's own Bash permission
   classifier blocked it, which was the correct outcome for an agent reading
@@ -3909,3 +4073,127 @@ check` (95 unit tests) and `npm run test:e2e` (14 mobile-Chromium tests).
   (a clarifying comment). Did not run `npm run check`/`build`: no
   application, contract, or workspace file changed. Left uncommitted for the
   maintainer's review per this repository's convention.
+
+- **2026-09-17 - Claude.** Asked to work on P3.5 Task 2 (benchmark scripts and
+  sanitized results). Read `docs/HANDOFF.md`, `AGENTS.md`, and
+  `docs/ROADMAP.md` per session-start convention; found the working tree
+  clean and P3.5 Task 1's prior uncommitted work already landed as commit
+  `1f5602c`. Read `docs/PHASE_3_4_PLAN_REVIEW.md`'s "Measurement design: one
+  confound worth naming" section, which names the exact code paths a naive
+  single-user/single-batch load test would measure instead of real
+  throughput: `enforceScanQuota`'s `pg_advisory_xact_lock(hashtext(userId))`
+  and `createOrGetScan`'s batch-row `SELECT ... FOR UPDATE`
+  (`packages/database/src/scan-repository.ts`). Delegated research (two
+  background Explore agents, not code changes) to map: how
+  `AUTH_MODE=development` resolves identity (`apps/web/src/server/auth.ts`'s
+  `requireUserId` always returns the same fixed `DEVELOPMENT_USER_ID`, with
+  no existing HTTP mechanism to address a different user — a real gap
+  against "multiple synthetic users"); the HTTP surface for the scan
+  pipeline; the local docker-compose stack (real Postgres/Redis/MinIO, not
+  mocked); and what happens submitting a scan with no `OPENAI_API_KEY`
+  (found the `apps/worker/src/index.ts` gap described in "Resume point"
+  above — not fixed, out of scope, but recorded so it isn't relied on
+  blind). Asked the maintainer via `AskUserQuestion` how to solve the
+  single-user problem: add a small, explicitly gated dev-only header
+  override, or benchmark the repository layer directly and skip HTTP
+  entirely. They chose the header. Implemented
+  `DEVELOPMENT_BENCH_USER_HEADER_ENABLED` (`packages/config/src/index.ts`,
+  default `false`) and threaded it through `requireUserId` via `next/headers`
+  (no call-site signature changes across the ~15 routes/pages that call it),
+  gated to `AUTH_MODE=development` only — production always authenticates
+  through Clerk regardless of this flag.
+  Built `scripts/benchmark/` (its own `README.md` has the full design):
+  `env.ts`/`db.ts` isolate a dedicated `vinylhound_e2e_bench` database (named
+  to satisfy `apps/worker/src/e2e-worker.ts`'s own hard-coded
+  `vinylhound_e2e` safety guard, reusing that proven synthetic-identifier
+  worker unmodified rather than forking it); `server.ts` builds and starts a
+  real production standalone server (mirroring
+  `apps/web/playwright.config.ts`'s e2e build) into a dedicated
+  `.next-bench` dist dir; `client.ts`/`workload.ts` run real HTTP scan
+  pipelines (batch create → scan create → signed upload → real MinIO PUT →
+  upload complete → submit) across many distinct synthetic users and
+  batches, generating fresh random user IDs every run and shuffling
+  (user, batch) pairs before dispatch; `stats.ts`/`report.ts` compute
+  percentiles and render `report.json`/`summary.md`. Hit and fixed two real
+  Windows/ESM issues along the way, not application bugs: `@next/env`'s CJS
+  build fails named-export resolution under plain Node ESM (fixed with a
+  default import); `spawn(..., { shell: true })` broke on
+  `process.execPath` containing a space (`C:\Program Files\nodejs\node.exe`)
+  because shell-mode args aren't auto-escaped — removed the unneeded shell
+  for direct-executable spawns, keeping it only for the npm/cmd invocations
+  that need it. Added `scripts/benchmark/**/*.ts` to the root
+  `tsconfig.json` project so it is typechecked like application code rather
+  than left as an unchecked script (the existing house convention for
+  `scripts/` is plain untyped `.mjs`/`.sh`; chose to typecheck this one given
+  its size and that its output is committed as a deliverable). Ran a tiny
+  sanity pass first, then the real benchmark: 3 timed runs, 5 users × 2
+  batches × 5 scans each, concurrency 10, one discarded warmup pass, single
+  warm process across all runs — 150/150 scans succeeded with consistent
+  p50/p95 and throughput across runs; full detail and the actual numbers are
+  in "Current state" above and in
+  `scripts/benchmark/results/2026-09-17T21-07-11-939Z/`.
+  Verified `lint`, `typecheck`, `test` (329/329, unchanged), `format:check`
+  on every changed/new file with `--end-of-line auto` (left
+  `docs/HANDOFF.md`'s pre-existing unrelated formatting drift alone, per
+  this repository's convention — confirmed via diff that those lines predate
+  this session), `npm run build`, and `npm run test:e2e` mobile-chromium
+  (31/32, the same pre-existing `live-camera` flake every prior session has
+  also hit on a clean tree) specifically to confirm the `auth.ts` change did
+  not regress the ordinary unauthenticated dev-mode path every other test
+  depends on. Checked P3.5 Task 2 in `docs/ROADMAP.md` with a full note,
+  updated this file's "Current state" and "Resume point". Left uncommitted
+  for the maintainer's review per this repository's convention.
+
+- **2026-09-17 - Claude.** Asked to fix the production worker entrypoint
+  issue the previous P3.5 Task 2 session had found and deliberately left
+  unfixed, then fix CI ("there are still errors when committing code").
+  **Worker fix:** confirmed the bug by reproducing it directly —
+  `tsx apps/worker/src/index.ts` with a valid database/queue/storage env but
+  `OPENAI_API_KEY=""` booted "successfully" with no error, matching the
+  earlier finding. Checked whether `lambda.ts` (the other real entrypoint)
+  had the same gap and found it did not: it already had
+  `if (!config.OPENAI_API_KEY) throw new Error(...)`, making `index.ts` the
+  one inconsistent entrypoint. Extracted that guard into a shared, exported
+  `asserts`-typed function (`apps/worker/src/require-openai-key.ts`) so both
+  entrypoints call one thing rather than two independent checks that could
+  drift, call it immediately after `loadQueueWorkerConfig()` in both files
+  (before any database/queue/storage client is constructed), and simplified
+  the downstream code in `index.ts` that existed only to handle the
+  now-impossible missing-key case (`?? "disabled"`, `analysisWorker |
+undefined`, the always-true `analysisEnabled` log field). Re-ran the same
+  manual reproduction to confirm the new behavior: the process now crashes
+  immediately with a clear message instead of booting quietly. Added
+  `apps/worker/src/require-openai-key.test.ts` (3 cases: undefined, empty
+  string, configured). `apps/worker/src/e2e-worker.ts` needed no change — it
+  never reads this key at all.
+  **CI fix:** `gh run list` showed the `CI` workflow's `validate` job red on
+  every recent push (`p 3.4.3`, `hotfix-ci-failures`, `p3.5.1`), while
+  `Platform`/`Security`/`Deploy development` were green. `gh run view
+--log-failed` on the two most recent failures showed an identical cause
+  both times: `npm run check`'s first step, `prettier --check .`, failing on
+  `docs/HANDOFF.md` alone. Reproduced the same warning locally with `npx
+prettier --check --end-of-line auto .` (five spots: a handful of
+  over-indented continuation lines under existing bullets, and one
+  `*emphasis*` that should have been `_emphasis_`) and fixed them with `npx
+prettier --write --end-of-line auto docs/HANDOFF.md`, scoped to that one
+  file rather than a repository-wide reformat. Separately noticed that plain
+  `npm run check`/`prettier --check .` on this Windows checkout falsely
+  flags around 75 unrelated files — traced to `core.autocrlf=true` (`git
+config --get core.autocrlf`) checking files out as CRLF against this LF
+  repository, confirmed with `file` showing CRLF line terminators on an
+  unmodified tracked file — and recorded in "Resume point" that
+  `--end-of-line auto` is the correct local check on this machine, matching
+  this repository's existing documented guidance. Verified CI's exact step
+  sequence from `.github/workflows/ci.yml` locally: `npx prettier --check
+--end-of-line auto .`, `npm run lint`, `npm run typecheck`, `npm test`
+  (332/332, +3 from the new test file), `npm run check:contracts` (against
+  `origin/main` at `1f5602c`, clean), and `npm run build` (web, worker,
+  evals) — all pass. Did not run `test:e2e` again this pass: nothing changed
+  in `apps/web` and the P3.5 Task 2 session already ran it after touching
+  `auth.ts`. Reverted `apps/web/next-env.d.ts` twice, once after `npm run
+build` regenerated its production-mode import paths — the known
+  generated-file artifact this file's own "Resume point" already documents
+  for the e2e variant; `git checkout -- apps/web/next-env.d.ts` each time,
+  never committed. Updated this file's "Current state" and "Resume point".
+  Left uncommitted for the maintainer's review per this repository's
+  convention.

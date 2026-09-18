@@ -15,6 +15,7 @@ import {
 import { createS3ObjectStorage } from "@vinylhound/storage";
 
 import { createScanAnalysisHandler } from "./analysis-handler.ts";
+import { requireOpenAiApiKey } from "./require-openai-key.ts";
 
 interface SqsLambdaRecord {
   messageId: string;
@@ -33,9 +34,7 @@ if (config.QUEUE_DRIVER !== "sqs" || !config.SQS_QUEUE_URL) {
     "The Lambda worker requires QUEUE_DRIVER=sqs and SQS_QUEUE_URL.",
   );
 }
-if (!config.OPENAI_API_KEY) {
-  throw new Error("The Lambda worker requires OPENAI_API_KEY.");
-}
+requireOpenAiApiKey(config.OPENAI_API_KEY);
 
 const database = createDatabase(databaseOptionsFromConfig(config));
 const queue = createSqsScanQueue({

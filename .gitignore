@@ -4,6 +4,7 @@ node_modules/
 # Build output
 .next/
 .next-e2e/
+.next-bench/
 dist/
 coverage/
 *.tsbuildinfo

@@ -102,6 +102,12 @@ export const DevelopmentWebConfigSchema = z
       .string()
       .uuid()
       .default("00000000-0000-4000-8000-000000000001"),
+    // Opt-in only, default false, and never consulted outside
+    // AUTH_MODE=development (production always resolves identity through
+    // Clerk). Lets a local load-test script address many distinct synthetic
+    // users over HTTP instead of every request resolving to the same fixed
+    // DEVELOPMENT_USER_ID. See scripts/benchmark/README.md.
+    DEVELOPMENT_BENCH_USER_HEADER_ENABLED: BooleanStringSchema.default(false),
     CLERK_SECRET_KEY: OptionalNonEmptyStringSchema,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: OptionalNonEmptyStringSchema,
     // Discovery (Spotify) is optional: unset credentials disable /discover
