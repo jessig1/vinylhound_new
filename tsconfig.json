@@ -34,6 +34,7 @@
     "scripts/benchmark/**/*.ts",
     "scripts/metrics/**/*.ts",
     "scripts/concurrency/**/*.ts",
+    "scripts/affected/**/*.ts",
     "eslint.config.mjs",
     "prettier.config.mjs",
     "vitest.config.ts"

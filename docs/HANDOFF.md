@@ -15,6 +15,72 @@ the log.
 
 ## Current state — verified 2026-09-18
 
+- **P3.5 Task 5 (affected-workspace build/test selection with dependency
+  closure and a conservative full-check fallback; record the tooling decision
+  before adoption; measure clean/cached builds before and after) is complete
+  and uncommitted in the working tree for maintainer review — P3.5 is now
+  fully checked.** Full detail, the tooling-decision rationale, and the
+  timing table are in `docs/OPERATIONS.md`'s new "Affected-workspace
+  build/test selection (P3.5 Task 5)" section and `docs/ROADMAP.md`'s Task 5
+  note; only the headline is repeated here.
+  New `scripts/affected/` (`npm run test:affected` / `npm run build:affected`,
+  own `README.md`) scopes `vitest`/the workspace build to the workspaces a
+  change could plausibly break: it lists files changed since a resolved base
+  commit (working tree included, so local runs reflect uncommitted edits),
+  classifies each as inside a known `apps/*`/`packages/*` workspace, inside a
+  documentation/infra/CI safe-ignore list, or unrecognized, and closes
+  directly-changed workspaces over their transitive dependents using a
+  dependency graph rebuilt fresh from every `package.json`'s `@vinylhound/*`
+  dependencies on each run. Any unrecognized path, or no resolvable base
+  commit, forces the existing full `npm test`/`npm run build` unchanged —
+  the conservative fallback the task asked for.
+  **Tooling decision, recorded before adoption** (this is the substance of
+  what the task asked to record): a small custom script rather than adopting
+  Nx or Turborepo — eleven workspaces with a shallow, easily-enumerated
+  dependency graph do not need a second build-orchestration layer for this
+  property, and a hand-rolled traversal is trivially unit-testable in
+  isolation, unlike a config-driven tool's selection logic. Revisit if the
+  workspace count or graph depth grows enough to change that trade-off.
+  **Adopted into CI**, not left opt-in-only: asked the maintainer first via
+  `AskUserQuestion` since this changes the shared merge gate, and the answer
+  was to wire it in now rather than leave it opt-in. `.github/workflows/
+ci.yml`'s `validate` job now runs `format:check`/`lint`/`typecheck` full
+  (unchanged — TypeScript compiles as one project with no project
+  references, so there is no cheaper subset to select there), then a new
+  affected-scoped test step, then the existing contract-compatibility step
+  (untouched), then a new affected-scoped build step — both new steps
+  resolving and fetching the same PR-base-or-pushed-over-commit ref the
+  contract-compatibility step already uses, and falling back to the
+  identical full command whenever nothing resolves. Local `npm run
+check`/`npm run build` (what `AGENTS.md` tells contributors to run before a
+  handoff) are themselves unchanged.
+  Verified correctness with 13 new unit tests (graph discovery, transitive
+  closure including a diamond dependency visited once, and every
+  classification rule) plus a dry run against the real repository's own
+  dependency graph, confirming real-world closures match expectations: a
+  `packages/queue`-only change selects `{queue, worker}`; a
+  `packages/contracts` change selects all eleven workspaces (contracts sits
+  at the graph's root — every workspace depends on it, directly or
+  transitively); a `docs/`-only change selects nothing.
+  Measured clean/cached build and test timing before this optimization was
+  adopted (single warm process, this maintainer's development laptop — not a
+  dedicated benchmark machine, illustrative rather than a performance claim):
+  full `npm test` (345 tests, 37 files) is 3.3–3.8s versus 0.85–0.94s scoped
+  to two affected workspaces (~4x, dominated by fixed per-file startup cost
+  rather than per-test work); full `npm run build` is 20–27s versus 5.2–5.7s
+  when the affected set excludes `apps/web` and its `next build` (a
+  structural skip, not an incremental speedup — neither `tsc` build here uses
+  incremental mode). A change touching `packages/contracts` or anything else
+  near the graph's root gets no benefit — the affected set is every
+  workspace, identical in scope and wall time to the full command.
+  Verified `lint`, `typecheck`, `test` (345/345, +13 net new — the tool's own
+  tests, no contract touched), `format:check` on every changed/new file with
+  `--end-of-line auto`, and `build`. Reverted the generated
+  `apps/web/next-env.d.ts` artifact twice (once after each full `npm run
+build`) per this repository's established convention — not a real change.
+  Left uncommitted for the maintainer's review per this repository's
+  convention.
+
 - **P3.5 Task 4 (separate deterministic provider-stub runs from a small
   capped live run; hold total provider concurrency constant for
   one/multiple-worker tests; separate application time from provider time)
@@ -1983,33 +2049,38 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-18: P3.5 Task 4 is complete, uncommitted** — see "Current
-state" above for the full account. In short: new `scripts/concurrency/`
-(`npm run concurrency:compare`) compares the deterministic stub worker
-against a small real capped live run, and one worker process against two,
-holding total provider concurrency constant across the worker-count
-comparison. Confirmed the live portion's scope/cost with the maintainer
-before running it (real, billable OpenAI calls): 10 real scans total, actual
-cost $0.0298. Headline finding: application time (`storageFetchDurationMs`,
-3–12ms) is negligible next to real provider time (`providerCallDurationMs`,
-2.2–5.9 seconds, p50 ~3.1s) — provider latency is essentially the whole
-attempt once a real call is involved. Worker-count comparison was
-inconclusive at only 5 live samples per leg (real but not reliable). **P3.5
-now has Tasks 1–4 checked; only Task 5 remains.**
+**Current, 2026-09-18: P3.5 Task 5 is complete, uncommitted — P3.5 is now
+fully checked (Tasks 1-5).** See "Current state" above for the full account.
+In short: new `scripts/affected/` (`npm run test:affected` / `npm run
+build:affected`) scopes `vitest`/the workspace build to a change's affected
+workspaces (changed workspaces closed over their transitive dependents, via a
+dependency graph read fresh from every `package.json`), conservatively
+falling back to the existing full `npm test`/`npm run build` for any
+unrecognized path or unresolvable base commit. Tooling decision recorded
+before adoption: a small custom script, not Nx/Turborepo (rationale in
+`docs/OPERATIONS.md`). Adopted into CI (confirmed with the maintainer first,
+since it changes the shared merge gate) — `.github/workflows/ci.yml` now
+runs full `format:check`/`lint`/`typecheck`, an affected-scoped test step,
+the existing contract-compatibility step, then an affected-scoped build
+step. Local `npm run check`/`npm run build` are unchanged. Measured before
+adoption: full `npm test` 3.3-3.8s vs 0.85-0.94s scoped to two affected
+workspaces (~4x); full `npm run build` 20-27s vs 5.2-5.7s when the affected
+set skips `apps/web`'s `next build` entirely. A `packages/contracts` change
+(or anything else near the graph's root) gets no benefit — its affected set
+is every workspace.
 
-Next per `docs/ROADMAP.md` is **P3.5 Task 5** (introduce affected-workspace
-build/test selection with dependency closure and a conservative full-check
-fallback; record the tooling decision before adoption; measure clean/cached
-builds before and after this optimization so Phase 4 does not misattribute
-its gains to extraction). This is the last task in P3.5 — once it lands,
-Phase 3's "reproducible performance, delivery, and cost baseline" milestone
-is complete and the roadmap's stated sequence moves to Phase 4 (measured
-service extraction, starting with P4.1 — extract discovery first), though
-`docs/ROADMAP.md`'s "Sequence and gates" section notes P3.4 Task 4 (below)
-should still be picked up when a maintainer is available, independent of
-Phase 3/4 sequencing. **P3.4 Task 4 (the five-participant usability test) is
-still open and
-not being treated as a blocker for P3.5** — it is a real-user protocol to
+**Per `docs/ROADMAP.md`, Phase 3's "reproducible performance, delivery, and
+cost baseline" milestone (P3.5) is now complete, and the roadmap's stated
+sequence moves to Phase 4 (measured service extraction) — start with P4.1
+Task 1** (use P3.5's evidence and ADR-0009's shared-catalog-coordination
+requirement to record discovery extraction's reason, expected benefit, cost,
+and rollback path, before Task 2's actual extraction work). Read
+`docs/ROADMAP.md`'s Phase 4 section and its "Sequence and gates" note in
+full before starting — P4.1 is explicitly the first extraction, gated only
+on recording that reasoning first; nothing in Phase 2's still-open issues
+(#8-#10) blocks P4.1 itself, only later EKS/production-rehearsal-adjacent
+work. **P3.4 Task 4 (the five-participant usability test) is still open and
+not being treated as a blocker for Phase 4** — it is a real-user protocol to
 design and run, not a code change, and nothing in the codebase depends on it;
 it should still get picked up when there's a maintainer available to run it.
 One follow-up from P3.4 Task 2 is deliberately not done and recorded under
@@ -4471,3 +4542,69 @@ ops.ts`'s `drain_check`/`queue_reconciliation` lines already use a single
   run `test:e2e`: nothing changed in browser-reachable behavior, only new
   standalone tooling under `scripts/`. Left uncommitted for the maintainer's
   review per this repository's convention.
+
+- **2026-09-18 - Claude (continuing, same day).** Asked to work on P3.5 Task
+  5 (affected-workspace build/test selection). Read `docs/HANDOFF.md`,
+  `AGENTS.md`, and `docs/ROADMAP.md` first per `CLAUDE.md`; confirmed a clean
+  tree (the previous Task 4 session's work had already landed as `2c17c60`,
+  `p 3.5.4`).
+  Mapped the real dependency graph first (`apps/web`, `apps/worker`, nine
+  `packages/*`, all plain `npm` workspaces, no existing Nx/Turborepo/project-
+  references setup; single root `tsconfig.json`, single root
+  `vitest.config.ts`) before writing anything, since the task's "record the
+  tooling decision" instruction meant deciding _whether_ to adopt a
+  monorepo tool at all, not just how to wire one in.
+  Built `scripts/affected/` (`workspace-graph.ts`, `changed-files.ts`,
+  `select-affected.ts`, `run.ts`, plus a `README.md`): a small script over
+  Nx/Turborepo, decided and recorded (rationale in `docs/OPERATIONS.md` and
+  this file's "Current state") because eleven workspaces with a shallow
+  graph don't need a second build-orchestration layer for dependency-closure
+  selection. `changed-files.ts`'s base-ref resolution deliberately mirrors
+  `packages/contracts/scripts/check-compatibility.ts`'s already-proven
+  approach (merge-base with a fallback to the raw candidate commit when a
+  shallow CI checkout has no common ancestor) rather than inventing a new
+  one, since that exact problem was already solved and running successfully
+  in this repo's CI. Added 13 unit tests
+  (`workspace-graph.test.ts`, `select-affected.test.ts`), then validated
+  against the real repository with a throwaway verification script (deleted
+  after use, never committed): a `packages/queue` change resolves to
+  `{queue, worker}`; a `packages/contracts` change resolves to all eleven
+  workspaces (contracts sits at the graph's root); a `docs/`-only change
+  resolves to nothing. Confirmed the `vitest` zero-match failure mode
+  (`No test files found, exiting with code 1`) directly before writing the
+  guard against it, rather than assuming.
+  Before wiring CI, used `AskUserQuestion` to ask whether to adopt this into
+  `.github/workflows/ci.yml` now (changing the shared merge gate) or leave it
+  opt-in-only for a maintainer to flip on later — flagged this specifically
+  because modifying CI/CD pipelines is called out as needing confirmation
+  regardless of task framing. Maintainer chose to wire it in now. Restructured
+  the `validate` job: `npm run check` unbundled into full `format:check`/
+  `lint`/`typecheck` steps (kept full — one `tsc` project, no cheaper
+  subset), a new affected-scoped test step, the existing (untouched)
+  contract-compatibility step, then a new affected-scoped build step — both
+  new steps reuse the same PR-base-or-pushed-over-commit ref pattern the
+  contracts step already uses and fall back to the identical full command on
+  any resolution failure.
+  Measured clean/cached build and test timing before/after, per the task's
+  explicit requirement that Phase 4 not misattribute this optimization's
+  gains to service extraction: full `npm test` (345 tests, 37 files) 3.3-3.8s
+  vs 0.85-0.94s scoped to `packages/queue`+`apps/worker` (~4x, dominated by
+  fixed per-file startup cost); full `npm run build` 20-27s (clean 27.0s,
+  warm 19.9s/21.8s) vs 5.2-5.7s scoped to `apps/worker`+`packages/evals`
+  (skips `apps/web`'s `next build` entirely — a structural skip, not an
+  incremental one, since neither `tsc` build here uses incremental mode).
+  Reverted the generated `apps/web/next-env.d.ts` artifact twice (once per
+  full `npm run build` run in this session) per the established convention —
+  confirmed both times it was only the known `.next/dev/types` vs
+  `.next/types` path difference, not a real change.
+  Wrote up the tooling decision, mechanism, and every timing figure in
+  `docs/OPERATIONS.md`'s new "Affected-workspace build/test selection (P3.5
+  Task 5)" section, checked Task 5 in `docs/ROADMAP.md` with a full note and
+  added the "P3.5 is complete" callout, and updated this file's "Current
+  state" and "Resume point" to point at Phase 4 P4.1 Task 1 next. Verified
+  `lint`, `typecheck`, `test` (345/345, +13 net new, no contract touched),
+  `format:check` (`npx prettier --check --end-of-line auto .`) on the full
+  tree, and `build`. Did not run `test:e2e`: nothing changed in
+  browser-reachable behavior, only new tooling under `scripts/` and CI
+  workflow config. Left uncommitted for the maintainer's review per this
+  repository's convention.

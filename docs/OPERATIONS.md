@@ -779,3 +779,105 @@ Verified `lint`, `typecheck`, `test` (unchanged — no contract touched),
 `format:check` on every changed/new file with `--end-of-line auto`, and
 `build`. Left uncommitted for the maintainer's review per this repository's
 convention.
+
+## Affected-workspace build/test selection (P3.5 Task 5, 2026-09-18)
+
+New `scripts/affected/` (`npm run test:affected` / `npm run build:affected`,
+full method in its own `README.md`) scopes `vitest`/the workspace build to
+only the workspaces a change could plausibly break, instead of always running
+every workspace. **Tooling decision, recorded before adoption**: a
+custom ~250-line script reading each `package.json`'s internal
+(`@vinylhound/*`) dependencies and `git diff`, not Nx or Turborepo — this
+repository is eleven plain `npm` workspaces with a shallow, easily-enumerated
+dependency graph, and adopting a task-graph tool would add a second
+build-orchestration layer and its own cache/config surface for a property
+(dependency-closure selection plus a conservative fallback) a small,
+independently unit-tested script already gets. Revisit if the workspace count
+or graph depth grows enough that hand-rolled traversal stops being the
+simpler option.
+
+**Mechanism**: resolve a base commit (explicit override, else
+`origin/main`, else `HEAD~1`, preferring the merge-base with `HEAD` when
+history allows it) using the same approach
+`packages/contracts/scripts/check-compatibility.ts` already proved works in
+this repo's shallow CI checkouts; list every file that differs from that base
+in the working tree (covers committed history since the base plus anything
+staged/unstaged/untracked, so local runs reflect real edits); classify each
+path as inside a known workspace, inside an explicit safe-ignore list
+(`docs/`, `infra/`, `aws/`, `.claude/`, top-level community-health files —
+none of which can affect build/test outcomes), or unrecognized.
+**Any unrecognized path — root config, a Dockerfile, a CI workflow, a new
+top-level directory — forces the existing full `npm test`/`npm run build`
+unchanged**; "don't know" always means "run everything," never "assume it's
+safe." Otherwise, the directly-changed workspaces are closed over their
+transitive dependents (a `packages/contracts` change affects everything that
+depends on it, directly or through another package) using a graph rebuilt
+fresh from `package.json` on every run, so it cannot go stale. `lint`,
+`typecheck`, and `format:check` stay full-repo everywhere: TypeScript compiles
+as one project with no project references, so there is no cheaper subset to
+select there without a separate, larger restructuring decision.
+
+**Adopted into CI** (`.github/workflows/ci.yml`), not left opt-in-only, per
+the roadmap task's own framing (record the decision, then adopt it) and an
+explicit maintainer confirmation before wiring the shared gate. `npm run
+check` is unbundled into its constituent `format:check`/`lint`/`typecheck`
+steps (unchanged, full) plus a new affected-scoped test step; `npm run build`
+is replaced by an affected-scoped build step. Both new steps resolve the same
+PR-base-or-pushed-over-commit ref the existing contract-compatibility step
+already uses, fetch it, and fall back to the full command whenever no base
+resolves — the worst case CI can do is exactly what it did before this task.
+Local `npm run check`/`npm run build` (the commands `AGENTS.md` documents
+running before a handoff) are themselves unchanged; the affected-scoped
+commands are additional, CI-oriented tooling, not a replacement for the full
+local check.
+
+**Verified correctness**: 13 new unit tests
+(`scripts/affected/workspace-graph.test.ts`, `select-affected.test.ts`) cover
+graph discovery (including skipping a directory with no `package.json` and
+excluding third-party dependencies from internal edges), transitive closure
+(a chain, and a diamond dependency reached through two paths, visited once),
+and every classification rule (a leaf package, a widely-depended-on package,
+ignored documentation/infra paths, a root config file, an unrecognized
+top-level path, an unregistered workspace-shaped directory, and combining
+several directly-changed workspaces into one closure). Additionally dry-run
+against the real repository's dependency graph confirmed the expected
+real-world closures: a `packages/queue` change selects
+`{queue, worker}`; a `packages/contracts` change selects all eleven
+workspaces (contracts sits at the root of the graph); a `docs/`-only change
+selects nothing.
+
+**Clean/cached build and test timing, measured before adopting this
+optimization so Phase 4 cannot attribute any of it to service extraction**
+(this maintainer's development laptop, not a dedicated benchmark machine —
+illustrative, not a performance claim; single warm process, three repeats for
+test, two to three for build given each clean build's longer wall time):
+
+| Command                                                         | Clean  | Cached (repeat 1) | Cached (repeat 2) |
+| --------------------------------------------------------------- | ------ | ----------------- | ----------------- |
+| `npm test` (full, 345 tests across 37 files)                    | —      | 3.29s             | 3.57s / 3.82s     |
+| `vitest run packages/queue apps/worker` (affected-only)         | —      | 0.87s             | 0.94s / 0.85s     |
+| `npm run build` (full: web `next build` + worker + evals `tsc`) | 27.03s | 19.89s            | 21.83s            |
+| affected build, worker+evals only (skips web's `next build`)    | 5.18s  | 5.53s             | 5.68s             |
+
+The full test suite is dominated by fixed per-file startup cost across 37
+files, not per-test work, so scoping to two affected workspaces (one file
+each) is roughly a 4x wall-time reduction for a change that does not touch
+`packages/contracts` or anything else widely depended on. The build
+difference is larger and structural rather than incremental: `next build`
+for `apps/web` accounts for essentially all of the ~20-27s full-build time,
+and an affected set that excludes `apps/web` (any change confined to
+`packages/queue`, `apps/worker`, or another workspace `apps/web` does not
+depend on) skips it entirely rather than running it faster. Neither `tsc`
+build here uses incremental mode (plain `tsc --project tsconfig.json`, no
+`.tsbuildinfo`), so "clean" and "cached" `tsc` timings are close together by
+construction — the affected win for those two is from not invoking `next
+build` at all, not from a warm cache. A change that touches
+`packages/contracts` (or anything else near the root of the dependency graph)
+gets no benefit from this optimization: the affected set is every workspace,
+identical to the full command in both scope and — for `vitest`, which does
+not batch differently by invocation — wall time.
+
+Verified `lint`, `typecheck`, `test` (345/345, +13 net new — the tool's own
+tests, no contract touched), `format:check` on every changed/new file with
+`--end-of-line auto`, and `build`. Left uncommitted for the maintainer's
+review per this repository's convention.

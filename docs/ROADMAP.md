@@ -724,10 +724,10 @@ listed task without coaching; fix and retest blocking failures.
 - [x] **Task 4.** Separate deterministic provider-stub runs from a small capped live run.
       Hold total provider concurrency constant for one/multiple-worker tests;
       separate application time from provider time. (2026-09-18)
-- [ ] **Task 5.** Introduce affected-workspace build/test selection with dependency closure
+- [x] **Task 5.** Introduce affected-workspace build/test selection with dependency closure
       and conservative full-check fallback. Record the tooling decision before
       adoption. Measure clean/cached builds before and after this optimization so
-      Phase 4 does not attribute its gains to extraction.
+      Phase 4 does not attribute its gains to extraction. (2026-09-18)
 
 Task 1 completed 2026-09-17. Full detail, method, and every figure below are in
 `docs/OPERATIONS.md`'s "Reconciled monthly budget (P3.5 Task 1)" section,
@@ -906,6 +906,59 @@ modes run. Verified `lint`, `typecheck`, `test` (332/332, unchanged — no
 contract touched), `format:check` on every changed/new file with
 `--end-of-line auto`, and `build`. Left uncommitted for the maintainer's
 review per this repository's convention.
+
+Task 5 completed 2026-09-18. New `scripts/affected/` (`npm run test:affected` /
+`npm run build:affected`, full method in its own `README.md`) scopes
+`vitest`/the workspace build to a change's affected workspaces — those with a
+directly changed file, closed transitively over their dependents — computed
+from `git diff` plus each `package.json`'s internal `@vinylhound/*`
+dependencies, rebuilt fresh every run. Any changed path outside a known
+workspace and outside an explicit documentation/infra/CI safe-ignore list
+conservatively forces the existing full `npm test`/`npm run build` unchanged;
+so does no resolvable base commit. **Tooling decision, recorded before
+adoption** (full rationale in `docs/OPERATIONS.md`): a small custom script
+rather than adopting Nx or Turborepo, since this repository's eleven
+workspaces and shallow dependency graph do not need a second
+build-orchestration layer to get affected selection, and a hand-rolled
+traversal is trivially unit-testable in isolation. 13 new unit tests cover
+graph discovery, transitive closure (including a diamond dependency visited
+once), and every classification rule; a dry run against the real repository
+confirmed the expected real-world closures (a `packages/queue` change selects
+only `{queue, worker}`; a `packages/contracts` change selects all eleven
+workspaces, since contracts sits at the graph's root; a `docs/`-only change
+selects nothing). Adopted into CI (`.github/workflows/ci.yml`, confirmed with
+the maintainer first since it changes the shared gate), not left opt-in-only:
+`npm run check` is unbundled into full `format:check`/`lint`/`typecheck`
+steps (TypeScript compiles as one project with no project references, so
+there is no cheaper subset to select there) plus a new affected-scoped test
+step, and `npm run build` is replaced by an affected-scoped build step, both
+resolving the same PR-base-or-pushed-over-commit ref the existing
+contract-compatibility step already uses and falling back to the full command
+identically to today whenever nothing resolves. Local `npm run check`/`npm
+run build` (what `AGENTS.md` documents running before a handoff) are
+themselves unchanged. Clean/cached builds and tests were measured before this
+adoption, per the task's own requirement that Phase 4 not misattribute this
+optimization's gains to service extraction: full `npm test` (345 tests, 37
+files) took 3.3-3.8s versus 0.85-0.94s scoped to two affected workspaces
+(~4x, dominated by fixed per-file startup cost, not per-test work); full `npm
+run build` took 20-27s versus 5.2-5.7s when the affected set excludes
+`apps/web` and its `next build` entirely (a structural skip, not an
+incremental speedup — neither `tsc` build here uses incremental mode). A
+change touching `packages/contracts` or anything else near the graph's root
+gets no benefit: the affected set is every workspace, identical in scope and
+wall time to the full command. Full detail, the tooling-decision rationale,
+and the timing table are in `docs/OPERATIONS.md`'s new "Affected-workspace
+build/test selection (P3.5 Task 5)" section. Verified `lint`, `typecheck`,
+`test` (345/345, +13 net new, no contract touched), `format:check` on every
+changed/new file with `--end-of-line auto`, and `build`.
+
+**P3.5 is complete — all five tasks are checked.** Phase 3's "reproducible
+performance, delivery, and cost baseline" milestone is done; per the
+roadmap's "Sequence and gates" section the stated sequence now moves to Phase
+4 (measured service extraction, starting with P4.1 — extract discovery
+first). P3.4 Task 4 (the five-participant usability test) remains open
+independent of this sequencing and should still be picked up when a
+maintainer is available to run it.
 
 Exit: another contributor can reproduce the workload/report with committed
 commands. Results include sanitized samples, percentiles, run conditions, and

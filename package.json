@@ -24,6 +24,8 @@
     "bench:load": "tsx scripts/benchmark/run.ts",
     "metrics:reconcile": "tsx scripts/metrics/reconcile.ts",
     "concurrency:compare": "tsx scripts/concurrency/run.ts",
+    "test:affected": "tsx scripts/affected/run.ts --mode test",
+    "build:affected": "tsx scripts/affected/run.ts --mode build",
     "container:build:web": "docker build --file Dockerfile.web --tag vinylhound-web:local .",
     "container:build:worker": "docker build --file Dockerfile.worker --tag vinylhound-worker:local .",
     "container:build:worker-lambda": "docker build --file Dockerfile.worker-lambda --tag vinylhound-worker-lambda:local .",

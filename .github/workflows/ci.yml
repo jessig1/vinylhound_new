@@ -19,10 +19,31 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run check
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      # Affected-workspace test/build selection (P3.5 Task 5): scopes vitest
+      # and the workspace build to changed workspaces plus their dependency
+      # closure, computed from git diff + each package.json's internal
+      # (@vinylhound/*) dependencies. Conservatively falls back to the full
+      # `npm test`/`npm run build` whenever a changed path is a root config
+      # file, an unrecognized top-level path, or no base commit is resolvable
+      # (see scripts/affected/README.md) — the worst case is identical to
+      # today's full run, never less coverage.
+      - name: Test (affected workspaces)
+        env:
+          AFFECTED_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -n "$AFFECTED_BASE_REF" && ! "$AFFECTED_BASE_REF" =~ ^0+$ ]]; then
+            git fetch --no-tags --depth=1 origin "$AFFECTED_BASE_REF"
+            npm run test:affected -- --base "$AFFECTED_BASE_REF"
+          else
+            echo "::notice title=Affected selection skipped::No previous commit to compare against (first push or forced history); running the full test suite."
+            npm test
+          fi
       # Contract compatibility against the previous deployed version
       # (ADR-0022): the PR base for pull requests, the pushed-over commit for
-      # main. `npm test` above already proved this tree accepts every frozen
+      # main. The step above already proved this tree accepts every frozen
       # fixture; this step proves the base's consumers accept this tree's event
       # payloads and that no frozen fixture was edited in place.
       - name: Contract compatibility with the previous version
@@ -35,4 +56,14 @@ jobs:
           fi
           git fetch --no-tags --depth=1 origin "$CONTRACTS_BASE_REF"
           npm run check:contracts
-      - run: npm run build
+      - name: Build (affected workspaces)
+        env:
+          AFFECTED_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -n "$AFFECTED_BASE_REF" && ! "$AFFECTED_BASE_REF" =~ ^0+$ ]]; then
+            git fetch --no-tags --depth=1 origin "$AFFECTED_BASE_REF"
+            npm run build:affected -- --base "$AFFECTED_BASE_REF"
+          else
+            echo "::notice title=Affected selection skipped::No previous commit to compare against (first push or forced history); running the full build."
+            npm run build
+          fi
