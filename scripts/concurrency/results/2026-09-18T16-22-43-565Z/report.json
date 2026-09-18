@@ -1,0 +1,183 @@
+{
+  "generatedAt": "2026-09-18T16:22:43.519Z",
+  "commit": "445addcb3c4c0c0a6d207c3d76c19a952bcc1d12",
+  "workingTreeDirty": true,
+  "hardware": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpuModel": "Intel(R) Core(TM) 7 150U",
+    "cpuCount": 12,
+    "totalMemGiB": 15.7,
+    "nodeVersion": "v24.18.0"
+  },
+  "fixture": {
+    "note": "one synthetic 600x600 solid-color JPEG, reused for every upload — real enough to pass validation and reach a real vision call, but not a real album cover, so live-mode token counts/cost are a floor, not a realistic estimate",
+    "image": "scripts/benchmark/fixture.ts (shared with the P3.5 Task 2 benchmark)"
+  },
+  "legs": [
+    {
+      "mode": "stub",
+      "workerCount": 1,
+      "totalConcurrency": 2,
+      "perWorkerConcurrency": 2,
+      "requestedScanCount": 25,
+      "distinctScanCount": 25,
+      "attemptCount": 25,
+      "submissionWallClockMs": 1664.6,
+      "analysisWallClockMs": 1001.2,
+      "throughputScansPerMinute": 1498.2,
+      "storageFetchMs": {
+        "count": 25,
+        "min": 3,
+        "p50": 6,
+        "p95": 12,
+        "p99": 28,
+        "max": 28,
+        "mean": 7.28
+      },
+      "providerCallMs": {
+        "count": 25,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 1,
+        "max": 1,
+        "mean": 0.04
+      },
+      "attemptDurationMs": {
+        "count": 25,
+        "min": 3,
+        "p50": 6,
+        "p95": 12,
+        "p99": 28,
+        "max": 28,
+        "mean": 7.32
+      },
+      "estimatedCostUsd": null,
+      "pipelineOk": true
+    },
+    {
+      "mode": "stub",
+      "workerCount": 2,
+      "totalConcurrency": 2,
+      "perWorkerConcurrency": 1,
+      "requestedScanCount": 25,
+      "distinctScanCount": 25,
+      "attemptCount": 25,
+      "submissionWallClockMs": 1467.72,
+      "analysisWallClockMs": 1007.36,
+      "throughputScansPerMinute": 1489.04,
+      "storageFetchMs": {
+        "count": 25,
+        "min": 3,
+        "p50": 6,
+        "p95": 30,
+        "p99": 32,
+        "max": 32,
+        "mean": 7.92
+      },
+      "providerCallMs": {
+        "count": 25,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "max": 0,
+        "mean": 0
+      },
+      "attemptDurationMs": {
+        "count": 25,
+        "min": 3,
+        "p50": 6,
+        "p95": 30,
+        "p99": 32,
+        "max": 32,
+        "mean": 7.92
+      },
+      "estimatedCostUsd": null,
+      "pipelineOk": true
+    },
+    {
+      "mode": "live",
+      "workerCount": 1,
+      "totalConcurrency": 2,
+      "perWorkerConcurrency": 2,
+      "requestedScanCount": 5,
+      "distinctScanCount": 5,
+      "attemptCount": 5,
+      "submissionWallClockMs": 335.95,
+      "analysisWallClockMs": 11088.12,
+      "throughputScansPerMinute": 27.06,
+      "storageFetchMs": {
+        "count": 5,
+        "min": 4,
+        "p50": 5,
+        "p95": 33,
+        "p99": 33,
+        "max": 33,
+        "mean": 10.6
+      },
+      "providerCallMs": {
+        "count": 5,
+        "min": 2186,
+        "p50": 3188,
+        "p95": 4464,
+        "p99": 4464,
+        "max": 4464,
+        "mean": 3388.2
+      },
+      "attemptDurationMs": {
+        "count": 5,
+        "min": 2190,
+        "p50": 3193,
+        "p95": 4497,
+        "p99": 4497,
+        "max": 4497,
+        "mean": 3398.8
+      },
+      "estimatedCostUsd": 0.0148,
+      "pipelineOk": true
+    },
+    {
+      "mode": "live",
+      "workerCount": 2,
+      "totalConcurrency": 2,
+      "perWorkerConcurrency": 1,
+      "requestedScanCount": 5,
+      "distinctScanCount": 5,
+      "attemptCount": 5,
+      "submissionWallClockMs": 338.71,
+      "analysisWallClockMs": 13133.82,
+      "throughputScansPerMinute": 22.84,
+      "storageFetchMs": {
+        "count": 5,
+        "min": 4,
+        "p50": 4,
+        "p95": 24,
+        "p99": 24,
+        "max": 24,
+        "mean": 11.8
+      },
+      "providerCallMs": {
+        "count": 5,
+        "min": 2613,
+        "p50": 3103,
+        "p95": 5882,
+        "p99": 5882,
+        "max": 5882,
+        "mean": 4019.2
+      },
+      "attemptDurationMs": {
+        "count": 5,
+        "min": 2617,
+        "p50": 3127,
+        "p95": 5905,
+        "p99": 5905,
+        "max": 5905,
+        "mean": 4031
+      },
+      "estimatedCostUsd": 0.015,
+      "pipelineOk": true
+    }
+  ]
+}

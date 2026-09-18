@@ -721,9 +721,9 @@ listed task without coaching; fix and retest blocking failures.
       CloudWatch metrics. Use structured logs/Logs Insights for new timings and
       include telemetry retention/cost rather than adding uncosted custom metrics.
       (2026-09-18)
-- [ ] **Task 4.** Separate deterministic provider-stub runs from a small capped live run.
+- [x] **Task 4.** Separate deterministic provider-stub runs from a small capped live run.
       Hold total provider concurrency constant for one/multiple-worker tests;
-      separate application time from provider time.
+      separate application time from provider time. (2026-09-18)
 - [ ] **Task 5.** Introduce affected-workspace build/test selection with dependency closure
       and conservative full-check fallback. Record the tooling decision before
       adoption. Measure clean/cached builds before and after this optimization so
@@ -857,6 +857,55 @@ metrics" instruction. Verified `lint`, `typecheck`, `test` (332/332,
 unchanged), `format:check` on every changed file with `--end-of-line auto`,
 and `build`. Left uncommitted for the maintainer's review per this
 repository's convention.
+
+Task 4 completed 2026-09-18. Full detail is in `docs/OPERATIONS.md`'s new
+"Deterministic-stub versus capped live run, and worker concurrency (P3.5
+Task 4)" section; only the headline is repeated here. New
+`scripts/concurrency/` (`npm run concurrency:compare`) drives the real HTTP
+submission pipeline, then starts a configurable number of real worker
+processes with `ANALYSIS_CONCURRENCY` split evenly across them, capturing
+each process's `scan_analysis_timing` stdout line directly (now single-line
+JSON thanks to the Task 3 fix) for the storage-fetch/provider-call split —
+`scan_attempts` never persisted that split, only the bundled total, so
+reading it from a controlled worker's own log output was the only way to get
+it without a schema change. `mode=stub` runs the deterministic
+`e2e-worker.ts` (free); `mode=live` runs the real `index.ts` against a real
+`OPENAI_API_KEY`, refusing to start without one. Confirmed the live
+portion's scope and cost with the maintainer via `AskUserQuestion` before
+running it, given it makes real, billable calls — 10 real scans total
+(5 scans × 2 worker-count legs), **actual cost $0.0298** (even cheaper than
+the $0.05–0.20 pre-run estimate, since the tool's synthetic fixture image is
+visually simpler than a real cover). Every leg holds total provider
+concurrency at 2 regardless of worker count, so the worker-count comparison
+isolates process-level parallelism from raw concurrency, per the task's
+explicit requirement. Headline finding: `storageFetchDurationMs`
+(application time) is 3–12ms in every leg, stub or live; real
+`providerCallDurationMs` is 2.2–5.9 seconds (p50 ~3.1s) — **provider time is
+essentially the entire attempt duration once a real call is involved**,
+substantially faster than P3.5 Task 3's organic real-usage sample (10–47s)
+because this tool's fixture is a flat synthetic image with nothing to
+describe, not a real cover — explicitly documented as a floor, not a
+realistic cost estimate. 1 worker modestly outperformed 2 workers at fixed
+total concurrency in the live legs (27.1 vs 22.8 scans/min) but the stub
+legs showed no real difference (1498 vs 1489 scans/min) and 5 real samples
+per leg is far too few to call the live difference reliable — recorded as a
+real observation, not a settled result. Found and fixed one real bug in the
+tool itself before the confirmed live run, not in application code: an
+initial 30-scans-per-leg smoke test hung for over 10 minutes because
+`submitScans` put every scan in one batch, silently exceeding
+`MAX_SCANS_PER_BATCH` (20) past scan 20 — fixed to spread scans across as
+many batches as needed (now importing the real `MAX_SCANS_PER_BATCH` from
+`@vinylhound/contracts` rather than a duplicated literal), confirmed against
+a 25-scan run before trusting the tool with real billing. Also fixed, while
+building the tool: the web server process was receiving a real
+`OPENAI_API_KEY` in its env for `mode=live` even though `apps/web` never
+calls the AI provider, a real (if inert) violation of AGENTS.md's "apps/web
+... must never contain provider secrets" boundary — the web server now
+always starts with the stub (empty-key) env regardless of which worker
+modes run. Verified `lint`, `typecheck`, `test` (332/332, unchanged — no
+contract touched), `format:check` on every changed/new file with
+`--end-of-line auto`, and `build`. Left uncommitted for the maintainer's
+review per this repository's convention.
 
 Exit: another contributor can reproduce the workload/report with committed
 commands. Results include sanitized samples, percentiles, run conditions, and

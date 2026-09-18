@@ -23,6 +23,7 @@
     "ops:reconcile-queue": "npm run ops:reconcile-queue --workspace @vinylhound/worker",
     "bench:load": "tsx scripts/benchmark/run.ts",
     "metrics:reconcile": "tsx scripts/metrics/reconcile.ts",
+    "concurrency:compare": "tsx scripts/concurrency/run.ts",
     "container:build:web": "docker build --file Dockerfile.web --tag vinylhound-web:local .",
     "container:build:worker": "docker build --file Dockerfile.worker --tag vinylhound-worker:local .",
     "container:build:worker-lambda": "docker build --file Dockerfile.worker-lambda --tag vinylhound-worker-lambda:local .",

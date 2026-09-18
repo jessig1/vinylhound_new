@@ -706,10 +706,76 @@ to eight separate CloudWatch log events (one per object key) and is now one
 saving; treat it as a directionally positive side effect, not a new figure to
 budget against.
 
-### Left for Task 4
+## Deterministic-stub versus capped live run, and worker concurrency (P3.5 Task 4, 2026-09-18)
 
-Deterministic provider-stub runs versus a small capped real-OpenAI run, and
-comparing single- versus multi-worker concurrency with total provider
-concurrency held constant, are unstarted — this task's real numbers above
-(especially the 10–47 second real provider-call range) are what Task 4's
-capped live run should be sized and budgeted against.
+New `scripts/concurrency/` (`npm run concurrency:compare`, full method and
+configuration in its own `README.md`) drives the real HTTP submission
+pipeline, then starts a configurable number of real worker processes with
+`ANALYSIS_CONCURRENCY` split evenly across them, capturing every process's
+own `{"event":"scan_analysis_timing",...}` line (single-line JSON as of the
+P3.5 Task 3 fix above — this tool reads it directly from each worker's
+stdout, since `scan_attempts` never persisted the storage-fetch/provider-call
+split, only the bundled total). `mode=stub` runs the deterministic
+`apps/worker/src/e2e-worker.ts` (free); `mode=live` runs the real
+`apps/worker/src/index.ts` against whatever `OPENAI_API_KEY`/
+`OPENAI_VISION_MODEL` `.env` already has, refusing to start with no real
+key rather than silently falling back to the stub. Confirmed the live
+portion's scope and estimated cost with the maintainer via `AskUserQuestion`
+before running it, given it makes real, billable calls — the same
+consideration P3.5 Task 1's AWS reconciliation needed for a different reason.
+
+**Committed run**: `scripts/concurrency/results/2026-09-18T16-22-43-565Z/`.
+Four legs — `stub`/`live` × 1 worker (concurrency 2) / 2 workers (concurrency
+1 each), total provider concurrency held at 2 throughout so the worker-count
+comparison isolates process-level parallelism from raw concurrency. 25 free
+stub scans and 5 real live scans per leg (10 real OpenAI calls total,
+**actual cost $0.0298** — even cheaper than the pre-run estimate of
+$0.05–0.20, because the synthetic fixture image is visually much simpler
+than a real album cover).
+
+| Mode | Workers | Scans | Throughput (scans/min) | providerCall p50 (ms) | Est. cost |
+| ---- | ------- | ----- | ---------------------- | --------------------- | --------- |
+| stub | 1       | 25/25 | 1498.2                 | 0                     | —         |
+| stub | 2       | 25/25 | 1489.0                 | 0                     | —         |
+| live | 1       | 5/5   | 27.1                   | 3188                  | $0.0148   |
+| live | 2       | 5/5   | 22.8                   | 3103                  | $0.0150   |
+
+**Application time versus provider time, separated as the task requires**:
+`storageFetchDurationMs` (reading the normalized image back from object
+storage) is 3–12ms in every leg, stub or live — genuinely negligible next to
+everything else. `providerCallDurationMs` is 0ms for the stub (by
+construction: the synthetic identifier resolves immediately) and 2.2–5.9
+seconds for the real run — **provider time is essentially the entire
+attempt duration** once a real call is involved; application overhead does
+not meaningfully move the total. This real run's provider latency (p50
+~3.1s) is substantially faster than P3.5 Task 3's organic real-usage sample
+(10–47 seconds) — expected, not a regression: this tool's fixture is one
+flat synthetic color square with nothing to describe, while Task 3's numbers
+came from real photographed covers, which need more output tokens (and
+therefore more generation time) to describe. **Treat this run's latency and
+cost as a floor, not a realistic estimate of a real cover's cost** — see the
+tool's own README for the same caveat.
+
+**Worker count, holding total concurrency constant**: the stub legs show
+essentially no throughput difference between 1 and 2 workers (1498 vs 1489
+scans/min — noise, not signal, given provider time is ~0 either way so
+almost nothing distinguishes them). The live legs show 1 worker modestly
+_outperforming_ 2 workers (27.1 vs 22.8 scans/min) at the same total
+concurrency — plausibly the small overhead of two independent BullMQ
+consumers and two independent outbox-dispatch polling loops rather than any
+real parallelism benefit, but **5 samples per leg is nowhere near enough to
+call this a reliable finding**, only a real observation from a real run.
+The clearer and more load-bearing result is the application/provider split
+above: since provider time dominates total latency by two to three orders of
+magnitude over application time, and multiple worker _processes_ did not
+demonstrably improve real throughput at fixed total concurrency in this run,
+scaling **total provider concurrency** (bounded by whatever OpenAI's rate
+limits allow) is the lever worth pursuing before scaling worker replica
+count for its own sake — worth a larger, better-powered live run before
+treating it as settled, not something this session's 10-scan budget can
+prove on its own.
+
+Verified `lint`, `typecheck`, `test` (unchanged — no contract touched),
+`format:check` on every changed/new file with `--end-of-line auto`, and
+`build`. Left uncommitted for the maintainer's review per this repository's
+convention.

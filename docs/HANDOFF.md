@@ -15,6 +15,59 @@ the log.
 
 ## Current state — verified 2026-09-18
 
+- **P3.5 Task 4 (separate deterministic provider-stub runs from a small
+  capped live run; hold total provider concurrency constant for
+  one/multiple-worker tests; separate application time from provider time)
+  is complete and uncommitted in the working tree for maintainer review.**
+  Continued directly from the Task 3 session below (same day); found Task
+  3's work already landed as commit `445addc` (`p 3.5.3`) before starting.
+  Full detail is in `docs/OPERATIONS.md`'s new "Deterministic-stub versus
+  capped live run, and worker concurrency (P3.5 Task 4)" section and
+  `docs/ROADMAP.md`'s Task 4 note; only the headline is repeated here.
+  New `scripts/concurrency/` (`npm run concurrency:compare`, its own
+  `README.md`) starts a configurable number of real worker processes
+  (`apps/worker/src/e2e-worker.ts` for `mode=stub`, the real
+  `apps/worker/src/index.ts` for `mode=live`) with `ANALYSIS_CONCURRENCY`
+  split evenly across them, and reads each process's own
+  `scan_analysis_timing` stdout line directly (JSON.stringify'd as of the
+  Task 3 fix, which is what made this tool simple to build) for the
+  storage-fetch/provider-call split — `scan_attempts` never persisted that
+  split, only the bundled total.
+  Asked the maintainer via `AskUserQuestion` for explicit confirmation
+  before running `mode=live` (it makes real, billable OpenAI calls): the
+  default plan — 1 worker vs 2 workers, total concurrency held at 2, 5 real
+  scans per leg (10 total) — was confirmed as-is. Committed run:
+  `scripts/concurrency/results/2026-09-18T16-22-43-565Z/`: 25 free stub
+  scans and 5 real live scans per leg; **actual live cost $0.0298**, cheaper
+  than the pre-run $0.05–0.20 estimate since the tool's synthetic fixture
+  image is visually simpler than a real cover. Headline finding:
+  `storageFetchDurationMs` (application time) is 3–12ms in every leg;
+  real `providerCallDurationMs` is 2.2–5.9 seconds (p50 ~3.1s) —
+  **provider time is essentially the entire attempt duration once a real
+  call is involved**, faster than P3.5 Task 3's organic real-usage sample
+  (10–47s) because this fixture has nothing to describe, explicitly
+  documented as a floor rather than a realistic cost estimate. 1 worker
+  modestly outperformed 2 workers in the live legs (27.1 vs 22.8 scans/min)
+  but the stub legs showed no real difference and 5 live samples per leg is
+  too few to call that reliable.
+  Found and fixed two real bugs while building the tool, before the
+  confirmed live run: an initial 30-scans-per-leg smoke test hung for over
+  10 minutes because `submitScans` put every scan in one batch, silently
+  exceeding `MAX_SCANS_PER_BATCH` (20) past scan 20 (fixed to spread scans
+  across as many batches as needed, importing the real constant from
+  `@vinylhound/contracts` instead of a duplicated literal — verified against
+  a 25-scan run before trusting the tool with real billing); and the web
+  server process was receiving a real `OPENAI_API_KEY` in its env for
+  `mode=live` even though `apps/web` never calls the AI provider — a real,
+  if inert, violation of AGENTS.md's "apps/web ... must never contain
+  provider secrets" boundary, fixed so the web server always starts with
+  the stub (empty-key) env regardless of which worker modes run.
+  Verified `lint`, `typecheck`, `test` (332/332, unchanged — no contract
+  touched), `format:check` on every changed/new file with
+  `--end-of-line auto`, and `build`. Updated this file's "Current state"
+  and "Resume point". Left uncommitted for the maintainer's review per this
+  repository's convention.
+
 - **P3.5 Task 3 (API p50/p95, error rate, upload/normalization, queue age,
   attempt duration, end-to-end latency, throughput, and estimated AI cost,
   reconciled against `OPERATIONS.md`) is complete and uncommitted in the
@@ -92,8 +145,7 @@ the log.
   afterward, per this file's own long-standing note on that). Did not run
   `test:e2e`: nothing changed in browser-reachable behavior, only
   server-side log formatting and new standalone tooling under `scripts/`.
-  Left uncommitted for the maintainer's review per this repository's
-  convention.
+  Now committed as `445addc` (`p 3.5.3`).
 
 - **Two follow-up fixes from the P3.5 Task 2 session, now committed as
   `8f702df` (`p3.5.2`): the production worker's silent-stall bug is fixed,
@@ -1931,35 +1983,32 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-18: P3.5 Task 3 is complete, uncommitted** — see "Current
-state" above for the full account. In short: a new `scripts/metrics/
-reconcile.ts` (`npm run metrics:reconcile`) reads real persisted
-`scan_attempts`/`outbox_messages` rows for attempt duration, queue age,
-end-to-end latency, error rate, and estimated AI cost (69 real local
-attempts, $0.2757 estimated cost); CloudWatch Logs Insights against the live
-development Lambda's real logs supplied API request percentiles, error rate,
-and upload/normalization timing (111 real `http_request` events, 0 errors; 4
-real `scan_analysis_timing` events showing 10–47 second real OpenAI call
-latency). Along the way, found and fixed a real bug: the three "new timing"
-log lines from P3.1 Task 6 were not actually JSON-capable in the Lambda
-runtime as `OPERATIONS.md` claimed — `console.info(prefix, obj)` wraps a
-multi-key object across several lines, and Lambda's log capture turns each
-line into its own CloudWatch event, breaking both `grep` and Logs Insights'
-automatic JSON field discovery. Fixed to one `console.info(JSON.stringify(...))`
-call per line, matching `apps/worker/src/ops.ts`'s existing convention.
-**P3.5 now has Tasks 1–3 checked; Tasks 4–5 remain.**
+**Current, 2026-09-18: P3.5 Task 4 is complete, uncommitted** — see "Current
+state" above for the full account. In short: new `scripts/concurrency/`
+(`npm run concurrency:compare`) compares the deterministic stub worker
+against a small real capped live run, and one worker process against two,
+holding total provider concurrency constant across the worker-count
+comparison. Confirmed the live portion's scope/cost with the maintainer
+before running it (real, billable OpenAI calls): 10 real scans total, actual
+cost $0.0298. Headline finding: application time (`storageFetchDurationMs`,
+3–12ms) is negligible next to real provider time (`providerCallDurationMs`,
+2.2–5.9 seconds, p50 ~3.1s) — provider latency is essentially the whole
+attempt once a real call is involved. Worker-count comparison was
+inconclusive at only 5 live samples per leg (real but not reliable). **P3.5
+now has Tasks 1–4 checked; only Task 5 remains.**
 
-Next per `docs/ROADMAP.md` is **P3.5 Task 4** (separate deterministic
-provider-stub runs from a small capped live run; hold total provider
-concurrency constant for one/multiple-worker tests; separate application
-time from provider time). This session's real `scan_analysis_timing` numbers
-(10–47 seconds of real `providerCallDurationMs`, storage-fetch consistently
-under 130ms) are what a capped live run should be sized and budgeted
-against — a live run this small should stay well under the $5/user/month
-ceiling given the $0.2757/67-attempt real cost measured this session. Task 5
-(affected-workspace build/test selection, measured before/after so Phase 4
-does not misattribute its gains) is last in P3.5 and independent of Task 4.
-**P3.4 Task 4 (the five-participant usability test) is still open and
+Next per `docs/ROADMAP.md` is **P3.5 Task 5** (introduce affected-workspace
+build/test selection with dependency closure and a conservative full-check
+fallback; record the tooling decision before adoption; measure clean/cached
+builds before and after this optimization so Phase 4 does not misattribute
+its gains to extraction). This is the last task in P3.5 — once it lands,
+Phase 3's "reproducible performance, delivery, and cost baseline" milestone
+is complete and the roadmap's stated sequence moves to Phase 4 (measured
+service extraction, starting with P4.1 — extract discovery first), though
+`docs/ROADMAP.md`'s "Sequence and gates" section notes P3.4 Task 4 (below)
+should still be picked up when a maintainer is available, independent of
+Phase 3/4 sequencing. **P3.4 Task 4 (the five-participant usability test) is
+still open and
 not being treated as a blocker for P3.5** — it is a real-user protocol to
 design and run, not a code change, and nothing in the codebase depends on it;
 it should still get picked up when there's a maintainer available to run it.
@@ -4348,3 +4397,77 @@ ops.ts`'s `drain_check`/`queue_reconciliation` lines already use a single
   afterward). Did not run `test:e2e`: nothing changed in browser-reachable
   behavior. Updated this file's "Current state" and "Resume point". Left
   uncommitted for the maintainer's review per this repository's convention.
+
+- **2026-09-18 - Claude (same day, continued).** Asked to work on P3.5
+  Task 4. Found Task 3's work already committed as `445addc` (`p 3.5.3`),
+  clean tree. Re-read the exact task text from `docs/ROADMAP.md`: separate
+  deterministic provider-stub runs from a small capped live run; hold total
+  provider concurrency constant for one/multiple-worker tests; separate
+  application time from provider time.
+  Checked what `scripts/benchmark/` (Task 2) already measures before
+  building anything new: its `runScanPipeline` returns as soon as
+  `POST .../submit` responds `202`, before the worker ever picks the job up
+  — it never exercises analysis completion at all, so Task 4 needed a
+  genuinely new tool, not an extension. Checked whether the
+  storage-fetch/provider-call split (added in P3.1, read from real logs in
+  Task 3 earlier the same day) is persisted anywhere — confirmed it is not;
+  `scan_attempts` only has the bundled `duration_ms`. Since Task 3 just
+  fixed those log lines to single-line JSON, decided to capture them
+  directly from a controlled worker process's own stdout rather than add a
+  database column, which kept the tool simple.
+  Built `scripts/concurrency/` (`npm run concurrency:compare`, its own
+  `README.md`): starts the real production standalone web server (reusing
+  `scripts/benchmark/`'s build/process-management helpers) plus a
+  configurable number of worker processes — `apps/worker/src/e2e-worker.ts`
+  for `mode=stub`, the real `apps/worker/src/index.ts` for `mode=live` —
+  with `ANALYSIS_CONCURRENCY` split evenly across them so total provider
+  concurrency stays constant regardless of worker count. A dedicated
+  `vinylhound_e2e_concurrency` database/queue/port keeps it isolated from
+  both the developer's own stack and the Task 2 benchmark's own isolated
+  database.
+  Smoke-tested `mode=stub` first (free) with 3 scans per leg — worked.
+  Scaled up to 30 scans per leg to get a richer free comparison and it hung
+  for over 10 minutes: root cause was `submitScans` putting every scan in
+  one batch, silently exceeding `MAX_SCANS_PER_BATCH` (20) past the 20th
+  scan, so `waitForDistinctScans` waited forever for scans that had already
+  failed to submit. Killed the stuck processes (`Get-Process node` via
+  PowerShell to find real PIDs the Bash tool's `ps` wasn't showing, then
+  `Stop-Process -Force`), fixed `submitScans` to spread scans across as many
+  batches as needed, and switched from a duplicated `20` literal to
+  importing the real `MAX_SCANS_PER_BATCH` from `@vinylhound/contracts` so
+  it can't drift. Re-verified with a 25-scan stub run before trusting the
+  tool with real billing — clean.
+  While reviewing the tool before the live run, found a second real issue:
+  `startWeb` was being called with `buildEnv("live")` whenever any live leg
+  was requested, which put a real `OPENAI_API_KEY` into the web server
+  process's environment even though `apps/web` never reads it — a real, if
+  inert, violation of AGENTS.md's "apps/web ... must never contain provider
+  secrets" boundary. Fixed so the web server always starts with the stub
+  (empty-key) env regardless of which worker modes run; only each leg's own
+  worker-fleet env (built per mode inside the loop) ever carries a real key.
+  Before running `mode=live` for real, used `AskUserQuestion` to confirm
+  scope and cost with the maintainer: 1 worker vs 2 workers, total
+  concurrency 2, 5 real scans per leg (10 total), estimated $0.05–0.20 from
+  the previous session's real per-attempt average. Confirmed as-is. Ran the
+  full comparison (`CONCURRENCY_MODES=stub,live`, 25 free stub scans + 5 real
+  live scans per leg): **actual live cost $0.0298**, cheaper than estimated
+  because the tool's synthetic fixture image is visually simpler than a real
+  album cover (a deliberate, documented limitation — this measures
+  concurrency mechanics, not realistic per-scan cost). Real
+  `providerCallDurationMs` was 2.2–5.9 seconds (p50 ~3.1s) versus
+  `storageFetchDurationMs` at 3–12ms — provider time dominates total attempt
+  duration by two to three orders of magnitude once a real call is
+  involved. The worker-count comparison (1 vs 2, same total concurrency) was
+  a genuine but inconclusive finding at only 5 live samples per leg (1
+  worker modestly faster: 27.1 vs 22.8 scans/min); recorded honestly as an
+  observation, not a settled result, and flagged that a larger live run
+  would be needed to say more.
+  Wrote up every figure in `docs/OPERATIONS.md`'s new "Deterministic-stub
+  versus capped live run, and worker concurrency (P3.5 Task 4)" section,
+  checked Task 4 in `docs/ROADMAP.md` with a full note, and updated this
+  file's "Current state" and "Resume point". Verified `lint`, `typecheck`,
+  `test` (332/332, unchanged — no contract touched), `npx prettier --check
+--end-of-line auto` on every changed/new file, and `npm run build`. Did not
+  run `test:e2e`: nothing changed in browser-reachable behavior, only new
+  standalone tooling under `scripts/`. Left uncommitted for the maintainer's
+  review per this repository's convention.

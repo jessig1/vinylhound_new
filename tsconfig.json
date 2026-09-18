@@ -33,6 +33,7 @@
     "packages/**/*.ts",
     "scripts/benchmark/**/*.ts",
     "scripts/metrics/**/*.ts",
+    "scripts/concurrency/**/*.ts",
     "eslint.config.mjs",
     "prettier.config.mjs",
     "vitest.config.ts"
@@ -42,6 +43,7 @@
     "**/.next",
     "**/.next-e2e",
     "**/.next-bench",
+    "**/.next-concurrency",
     "**/dist"
   ]
 }

@@ -8,6 +8,7 @@ export default tseslint.config(
       "**/.next/**",
       "**/.next-e2e/**",
       "**/.next-bench/**",
+      "**/.next-concurrency/**",
       "**/coverage/**",
       "**/dist/**",
       "**/node_modules/**",
