@@ -1,0 +1,99 @@
+{
+  "generatedAt": "2026-09-18T14:39:31.170Z",
+  "commit": "8f702dfe5880a5c01481ca7fb61af3c374b5d04b",
+  "workingTreeDirty": true,
+  "database": "postgresql://localhost:5432/vinylhound",
+  "observedWindow": {
+    "earliest": "2026-08-26T22:03:10.000Z",
+    "latest": "2026-09-13T01:43:54.000Z",
+    "days": 17.15
+  },
+  "overall": {
+    "attemptCount": 69,
+    "errorRate": 0,
+    "throughputPerDay": 4.02,
+    "estimatedTotalCostUsd": 0.2757
+  },
+  "byModel": [
+    {
+      "model": "gpt-5.6-terra",
+      "attemptCount": 67,
+      "succeededCount": 67,
+      "failedCount": 0,
+      "errorRate": 0,
+      "attemptDurationMs": {
+        "count": 67,
+        "min": 932,
+        "p50": 3293,
+        "p95": 16329,
+        "p99": 23327,
+        "max": 23327,
+        "mean": 5094.22
+      },
+      "queueAgeMs": {
+        "count": 67,
+        "min": 0,
+        "p50": 4000,
+        "p95": 16000,
+        "p99": 2559000,
+        "max": 2559000,
+        "mean": 47134.33
+      },
+      "queueAgeSampleCount": 67,
+      "endToEndMs": {
+        "count": 67,
+        "min": 3000,
+        "p50": 8000,
+        "p95": 27000,
+        "p99": 2563000,
+        "max": 2563000,
+        "mean": 52283.58
+      },
+      "endToEndSampleCount": 67,
+      "totalInputTokens": 62597,
+      "totalOutputTokens": 12540,
+      "estimatedCostUsd": 0.2757,
+      "unpricedAttemptCount": 0
+    },
+    {
+      "model": "integration-test-model",
+      "attemptCount": 2,
+      "succeededCount": 2,
+      "failedCount": 0,
+      "errorRate": 0,
+      "attemptDurationMs": {
+        "count": 2,
+        "min": 20,
+        "p50": 20,
+        "p95": 20,
+        "p99": 20,
+        "max": 20,
+        "mean": 20
+      },
+      "queueAgeMs": {
+        "count": 0,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "max": 0,
+        "mean": 0
+      },
+      "queueAgeSampleCount": 0,
+      "endToEndMs": {
+        "count": 0,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "max": 0,
+        "mean": 0
+      },
+      "endToEndSampleCount": 0,
+      "totalInputTokens": 0,
+      "totalOutputTokens": 0,
+      "estimatedCostUsd": null,
+      "unpricedAttemptCount": 2
+    }
+  ]
+}

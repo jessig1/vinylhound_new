@@ -715,11 +715,12 @@ listed task without coaching; fix and retest blocking failures.
       hardware/tier, dataset, multiple synthetic users and batches, cache state,
       warmup, sample counts, concurrency, and at least three repeated runs. Avoid
       measuring only one user's quota lock or one batch-row lock. (2026-09-17)
-- [ ] **Task 3.** Measure API p50/p95, error rate, upload/normalization, queue age, attempt
+- [x] **Task 3.** Measure API p50/p95, error rate, upload/normalization, queue age, attempt
       duration, end-to-end latency, throughput, and estimated AI cost. Reconcile
       signals with `OPERATIONS.md`; reuse persisted attempts and optional queue
       CloudWatch metrics. Use structured logs/Logs Insights for new timings and
       include telemetry retention/cost rather than adding uncosted custom metrics.
+      (2026-09-18)
 - [ ] **Task 4.** Separate deterministic provider-stub runs from a small capped live run.
       Hold total provider concurrency constant for one/multiple-worker tests;
       separate application time from provider time.
@@ -808,6 +809,54 @@ project so the benchmark is typechecked like application code), `test`
 same pre-existing `live-camera` flake every prior session has also hit on a
 clean tree) to confirm the `auth.ts` change didn't regress the existing
 unauthenticated dev-mode path.
+
+Task 3 completed 2026-09-18. Full detail, method, and every figure are in
+`docs/OPERATIONS.md`'s new "Reconciled performance and cost signals (P3.5
+Task 3)" section; only the headline is repeated here. Two real sources, both
+gated on the same AWS CLI reauthentication P3.5 Task 1 needed (the session
+was expired again at start; the maintainer reauthenticated live): a new
+`scripts/metrics/reconcile.ts` (`npm run metrics:reconcile`, committed
+sanitized run under `scripts/metrics/results/`) reads real persisted
+`scan_attempts`/`outbox_messages` rows for attempt duration, queue age,
+end-to-end latency, error rate, and estimated AI cost (69 real local attempts
+found, 67 genuine `gpt-5.6-terra` calls: duration p50 3293ms/p95 16329ms,
+error rate 0, $0.2757 estimated cost across 62,597+12,540 tokens — real local
+`npm run dev` usage, not the deployed Lambda's own spend, which stays an open
+unknown per Task 1); and CloudWatch Logs Insights against the live
+development Lambda's real logs (111 real `http_request` events, 0 errors,
+overall p50 621ms/p95 1112ms plus a by-route breakdown; 6 real
+`upload_complete_timing` events; 4 real `scan_analysis_timing` events showing
+real OpenAI call latency of 10–47 seconds, 2–9× slower than local and far
+above the Task 2 synthetic benchmark's 320–416ms — expected, since that
+benchmark's worker never calls a real provider).
+Found and fixed a real, previously-undocumented bug while pulling the live
+logs: `console.info("[web] http_request", fields)` (and the two other "new
+timing" log lines from P3.1 Task 6) is not actually JSON-capable in the
+Lambda runtime as `docs/OPERATIONS.md` claimed — Node's default multi-key
+object inspection wraps onto several lines, and Lambda's log capture turns
+each line into its own CloudWatch event, splitting one request's fields
+across up to eight unrelated events and defeating both `grep` and Logs
+Insights' automatic JSON field discovery. Fixed all three call sites
+(`apps/web/src/server/http.ts`, the upload-complete route, both
+`scan_analysis_timing` sites in `apps/worker/src/analysis-handler.ts`) to a
+single `console.info(JSON.stringify({ event: "...", ...fields }))` call,
+matching the convention `apps/worker/src/ops.ts`'s `drain_check`/
+`queue_reconciliation` lines already used; documented the equivalent Logs
+Insights queries for the fixed format in `OPERATIONS.md`. No test asserted
+the old log shape (checked before changing it); `npm test` stayed at
+332/332. Also documented, deliberately without enabling: native SQS
+`ApproximateAgeOfOldestMessage`/`ApproximateNumberOfMessagesVisible` are
+already alarmed and dashboarded (`infra/terraform/environment/monitoring.tf`,
+`production/monitoring.tf`), satisfying "optional queue CloudWatch metrics"
+with existing infrastructure; and `apps/worker/src/metrics.ts`'s custom
+`PutMetricData` publisher (`CLOUDWATCH_METRICS_ENABLED`, previously
+undocumented) stays off, since turning it on would add real,
+unreconciled cost the persisted-attempt and native-SQS signals above already
+make unnecessary — exactly the "reuse ... rather than adding uncosted custom
+metrics" instruction. Verified `lint`, `typecheck`, `test` (332/332,
+unchanged), `format:check` on every changed file with `--end-of-line auto`,
+and `build`. Left uncommitted for the maintainer's review per this
+repository's convention.
 
 Exit: another contributor can reproduce the workload/report with committed
 commands. Results include sanitized samples, percentiles, run conditions, and

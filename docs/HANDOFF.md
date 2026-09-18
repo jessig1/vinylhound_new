@@ -13,10 +13,91 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-17
+## Current state — verified 2026-09-18
 
-- **Two follow-up fixes from the P3.5 Task 2 session, uncommitted: the
-  production worker's silent-stall bug is fixed, and CI is green again.**
+- **P3.5 Task 3 (API p50/p95, error rate, upload/normalization, queue age,
+  attempt duration, end-to-end latency, throughput, and estimated AI cost,
+  reconciled against `OPERATIONS.md`) is complete and uncommitted in the
+  working tree for maintainer review.** Session started with a clean tree —
+  the previous session's worker fix and CI fix (described just below) had
+  already landed as commit `8f702df` (`p3.5.2`). Full detail, method, and
+  every figure are in `docs/OPERATIONS.md`'s new "Reconciled performance and
+  cost signals (P3.5 Task 3)" section and `docs/ROADMAP.md`'s Task 3 note;
+  only the headline is repeated here.
+  Two real sources, both needing the same AWS CLI reauthentication P3.5
+  Task 1 needed (the session was expired again at start; the maintainer
+  reauthenticated live, confirmed asking first via `AskUserQuestion` since
+  the alternative was a local-only reconciliation with no live-environment
+  cross-check). **Persisted attempts**: new `scripts/metrics/reconcile.ts`
+  (`npm run metrics:reconcile`, committed sanitized run under
+  `scripts/metrics/results/2026-09-18T14-39-31-218Z/`) reads real
+  `scan_attempts`/`outbox_messages` rows from the local development
+  database — 69 real attempts over 17.15 days, 67 genuine `gpt-5.6-terra`
+  calls (duration p50 3293ms/p95 16329ms, 0 failures, $0.2757 estimated cost
+  across 62,597+12,540 tokens using the same `estimateTokenUsageCostUsd`
+  pricing function `/usage` already uses). This is real local `npm run dev`
+  usage, not the deployed Lambda's own spend — that stays the open unknown
+  from P3.5 Task 1 ("where is the development database hosted"), not
+  resolved here. **Structured logs**: CloudWatch Logs Insights against the
+  live, always-on `vinylhound-development-web`/`-worker` Lambdas' real
+  7-day-retained logs found 111 real `http_request` events (0 errors,
+  overall p50 621ms/p95 1112ms, broken down by route), 6 real
+  `upload_complete_timing` events, and 4 real `scan_analysis_timing` events
+  showing real OpenAI call latency of 10–47 seconds — 2–9× slower than the
+  local persisted-attempt mean and far above the P3.5 Task 2 synthetic
+  benchmark's 320–416ms, expected since that benchmark's worker never calls
+  a real provider.
+  **Found and fixed a real, previously-undocumented bug while pulling those
+  logs**: the three "new timing" log lines from P3.1 Task 6
+  (`console.info("[web] http_request", fields)` and its two siblings) are
+  not actually JSON-capable in the Lambda runtime, contrary to what
+  `OPERATIONS.md` claimed — Node's default multi-key object inspection wraps
+  onto several lines, and Lambda's log capture turns each printed line into
+  its own CloudWatch event, so one request's fields were split across up to
+  eight unrelated events, defeating both `grep` continuity and CloudWatch
+  Logs Insights' automatic JSON field discovery (which needs the whole
+  message to parse as one JSON value). Fixed all three call sites
+  (`apps/web/src/server/http.ts`'s `logHttpEvent`, the upload-complete
+  route, both `scan_analysis_timing` sites in
+  `apps/worker/src/analysis-handler.ts`) to one
+  `console.info(JSON.stringify({ event: "...", ...fields }))` call each,
+  matching the convention `apps/worker/src/ops.ts`'s
+  `drain_check`/`queue_reconciliation` lines already used. No test asserted
+  the old log shape (checked before changing it). Documented the equivalent
+  post-fix Logs Insights queries in `OPERATIONS.md`.
+  Also documented, deliberately without enabling anything new: native SQS
+  `ApproximateAgeOfOldestMessage`/`ApproximateNumberOfMessagesVisible` are
+  already alarmed and dashboarded
+  (`infra/terraform/environment/monitoring.tf`,
+  `infra/terraform/production/monitoring.tf`), which satisfies the roadmap
+  task's "optional queue CloudWatch metrics" with infrastructure that
+  already exists; and `apps/worker/src/metrics.ts`'s custom `PutMetricData`
+  publisher (`CLOUDWATCH_METRICS_ENABLED`, previously undocumented anywhere)
+  stays off — turning it on would add real, unreconciled cost the
+  persisted-attempt and native-SQS signals already make unnecessary, which
+  is exactly the "reuse ... rather than adding uncosted custom metrics"
+  instruction in the roadmap task text.
+  Changed: `apps/web/src/server/http.ts`,
+  `apps/web/src/app/api/v1/scans/[scanId]/uploads/[imageId]/complete/route.ts`,
+  `apps/worker/src/analysis-handler.ts` (the three log-format fixes); new
+  `scripts/metrics/{env,query,report,reconcile}.ts` + `README.md` + one
+  committed results directory; `tsconfig.json` and `package.json`
+  (`metrics:reconcile` script, typechecked like `scripts/benchmark`);
+  `docs/OPERATIONS.md` (the new section plus the monitoring-and-alerts
+  paragraph corrected to describe the actual, now-true JSON format); and
+  `docs/ROADMAP.md` (Task 3 checked with a full note). Verified `lint`,
+  `typecheck`, `test` (332/332, unchanged — no contract touched),
+  `format:check` on every changed file with `--end-of-line auto`, and
+  `build` (reverted the regenerated `apps/web/next-env.d.ts` artifact
+  afterward, per this file's own long-standing note on that). Did not run
+  `test:e2e`: nothing changed in browser-reachable behavior, only
+  server-side log formatting and new standalone tooling under `scripts/`.
+  Left uncommitted for the maintainer's review per this repository's
+  convention.
+
+- **Two follow-up fixes from the P3.5 Task 2 session, now committed as
+  `8f702df` (`p3.5.2`): the production worker's silent-stall bug is fixed,
+  and CI is green again.**
   1. **`apps/worker/src/index.ts` now fails fast instead of silently
      no-opping when `OPENAI_API_KEY` is unset**, closing the bug the P3.5
      Task 2 session found and deliberately left unfixed (see the old resume
@@ -75,12 +156,10 @@ build` all pass clean. The `Platform`/`Security`/`Deploy development`
      `apps/worker/src/require-openai-key.ts` +
      `require-openai-key.test.ts`, and `docs/HANDOFF.md` (the formatting fix,
      bundled into this same entry rather than a separate commit-sized diff).
-     Left uncommitted for the maintainer's review per this repository's
-     convention — once committed, the next CI run on `main` should go green
-     again.
+     Now committed as `8f702df` (`p3.5.2`); CI is green on `main` again.
 
-- **P3.5 Task 2 (benchmark scripts and sanitized results) is complete and
-  uncommitted in the working tree for maintainer review.** `scripts/benchmark/`
+- **P3.5 Task 2 (benchmark scripts and sanitized results), now committed as
+  `8f702df` (`p3.5.2`).** `scripts/benchmark/`
   (`npm run bench:load`, documented in its own `README.md`) drives the real
   HTTP API end to end — `POST /batches`, `POST /scans`, a signed upload plus
   the real MinIO PUT, `POST .../uploads/{imageId}/complete` (real
@@ -1852,38 +1931,35 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-17 (this session, second pass): the worker silent-stall
-bug is fixed and CI is green again, both uncommitted** — see "Current state"
-above for the full account of both. In short: `apps/worker/src/index.ts` now
-refuses to start without `OPENAI_API_KEY` (matching `lambda.ts`'s existing
-guard) instead of silently never processing jobs, and `docs/HANDOFF.md`'s
-own pre-existing Prettier drift — which had been failing CI's `validate` job
-on every push since `hotfix-ci-failures` — is fixed. **Before committing
-anything from this repository on this machine, use `npx prettier --check
---end-of-line auto .`, not plain `npm run check`/`prettier --check .`** —
-the latter falsely flags ~75 files here because `core.autocrlf=true`
-checks them out as CRLF while the repo is LF; it is not a real signal and
-chasing it would reformat files that are actually fine.
+**Current, 2026-09-18: P3.5 Task 3 is complete, uncommitted** — see "Current
+state" above for the full account. In short: a new `scripts/metrics/
+reconcile.ts` (`npm run metrics:reconcile`) reads real persisted
+`scan_attempts`/`outbox_messages` rows for attempt duration, queue age,
+end-to-end latency, error rate, and estimated AI cost (69 real local
+attempts, $0.2757 estimated cost); CloudWatch Logs Insights against the live
+development Lambda's real logs supplied API request percentiles, error rate,
+and upload/normalization timing (111 real `http_request` events, 0 errors; 4
+real `scan_analysis_timing` events showing 10–47 second real OpenAI call
+latency). Along the way, found and fixed a real bug: the three "new timing"
+log lines from P3.1 Task 6 were not actually JSON-capable in the Lambda
+runtime as `OPERATIONS.md` claimed — `console.info(prefix, obj)` wraps a
+multi-key object across several lines, and Lambda's log capture turns each
+line into its own CloudWatch event, breaking both `grep` and Logs Insights'
+automatic JSON field discovery. Fixed to one `console.info(JSON.stringify(...))`
+call per line, matching `apps/worker/src/ops.ts`'s existing convention.
+**P3.5 now has Tasks 1–3 checked; Tasks 4–5 remain.**
 
-**Earlier in this session, P3.5 Task 2 was completed** (reproducible
-benchmark harness at `scripts/benchmark/`, three sanitized timed runs
-committed under `scripts/benchmark/results/`, and the
-`DEVELOPMENT_BENCH_USER_HEADER_ENABLED`-gated auth change that made
-multi-user HTTP load testing possible in `AUTH_MODE=development` — see
-"Current state" above for the full account). P3.5 now has Task 1 and Task 2
-checked; Tasks 3-5 remain.
-
-Next per `docs/ROADMAP.md` is **P3.5 Task 3** (measure API p50/p95, error
-rate, upload/normalization, queue age, attempt duration, end-to-end latency,
-throughput, and estimated AI cost; reconcile signals with `OPERATIONS.md`;
-reuse persisted attempts and optional queue CloudWatch metrics). Task 2's
-harness already produces per-step p50/p95/p99 for four of those
-(scans.create/uploads.create/storage.put/uploads.complete/scans.submit) — Task
-3's job is reconciling that shape against real persisted-attempt/queue-age
-signals and `OPERATIONS.md`, not building a second harness from scratch.
-Tasks 4 (deterministic-stub versus capped live run, held provider
-concurrency) and 5 (affected-workspace build/test selection) remain after
-that. **P3.4 Task 4 (the five-participant usability test) is still open and
+Next per `docs/ROADMAP.md` is **P3.5 Task 4** (separate deterministic
+provider-stub runs from a small capped live run; hold total provider
+concurrency constant for one/multiple-worker tests; separate application
+time from provider time). This session's real `scan_analysis_timing` numbers
+(10–47 seconds of real `providerCallDurationMs`, storage-fetch consistently
+under 130ms) are what a capped live run should be sized and budgeted
+against — a live run this small should stay well under the $5/user/month
+ceiling given the $0.2757/67-attempt real cost measured this session. Task 5
+(affected-workspace build/test selection, measured before/after so Phase 4
+does not misattribute its gains) is last in P3.5 and independent of Task 4.
+**P3.4 Task 4 (the five-participant usability test) is still open and
 not being treated as a blocker for P3.5** — it is a real-user protocol to
 design and run, not a code change, and nothing in the codebase depends on it;
 it should still get picked up when there's a maintainer available to run it.
@@ -4197,3 +4273,78 @@ build` regenerated its production-mode import paths — the known
   never committed. Updated this file's "Current state" and "Resume point".
   Left uncommitted for the maintainer's review per this repository's
   convention.
+
+- **2026-09-18 - Claude.** Asked to work on P3.5 Task 3. Read this file,
+  `AGENTS.md`, and `docs/ROADMAP.md` per session-start convention; found the
+  working tree clean and the previous session's worker fix / CI fix already
+  landed as commit `8f702df` (`p3.5.2`). Queried the local development
+  database directly first to scope the task honestly before writing any
+  tooling: found 69 real persisted `scan_attempts` rows (67 genuine
+  `gpt-5.6-terra` calls from manual `npm run dev` testing, error rate 0),
+  confirming real attempt/queue data existed to reconcile rather than only
+  synthetic benchmark data. Asked the maintainer via `AskUserQuestion`
+  whether to get the log-based signals (API percentiles, upload timing) from
+  a fresh local traffic capture or by reauthenticating AWS to query the live
+  development Lambda's real logs; they chose reauthenticating AWS (as in the
+  P3.5 Task 1 session), and did so live in-session via `aws login`.
+  Built `scripts/metrics/reconcile.ts` (`npm run metrics:reconcile`,
+  documented in its own `README.md`, following `scripts/benchmark/`'s
+  conventions: reuses its `stats.ts` percentile helper, mirrors its
+  `report.ts`/timestamped-results-directory pattern) — a read-only script
+  joining `scan_attempts` to `outbox_messages` (same scan/attempt number,
+  `scan.analyze.v1` topic) to compute attempt duration, queue age
+  (enqueue→pickup), end-to-end latency (enqueue→completion), error rate, and
+  estimated AI cost via `@vinylhound/domain`'s `estimateTokenUsageCostUsd`
+  (the same function `/usage` uses, applied across all history rather than
+  its fixed 30-day contract window). Ran it against the real local database;
+  committed the sanitized output.
+  Pulled CloudWatch Logs from `/aws/lambda/vinylhound-development-web` and
+  `-worker` (7-day retention; real traffic found spanning 2026-09-11 to
+  2026-09-13, two genuine manual testing sessions) via `aws logs
+start-query`/`get-query-results`. Hit two real Windows/awscli issues along
+  the way, not application bugs: Git Bash's MSYS path-conversion mangled
+  `/aws/lambda/...` log group names into Windows paths (worked around with
+  `MSYS_NO_PATHCONV=1`), and awscli's Python printer choked on a Unicode
+  spinner character in `aws logs tail` output under the default Windows
+  console codepage (worked around with `PYTHONUTF8=1`/`PYTHONIOENCODING=utf-8`).
+  **Found a real, previously-undocumented bug while reading the raw log
+  output**: `console.info("[web] http_request", fields)` — and its two
+  siblings, `upload_complete_timing` and `scan_analysis_timing` — is not
+  actually JSON-capable in the Lambda runtime the way `docs/OPERATIONS.md`
+  claimed. Confirmed directly with `aws logs filter-log-events` over a narrow
+  timestamp window: Node's default multi-key object inspection wraps the
+  six-field `http_request` object across eight lines, and Lambda's log
+  capture turns each printed line into its own separate CloudWatch log
+  event, so one request's `route`/`status`/`durationMs`/etc. end up as eight
+  unrelated events instead of one queryable record — defeating both `grep`
+  continuity and CloudWatch Logs Insights' automatic JSON field discovery
+  (which only works when a whole message parses as one JSON value). Checked
+  for existing precedent before deciding how to fix it: `apps/worker/src/
+ops.ts`'s `drain_check`/`queue_reconciliation` lines already use a single
+  `console.info(JSON.stringify({...}))` call and were unaffected. Fixed all
+  three call sites (`apps/web/src/server/http.ts`'s `logHttpEvent`, the
+  upload-complete route, both `scan_analysis_timing` sites in
+  `apps/worker/src/analysis-handler.ts`) to match that convention. Checked
+  first that no test asserted the old two-argument log call shape (none
+  did), so this was safe to change without touching test coverage.
+  Reconstructed the pre-fix multi-line records by hand (via a scratch Python
+  script, not committed) to produce real numbers for this session's
+  reconciliation despite the format bug, and wrote the equivalent, much
+  simpler Logs Insights queries to use going forward now that the fix is in.
+  Updated `docs/OPERATIONS.md`: corrected the "Monitoring and alerts"
+  paragraph's log-shape description in place (it now accurately describes
+  the JSON format, and explains why the old one wasn't actually
+  JSON-capable), and added a new "Reconciled performance and cost signals
+  (P3.5 Task 3)" section with every real number from both sources, the
+  Logs Insights queries, and explicit notes that native SQS queue-age
+  metrics (already alarmed/dashboarded in Terraform) and the dormant
+  `CLOUDWATCH_METRICS_ENABLED` custom-metrics publisher (found
+  undocumented in `apps/worker/src/metrics.ts`, deliberately left off) were
+  the "reuse... rather than adding uncosted custom metrics" side of the
+  task. Checked P3.5 Task 3 in `docs/ROADMAP.md` with a full note. Verified
+  `lint`, `typecheck`, `test` (332/332, unchanged — no contract touched),
+  `npx prettier --check --end-of-line auto` on every changed/new file, and
+  `npm run build` (reverted the regenerated `apps/web/next-env.d.ts`
+  afterward). Did not run `test:e2e`: nothing changed in browser-reachable
+  behavior. Updated this file's "Current state" and "Resume point". Left
+  uncommitted for the maintainer's review per this repository's convention.

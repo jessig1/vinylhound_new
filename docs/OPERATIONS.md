@@ -170,22 +170,43 @@ external monitor can reach them in production auth mode.
 Collect JSON-capable application logs from web and worker processes. Retain the
 stable request, scan, outbox message, job, and attempt IDs already emitted by
 the application, but never signed URLs, credentials, or image bytes. Every
-`apps/web` API route logs one `[web] http_request` line (route, method,
-status, `durationMs`, `requestId`, and `correlationId` if the caller sent one)
-via a shared `withRoute` wrapper (`apps/web/src/server/http.ts`), so this is
-no longer only true of the durable IDs — an inbound `x-request-id` header is
-validated (bounded length/charset, dropped rather than rejected if malformed)
-and forwarded as `correlationId` onto the outbox row, the job payload, and the
-`scan_attempts` row the worker writes, so one caller-supplied trace value can
-be grepped across the HTTP request, the queued job, and the analysis attempt.
-It is untrusted metadata only: never used for lookups, joins, or
-authorization. The upload-complete route additionally logs
-`[web] upload_complete_timing` with `uploadPhaseDurationMs` (readback plus
-validation) and `normalizationPhaseDurationMs` (deriving and storing the
-analysis/thumbnail variants) separated; the worker logs
-`[worker] scan_analysis_timing` with `storageFetchDurationMs` and
-`providerCallDurationMs` split out from the existing bundled
-`scan_attempts.duration_ms`. Alert on:
+`apps/web` API route logs one `{"event":"http_request",...}` line (`route`,
+`method`, `status`, `durationMs`, `requestId`, and `correlationId` if the
+caller sent one) via a shared `withRoute` wrapper
+(`apps/web/src/server/http.ts`), so this is no longer only true of the durable
+IDs — an inbound `x-request-id` header is validated (bounded length/charset,
+dropped rather than rejected if malformed) and forwarded as `correlationId`
+onto the outbox row, the job payload, and the `scan_attempts` row the worker
+writes, so one caller-supplied trace value can be grepped across the HTTP
+request, the queued job, and the analysis attempt. It is untrusted metadata
+only: never used for lookups, joins, or authorization. The upload-complete
+route additionally logs `{"event":"upload_complete_timing",...}` with
+`uploadPhaseDurationMs` (readback plus validation) and
+`normalizationPhaseDurationMs` (deriving and storing the analysis/thumbnail
+variants) separated; the worker logs `{"event":"scan_analysis_timing",...}`
+with `storageFetchDurationMs` and `providerCallDurationMs` split out from the
+existing bundled `scan_attempts.duration_ms`.
+
+These three are each written with one `console.info(JSON.stringify(...))`
+call — not `console.info(prefix, object)` — because the latter genuinely was
+not JSON-capable in the Lambda runtime: Node's default object inspection
+wraps a multi-key object onto several lines, and Lambda's log capture turns
+each printed line into its own CloudWatch log event, splitting one request's
+fields across unrelated events and defeating both `grep` and CloudWatch Logs
+Insights' automatic JSON field discovery (which requires the whole message to
+parse as one JSON value). This was found and fixed during P3.5 Task 3 after
+pulling the live development Lambda's real logs and finding `http_request`
+events split across up to eight separate CloudWatch events each — see
+"Reconciled performance and cost signals" below for the real numbers this
+produced and the Logs Insights queries that now work against the fixed
+format. `apps/worker/src/ops.ts`'s `drain_check`/`queue_reconciliation` lines
+already used this one-call JSON.stringify pattern; the three timing lines now
+match it. Other `console.info`/`console.error` calls across the codebase
+still pass a short prefix plus a small object and were left alone — most stay
+on one line in practice because they carry few short fields, but this is
+incidental to Node's line-wrapping heuristics, not guaranteed; treat any log
+line an operator needs to query reliably in Logs Insights as needing this
+same one-call JSON.stringify treatment, not just these three. Alert on:
 
 - readiness failures or sustained 5xx responses;
 - queue age above five minutes, outbox publish failures, and worker restarts;
@@ -505,3 +526,190 @@ while the $5-per-user ceiling stays fixed per user, not per account.
   to date is bounded well below it, since only manual test scans have run
   against any deployed environment so far — but that is an inference from
   usage patterns, not a pulled number.
+
+## Reconciled performance and cost signals (P3.5 Task 3, 2026-09-18)
+
+Two real sources, not estimates: persisted `scan_attempts`/`outbox_messages`
+rows (via the new `scripts/metrics/reconcile.ts`, `npm run
+metrics:reconcile`) for attempt duration, queue age, end-to-end latency,
+error rate, and estimated AI cost; and CloudWatch Logs Insights against the
+live, always-on `vinylhound-development-web`/`-worker` Lambdas' real logs
+(after the maintainer reauthenticated an expired AWS CLI session, the same
+step P3.5 Task 1 needed) for API request percentiles, error rate, and
+upload/normalization timing — the two signal families the roadmap task
+description splits between "persisted attempts" and "structured
+logs/Logs Insights."
+
+### Persisted attempts (local development database)
+
+`scripts/metrics/README.md` has the full method. Committed sanitized run:
+`scripts/metrics/results/2026-09-18T14-39-31-218Z/`. 69 real attempts spans
+17.15 days (2026-08-26 to 2026-09-13); 67 are real `gpt-5.6-terra` calls from
+manual local `npm run dev` testing (the other 2 are an
+`integration-test-model` row with no token counts, excluded from cost and
+shown separately so it cannot dilute the real figures):
+
+| Signal (ms)                   | n   | p50  | p95   | p99     | mean     |
+| ----------------------------- | --- | ---- | ----- | ------- | -------- |
+| attempt duration              | 67  | 3293 | 16329 | 23327   | 5094.22  |
+| queue age (enqueue→pickup)    | 67  | 4000 | 16000 | 2559000 | 47134.33 |
+| end-to-end (enqueue→complete) | 67  | 8000 | 27000 | 2563000 | 52283.58 |
+
+Error rate: 0/69 — no real local attempt has failed to date, so no real
+failure-mode latency or error-rate sample exists yet from this source. Total
+input/output tokens 62,597 + 12,540; **estimated AI cost $0.2757** using the
+same `estimateTokenUsageCostUsd` pricing function `/usage` and batch cost
+summaries already use, just applied across the full available history
+instead of the endpoint's fixed 30-day contract window.
+
+**This is local development usage, not the deployed Lambda's own spend** —
+the deployed development Lambda's database is external/managed and was not
+queried here (Task 1's "where the development database is hosted" unknown is
+still open). It is a real, useful data point regardless: it is direct
+evidence, not an inference, that manual testing against a real key stays
+far under the $5/user/month ceiling described above.
+
+The queue-age and end-to-end p99/max figures (2,559–2,563 seconds — about 43
+minutes) are real, not a measurement artifact, but they measure **sporadic
+manual testing cadence, not queue pressure**: the local worker process is not
+continuously running between sessions, so a scan submitted, then picked up
+only once the developer next started the worker, produces a long but
+meaningless "queue age" sample. Read the p50 (4 seconds picked-up, 8 seconds
+end-to-end) as the more representative figure for an actively-running worker;
+the tail is a reminder that abandoned or long-idle jobs need the worker
+actually running, not a latency regression. A future run against a database
+with continuous worker uptime (e.g. a deployed environment, once its database
+is reachable) would not have this artifact.
+
+### API requests and upload timing (live development Lambda, real traffic)
+
+Pulled via CloudWatch Logs Insights against `/aws/lambda/
+vinylhound-development-web` (7-day retention; observed window 2026-09-11
+20:16 to 2026-09-13 20:08 UTC — two real manual testing sessions, the only
+traffic within the retained window). Reconstructed once, by hand, from the
+pre-fix multi-line log format described above (each event's fields were
+spread across several separate CloudWatch log lines); the equivalent queries
+below are what to run going forward now that the format is fixed.
+
+**111 real `http_request` events, 0 errors (all `200`/`201`/`202`):**
+
+| Signal (ms)              | n   | min | p50  | p95  | p99  | max  |
+| ------------------------ | --- | --- | ---- | ---- | ---- | ---- |
+| all routes               | 111 | 124 | 621  | 1112 | 1702 | 3361 |
+| `batches.get`            | 41  | 431 | 696  | 1218 | —    | 1445 |
+| `scans.images.thumbnail` | 25  | 124 | 551  | 707  | —    | 772  |
+| `scans.get`              | 15  | 307 | 308  | 344  | —    | 344  |
+| `scans.create`           | 6   | 606 | 1063 | 1702 | —    | 1702 |
+| `scans.uploads.create`   | 6   | 434 | 480  | 512  | —    | 512  |
+| `scans.uploads.complete` | 6   | 485 | 660  | 3361 | —    | 3361 |
+| `scans.submit`           | 6   | 649 | 717  | 951  | —    | 951  |
+| `quota.get`              | 4   | 241 | 279  | 300  | —    | 300  |
+| `batches.create`         | 2   | 505 | 746  | —    | —    | 746  |
+
+No real error sample exists in this window either — error-rate alerting has
+not yet been exercised against a real 4xx/5xx from this environment.
+
+**6 real `upload_complete_timing` events:** upload phase (readback +
+validation) 93–1664ms (mean 435.5ms); normalization phase (deriving/storing
+analysis + thumbnail variants) 132–1454ms (mean 369.3ms). One event
+(`9be8d403…`) is a clear outlier at 1664/1454ms against five clustered
+around 93–246/132–164ms — six samples is too few to call this a real
+distribution, just a real observation that the two phases are normally
+comparable in cost and occasionally both spike together (consistent with a
+shared cause — cold storage/CPU — rather than one phase being
+disproportionately expensive).
+
+**4 real `scan_analysis_timing` events** (`/aws/lambda/
+vinylhound-development-worker`, same window): total `durationMs` 10230,
+22592, 29153, 47444 — real OpenAI `gpt-5.6-terra` calls, `storageFetchDurationMs`
+consistently under 130ms each time, so essentially all of it is
+`providerCallDurationMs` (10113–47354ms). This is 2–9× slower than the local
+persisted-attempt mean above (5094ms) and far above the P3.5 Task 2
+benchmark's synthetic 320–416ms p50/p95 — expected and not a regression: the
+benchmark's worker never calls a real provider at all, and this Lambda path
+adds real network round trips a local direct connection does not pay. Four
+samples is too few to trust a percentile from; treat this as confirmation
+that real provider latency is measured in seconds, not milliseconds, when
+sizing timeouts and alert thresholds.
+
+**Logs Insights queries for the now-fixed single-line JSON format** (replace
+the reconstruction above going forward):
+
+```
+# API p50/p95/error rate/throughput by route, web log group
+fields @timestamp, route, status, durationMs
+| filter event = "http_request"
+| stats count() as n,
+        sum(status >= 400) as errors,
+        pct(durationMs, 50) as p50,
+        pct(durationMs, 95) as p95
+        by route
+
+# Upload/normalization phase split, web log group
+fields uploadPhaseDurationMs, normalizationPhaseDurationMs
+| filter event = "upload_complete_timing"
+| stats pct(uploadPhaseDurationMs, 50) as uploadP50,
+        pct(normalizationPhaseDurationMs, 50) as normalizationP50,
+        count() as n
+
+# Attempt duration split, worker log group
+fields storageFetchDurationMs, providerCallDurationMs, durationMs, outcome
+| filter event = "scan_analysis_timing"
+| stats pct(durationMs, 50) as p50,
+        pct(durationMs, 95) as p95,
+        count() as n by outcome
+```
+
+These rely on CloudWatch Logs Insights' automatic JSON field discovery
+(`event`, `route`, `durationMs`, etc. are usable directly, no `parse`
+needed) — which only works because the fix above makes each event one
+self-contained JSON line. Query cost is negligible at today's volume
+(~300KB scanned for the reconstruction above, well under a cent).
+
+### Queue age: reuse native SQS metrics, add nothing
+
+`ApproximateAgeOfOldestMessage` and `ApproximateNumberOfMessagesVisible` are
+already alarmed (`infra/terraform/environment/monitoring.tf`'s `queue_age`
+alarm at 300s/5min; `infra/terraform/production/monitoring.tf`'s `queue_age`
+and `dlq` alarms) and already graphed on the operations dashboard
+(`environment/monitoring.tf`'s "Queue" widget) — this satisfies the roadmap
+task's "optional queue CloudWatch metrics" with infrastructure that already
+exists; nothing new was added. The persisted-attempt queue age above (enqueue
+to worker pickup, from `scan_attempts`/`outbox_messages`) is the complementary
+application-level view of the same underlying signal, not a duplicate of it:
+SQS's metric is queue-side (how long the oldest visible message has waited);
+the persisted figure is per-attempt and survives after the message leaves
+the queue.
+
+**Deliberately left off:** `apps/worker/src/metrics.ts`'s
+`startQueueMetricsPublisher` (custom `PutMetricData` calls for
+`QueuePendingJobs`/`QueueOldestAgeSeconds`/`QueueFailedJobs` under the
+`VinylHound` namespace) exists in code and has IAM permission wired
+(`infra/terraform/environment/ecs.tf:129-132`) but `CLOUDWATCH_METRICS_ENABLED`
+defaults `false` everywhere and was not turned on for this reconciliation —
+this publisher was previously undocumented in this file. Enabling it would
+add real, currently-unreconciled `PutMetricData` request cost on top of the
+budget above; the native SQS metrics and the persisted-attempt figures
+already answer this task's queue-age/duration questions without it, which is
+exactly the "reuse ... rather than adding uncosted custom metrics" the
+roadmap task calls for. Revisit only with an explicit budget decision, not as
+a side effect of future instrumentation work.
+
+### Telemetry retention and cost
+
+CloudWatch Logs retention is unchanged by this task: development 7 days,
+staging 7 days, production 30 days (figures and citations in "Persistent
+spend inventory" above). The JSON.stringify fix incidentally reduces log
+volume for these three lines — each `http_request` event was previously up
+to eight separate CloudWatch log events (one per object key) and is now one
+— but this session did not re-measure ingestion bytes/month to quantify that
+saving; treat it as a directionally positive side effect, not a new figure to
+budget against.
+
+### Left for Task 4
+
+Deterministic provider-stub runs versus a small capped real-OpenAI run, and
+comparing single- versus multi-worker concurrency with total provider
+concurrency held constant, are unstarted — this task's real numbers above
+(especially the 10–47 second real provider-call range) are what Task 4's
+capped live run should be sized and budgeted against.

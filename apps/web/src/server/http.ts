@@ -64,7 +64,13 @@ export function logHttpEvent(fields: {
   requestId: string;
   correlationId?: string;
 }) {
-  console.info("[web] http_request", fields);
+  // A single JSON.stringify call, not `console.info(prefix, fields)`: Node's
+  // default object inspection wraps a six-key object onto multiple lines,
+  // and Lambda's log capture turns each line into its own CloudWatch log
+  // event, splitting one request's fields across unrelated events and
+  // defeating both `grep` and Logs Insights' automatic JSON field discovery
+  // (which requires the whole message to be one JSON value).
+  console.info(JSON.stringify({ event: "http_request", ...fields }));
 }
 
 /**

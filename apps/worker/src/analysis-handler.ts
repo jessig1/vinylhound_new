@@ -94,15 +94,23 @@ export function createScanAnalysisHandler(options: ScanAnalysisHandlerOptions) {
         durationMs,
         terminal: !shouldRetry,
       });
-      console.info("[worker] scan_analysis_timing", {
-        scanId: job.scanId,
-        attemptId: prepared.attemptId,
-        correlationId: job.correlationId,
-        outcome: "failed",
-        storageFetchDurationMs,
-        providerCallDurationMs,
-        durationMs,
-      });
+      // JSON.stringify'd as one call — see `logHttpEvent`
+      // (apps/web/src/server/http.ts) for why a multi-field object passed
+      // as `console.info(prefix, obj)` is unsafe here: Node prints it
+      // across several lines, and each becomes its own CloudWatch log
+      // event.
+      console.info(
+        JSON.stringify({
+          event: "scan_analysis_timing",
+          scanId: job.scanId,
+          attemptId: prepared.attemptId,
+          correlationId: job.correlationId,
+          outcome: "failed",
+          storageFetchDurationMs,
+          providerCallDurationMs,
+          durationMs,
+        }),
+      );
       if (shouldRetry) {
         throw normalized;
       }
@@ -129,15 +137,18 @@ export function createScanAnalysisHandler(options: ScanAnalysisHandlerOptions) {
       metadata: response.metadata,
       durationMs,
     });
-    console.info("[worker] scan_analysis_timing", {
-      scanId: job.scanId,
-      attemptId: prepared.attemptId,
-      correlationId: job.correlationId,
-      outcome: outcome.status,
-      storageFetchDurationMs,
-      providerCallDurationMs,
-      durationMs,
-    });
+    console.info(
+      JSON.stringify({
+        event: "scan_analysis_timing",
+        scanId: job.scanId,
+        attemptId: prepared.attemptId,
+        correlationId: job.correlationId,
+        outcome: outcome.status,
+        storageFetchDurationMs,
+        providerCallDurationMs,
+        durationMs,
+      }),
+    );
   };
 }
 

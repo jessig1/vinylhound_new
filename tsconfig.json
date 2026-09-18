@@ -32,6 +32,7 @@
     "apps/**/*.tsx",
     "packages/**/*.ts",
     "scripts/benchmark/**/*.ts",
+    "scripts/metrics/**/*.ts",
     "eslint.config.mjs",
     "prettier.config.mjs",
     "vitest.config.ts"

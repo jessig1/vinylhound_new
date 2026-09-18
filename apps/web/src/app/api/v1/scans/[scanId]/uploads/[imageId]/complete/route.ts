@@ -101,14 +101,21 @@ export const POST = withRoute(
       analysisHeight: normalized.analysis.height,
       thumbnailSizeBytes: normalized.thumbnail.sizeBytes,
     });
-    console.info("[web] upload_complete_timing", {
-      scanId,
-      imageId,
-      requestId,
-      correlationId,
-      uploadPhaseDurationMs,
-      normalizationPhaseDurationMs,
-    });
+    // JSON.stringify'd as one call, not `console.info(prefix, obj)` — see
+    // the comment on `logHttpEvent` in `@/server/http` for why: a
+    // multi-field object otherwise prints across several lines, and each
+    // becomes a separate CloudWatch log event.
+    console.info(
+      JSON.stringify({
+        event: "upload_complete_timing",
+        scanId,
+        imageId,
+        requestId,
+        correlationId,
+        uploadPhaseDurationMs,
+        normalizationPhaseDurationMs,
+      }),
+    );
     return completedResponse(completed, requestId);
   },
 );
