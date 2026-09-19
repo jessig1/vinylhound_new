@@ -2,19 +2,32 @@ import { randomUUID } from "node:crypto";
 
 import type { AlbumIdentifier } from "@vinylhound/ai";
 import { loadQueueWorkerConfig } from "@vinylhound/config";
-import { ANALYZE_SCAN_JOB, type AnalyzeScanJob } from "@vinylhound/contracts";
+import {
+  ANALYZE_SCAN_JOB,
+  SCAN_CONFIRMED_EVENT,
+  type AnalyzeScanJob,
+  type ConfirmationCompletedEvent,
+  type ScanConfirmedEvent,
+} from "@vinylhound/contracts";
 import {
   createDatabase,
   databaseOptionsFromConfig,
+  dispatchNextConfirmationReceipt,
   dispatchNextOutboxMessage,
 } from "@vinylhound/database";
 import {
   createAnalyzeScanWorker,
   createBullMqScanQueue,
+  createConfirmationCompletionQueue,
+  createConfirmationCompletionWorker,
+  createConfirmationProcessingQueue,
+  createConfirmationProcessingWorker,
 } from "@vinylhound/queue";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 
 import { createScanAnalysisHandler } from "./analysis-handler.ts";
+import { createConfirmationCompletionHandler } from "./confirmation-completion-handler.ts";
+import { createConfirmationProcessingHandler } from "./confirmation-processing-handler.ts";
 
 // End-to-end test worker: runs the real outbox publisher, queue consumer,
 // storage reads, and persistence with a deterministic identifier instead of
@@ -101,8 +114,45 @@ const analysisWorker = createAnalyzeScanWorker({
   },
 });
 
+// P4.2 Task 3 (ADR-0028): the browser e2e suite confirms scans, so this
+// worker must run the full pipeline, not just scan analysis, or a confirm
+// click would hang forever waiting for a projection that never lands.
+const confirmationProcessingQueue = createConfirmationProcessingQueue({
+  redisUrl: config.REDIS_URL!,
+  queueName: config.CONFIRMATION_PROCESSING_QUEUE_NAME,
+});
+const confirmationProcessingWorker = createConfirmationProcessingWorker({
+  redisUrl: config.REDIS_URL!,
+  queueName: config.CONFIRMATION_PROCESSING_QUEUE_NAME,
+  onScanConfirmed: createConfirmationProcessingHandler({
+    database: database.db,
+  }),
+  onError: (error) => {
+    console.error("[e2e-worker] confirmation-processing consumer error", {
+      errorName: error.name,
+    });
+  },
+});
+const confirmationCompletionQueue = createConfirmationCompletionQueue({
+  redisUrl: config.REDIS_URL!,
+  queueName: config.CONFIRMATION_COMPLETION_QUEUE_NAME,
+});
+const confirmationCompletionWorker = createConfirmationCompletionWorker({
+  redisUrl: config.REDIS_URL!,
+  queueName: config.CONFIRMATION_COMPLETION_QUEUE_NAME,
+  onConfirmationCompleted: createConfirmationCompletionHandler({
+    database: database.db,
+  }),
+  onError: (error) => {
+    console.error("[e2e-worker] confirmation-completion consumer error", {
+      errorName: error.name,
+    });
+  },
+});
+
 let stopping = false;
 let nextPoll: NodeJS.Timeout | undefined;
+let nextConfirmationReceiptPoll: NodeJS.Timeout | undefined;
 
 async function poll() {
   try {
@@ -111,6 +161,12 @@ async function poll() {
         [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
           await queue.enqueueAnalyzeScan(
             payload as AnalyzeScanJob,
+            idempotencyKey,
+          );
+        },
+        [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
+          await confirmationProcessingQueue.enqueue(
+            payload as ScanConfirmedEvent,
             idempotencyKey,
           );
         },
@@ -130,6 +186,36 @@ async function poll() {
   }
 }
 
+async function confirmationReceiptPoll() {
+  try {
+    while (!stopping) {
+      const result = await dispatchNextConfirmationReceipt(
+        database.db,
+        async (payload, idempotencyKey) => {
+          await confirmationCompletionQueue.enqueue(
+            payload as ConfirmationCompletedEvent,
+            idempotencyKey,
+          );
+        },
+      );
+      if (result.status !== "published") {
+        break;
+      }
+    }
+  } catch (error) {
+    console.error("[e2e-worker] confirmation-receipt polling failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+  } finally {
+    if (!stopping) {
+      nextConfirmationReceiptPoll = setTimeout(
+        () => void confirmationReceiptPoll(),
+        config.OUTBOX_POLL_INTERVAL_MS,
+      );
+    }
+  }
+}
+
 async function shutdown() {
   if (stopping) {
     return;
@@ -138,9 +224,16 @@ async function shutdown() {
   if (nextPoll) {
     clearTimeout(nextPoll);
   }
+  if (nextConfirmationReceiptPoll) {
+    clearTimeout(nextConfirmationReceiptPoll);
+  }
   await Promise.allSettled([
     analysisWorker.close(),
+    confirmationProcessingWorker.close(),
+    confirmationCompletionWorker.close(),
     queue.close(),
+    confirmationProcessingQueue.close(),
+    confirmationCompletionQueue.close(),
     database.close(),
   ]);
 }
@@ -153,3 +246,4 @@ console.info(
   `[e2e-worker] synthetic scan worker started; queue=${config.SCAN_QUEUE_NAME}`,
 );
 void poll();
+void confirmationReceiptPoll();

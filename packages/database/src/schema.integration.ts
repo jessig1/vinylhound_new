@@ -5,10 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   ANALYZE_SCAN_JOB,
+  CONFIRMATION_COMPLETED_EVENT_CONTRACT,
   MAX_LIBRARY_COPIES_PER_ITEM,
   MAX_PLAYLIST_ENTRIES,
   MAX_PLAYLISTS_PER_USER,
   MAX_SCANS_PER_BATCH,
+  SCAN_CONFIRMED_EVENT,
+  SCAN_CONFIRMED_EVENT_CONTRACT,
   type AnalyzeScanJob,
   type LibraryItemResult,
 } from "@vinylhound/contracts";
@@ -26,9 +29,13 @@ import {
   prepareScanAnalysis,
 } from "./analysis-repository.ts";
 import {
+  applyConfirmationCompletion,
   confirmScan,
+  confirmationEventId,
   getScanConfirmationForUser,
 } from "./confirmation-repository.ts";
+import { dispatchNextConfirmationReceipt } from "./confirmation-receipt-repository.ts";
+import { processScanConfirmation } from "./confirmation-processing-repository.ts";
 import {
   createLibraryCopy,
   deleteLibraryCopy,
@@ -67,6 +74,7 @@ import {
 import {
   albums,
   catalogReferences,
+  confirmationReceipts,
   imageAssets,
   libraryCopies,
   libraryItems,
@@ -130,6 +138,69 @@ afterAll(async () => {
   await database.db.delete(users).where(eq(users.id, userId));
   await database.close();
 });
+
+/**
+ * P4.2 Task 3 (ADR-0028): `confirmScan` alone only ever returns a `pending`
+ * record now -- the release/library write moved to a separate "core"
+ * transaction (`processScanConfirmation`) reached through a
+ * `scan.confirmed.v1` event, and the result only reaches `scan_confirmations`
+ * once a `confirmation.completed.v1` event is applied
+ * (`applyConfirmationCompletion`). Existing call sites in this file want the
+ * finished record, not the pipeline's intermediate state, so this helper
+ * drives all three hops directly -- reading the durable rows each hop leaves
+ * behind rather than going through a real queue -- and returns the same
+ * shape `confirmScan` itself used to return synchronously before this task.
+ */
+async function confirmScanAndComplete(
+  input: Parameters<typeof confirmScan>[1],
+): ReturnType<typeof confirmScan> {
+  const result = await confirmScan(database.db, input);
+  if (result.record.status === "completed") {
+    return result;
+  }
+
+  // Both tables key on `confirmationEventId(scanId, idempotencyKey)`, not
+  // scanId alone (ADR-0018 lets one scan be confirmed, completed, removed,
+  // and reconfirmed more than once), so filtering on the exact composite key
+  // finds this specific attempt's row even if the scan has older ones.
+  const eventKey = confirmationEventId(input.scanId, input.idempotencyKey);
+  const [outboxRow] = await database.db
+    .select()
+    .from(outboxMessages)
+    .where(
+      and(
+        eq(outboxMessages.topic, SCAN_CONFIRMED_EVENT),
+        eq(outboxMessages.idempotencyKey, eventKey),
+      ),
+    )
+    .limit(1);
+  if (!outboxRow) {
+    throw new Error(
+      `No scan.confirmed.v1 outbox row was recorded for scan ${input.scanId}.`,
+    );
+  }
+  const confirmedEvent = SCAN_CONFIRMED_EVENT_CONTRACT.consumerSchema.parse(
+    outboxRow.payload,
+  );
+  await processScanConfirmation(database.db, confirmedEvent);
+
+  const [receipt] = await database.db
+    .select()
+    .from(confirmationReceipts)
+    .where(eq(confirmationReceipts.idempotencyKey, eventKey))
+    .limit(1);
+  if (!receipt) {
+    throw new Error(
+      `No confirmation_receipts row was recorded for scan ${input.scanId}.`,
+    );
+  }
+  const completedEvent =
+    CONFIRMATION_COMPLETED_EVENT_CONTRACT.consumerSchema.parse(receipt.payload);
+  await applyConfirmationCompletion(database.db, completedEvent);
+
+  const final = await confirmScan(database.db, input);
+  return { record: final.record, created: result.created };
+}
 
 describe("initial scan persistence schema", () => {
   it("replays idempotent scan and upload commands without duplicate rows", async () => {
@@ -773,7 +844,7 @@ describe("initial scan persistence schema", () => {
         copy: null,
       },
     };
-    const created = await confirmScan(database.db, confirmation);
+    const created = await confirmScanAndComplete(confirmation);
     const replayed = await confirmScan(database.db, confirmation);
 
     expect(created.created).toBe(true);
@@ -806,7 +877,7 @@ describe("initial scan persistence schema", () => {
       durationMs: 20,
       completedAt: new Date(),
     });
-    const converted = await confirmScan(database.db, {
+    const converted = await confirmScanAndComplete({
       ...confirmation,
       scanId: secondScan!.id,
       idempotencyKey: `confirm-${randomUUID()}`,
@@ -844,7 +915,7 @@ describe("initial scan persistence schema", () => {
       durationMs: 20,
       completedAt: new Date(),
     });
-    const secondCopy = await confirmScan(database.db, {
+    const secondCopy = await confirmScanAndComplete({
       ...confirmation,
       scanId: thirdScan!.id,
       idempotencyKey: `confirm-${randomUUID()}`,
@@ -863,14 +934,14 @@ describe("initial scan persistence schema", () => {
       },
     });
 
-    expect(converted.record.release.id).toBe(created.record.release.id);
-    expect(secondCopy.record.release.id).toBe(created.record.release.id);
-    expect(secondCopy.record.libraryItem.id).toBe(
-      created.record.libraryItem.id,
+    expect(converted.record.release!.id).toBe(created.record.release!.id);
+    expect(secondCopy.record.release!.id).toBe(created.record.release!.id);
+    expect(secondCopy.record.libraryItem!.id).toBe(
+      created.record.libraryItem!.id,
     );
-    expect(converted.record.release.artist).toBe("MILES DAVIS");
-    expect(converted.record.libraryItem).toMatchObject({
-      id: created.record.libraryItem.id,
+    expect(converted.record.release!.artist).toBe("MILES DAVIS");
+    expect(converted.record.libraryItem!).toMatchObject({
+      id: created.record.libraryItem!.id,
       list: "collection",
       copy: { location: "Shelf A" },
     });
@@ -888,7 +959,7 @@ describe("initial scan persistence schema", () => {
       list: "collection",
       items: [
         {
-          id: created.record.libraryItem.id,
+          id: created.record.libraryItem!.id,
           release: { artist: "MILES DAVIS", title: "Kind of Blue" },
           copyCount: 2,
           copies: [{ location: "Shelf A" }, { location: "Shelf B" }],
@@ -916,7 +987,7 @@ describe("initial scan persistence schema", () => {
       await database.db
         .select()
         .from(libraryCopies)
-        .where(eq(libraryCopies.libraryItemId, created.record.libraryItem.id)),
+        .where(eq(libraryCopies.libraryItemId, created.record.libraryItem!.id)),
     ).toHaveLength(2);
     expect(
       await database.db
@@ -968,7 +1039,7 @@ describe("direct library item management", () => {
       durationMs: 20,
       completedAt: new Date(),
     });
-    const result = await confirmScan(database.db, {
+    const result = await confirmScanAndComplete({
       userId,
       scanId: scan!.id,
       idempotencyKey: `confirm-${randomUUID()}`,
@@ -991,7 +1062,7 @@ describe("direct library item management", () => {
         copy: null,
       },
     });
-    return result.record.libraryItem.id;
+    return result.record.libraryItem!.id;
   }
 
   it("converts a wishlist item to collection, creating one blank copy", async () => {
@@ -1134,7 +1205,7 @@ describe("direct library item management", () => {
     const scanId = confirmation!.scanId;
     await deleteLibraryItem(database.db, { userId, itemId });
 
-    const resaved = await confirmScan(database.db, {
+    const resaved = await confirmScanAndComplete({
       userId,
       scanId,
       idempotencyKey: `confirm-again-${randomUUID()}`,
@@ -1159,8 +1230,8 @@ describe("direct library item management", () => {
     });
 
     expect(resaved.created).toBe(true);
-    expect(resaved.record.libraryItem.id).not.toBe(itemId);
-    expect(resaved.record.libraryItem.list).toBe("collection");
+    expect(resaved.record.libraryItem!.id).not.toBe(itemId);
+    expect(resaved.record.libraryItem!.list).toBe("collection");
   });
 
   it("exposes the confirming scan's first completed image as the item cover", async () => {
@@ -1205,7 +1276,7 @@ describe("direct library item management", () => {
       })
       .returning();
 
-    const confirmed = await confirmScan(database.db, {
+    const confirmed = await confirmScanAndComplete({
       userId,
       scanId: scan!.id,
       idempotencyKey: `cover-confirm-${randomUUID()}`,
@@ -1231,7 +1302,7 @@ describe("direct library item management", () => {
 
     const item = await getLibraryItemForUser(database.db, {
       userId,
-      itemId: confirmed.record.libraryItem.id,
+      itemId: confirmed.record.libraryItem!.id,
     });
     expect(item.coverImage).toEqual({
       scanId: scan!.id,
@@ -1319,7 +1390,7 @@ describe("per-copy editing and last-copy rules", () => {
       durationMs: 20,
       completedAt: new Date(),
     });
-    const result = await confirmScan(database.db, {
+    const result = await confirmScanAndComplete({
       userId: owner,
       scanId: scan!.id,
       idempotencyKey: `copy-confirm-${randomUUID()}`,
@@ -1344,8 +1415,8 @@ describe("per-copy editing and last-copy rules", () => {
     });
     return {
       scanId: scan!.id,
-      itemId: result.record.libraryItem.id,
-      copyId: result.record.libraryItem.copy!.id,
+      itemId: result.record.libraryItem!.id,
+      copyId: result.record.libraryItem!.copy!.id,
     };
   }
 
@@ -2215,7 +2286,7 @@ describe("batch grouping and scan lifecycle", () => {
       })
       .returning();
 
-    await confirmScan(database.db, {
+    await confirmScanAndComplete({
       userId,
       scanId: scan!.id,
       idempotencyKey: `dismiss-confirm-${randomUUID()}`,
@@ -2880,7 +2951,7 @@ describe("full-library search and keyset pagination", () => {
       durationMs: 20,
       completedAt: new Date(),
     });
-    const confirmed = await confirmScan(database.db, {
+    const confirmed = await confirmScanAndComplete({
       userId: ownerId,
       scanId: scan!.id,
       idempotencyKey: `pagination-confirm-${randomUUID()}`,
@@ -2903,13 +2974,13 @@ describe("full-library search and keyset pagination", () => {
         copy: null,
       },
     });
-    const itemId = confirmed.record.libraryItem.id;
+    const itemId = confirmed.record.libraryItem!.id;
     // Change the album row underneath so it no longer matches what was
     // confirmed — the equivalent of another user's copy sharing the row.
     const [release] = await database.db
       .select({ albumId: releases.albumId })
       .from(releases)
-      .where(eq(releases.id, confirmed.record.release.id));
+      .where(eq(releases.id, confirmed.record.release!.id));
     await database.db
       .update(albums)
       .set({ artist: "Zzz Album Row Artist", title: "Album Row Title" })
@@ -3187,7 +3258,7 @@ describe("account export and deletion", () => {
       durationMs: 20,
       completedAt: new Date(),
     });
-    const confirmation = await confirmScan(database.db, {
+    const confirmation = await confirmScanAndComplete({
       userId: accountId,
       scanId: scan!.id,
       idempotencyKey: `account-export-confirm-${randomUUID()}`,
@@ -3214,7 +3285,7 @@ describe("account export and deletion", () => {
     // Saved-music data (roadmap P3.3 Task 2) must travel with the account.
     await updateLibraryItem(database.db, {
       userId: accountId,
-      itemId: confirmation.record.libraryItem.id,
+      itemId: confirmation.record.libraryItem!.id,
       update: { favorite: true },
     });
     const { playlist } = await createPlaylist(database.db, {
@@ -3224,7 +3295,7 @@ describe("account export and deletion", () => {
     await addPlaylistEntry(database.db, {
       userId: accountId,
       playlistId: playlist.id,
-      libraryItemId: confirmation.record.libraryItem.id,
+      libraryItemId: confirmation.record.libraryItem!.id,
     });
 
     return {
@@ -3250,7 +3321,7 @@ describe("account export and deletion", () => {
     expect(exported.confirmations).toHaveLength(1);
     expect(exported.confirmations[0]).toMatchObject({
       scanId,
-      libraryItemId: confirmation.record.libraryItem.id,
+      libraryItemId: confirmation.record.libraryItem!.id,
     });
     expect(exported.libraryItems).toHaveLength(1);
     expect(exported.libraryItems[0]!.favoritedAt).not.toBeNull();
@@ -3260,7 +3331,7 @@ describe("account export and deletion", () => {
     ]);
     expect(exported.playlistEntries).toEqual([
       expect.objectContaining({
-        libraryItemId: confirmation.record.libraryItem.id,
+        libraryItemId: confirmation.record.libraryItem!.id,
         position: 1,
       }),
     ]);
@@ -3329,5 +3400,422 @@ describe("account export and deletion", () => {
     await expect(
       deleteAccount(database.db, { userId: randomUUID() }),
     ).rejects.toMatchObject({ code: "not_found" });
+  });
+});
+
+describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
+  async function insertReviewableScan() {
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `pipeline-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    return scan!.id;
+  }
+
+  function collectionConfirmationInput(scanId: string) {
+    return {
+      userId,
+      scanId,
+      idempotencyKey: `pipeline-confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: `Pipeline Test Artist ${randomUUID()}`,
+        title: "Pipeline Test Title",
+        releaseYear: 1985,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "collection" as const,
+        notes: null,
+        copy: {
+          mediaCondition: "very_good_plus" as const,
+          sleeveCondition: null,
+          location: null,
+          notes: null,
+          acquiredAt: null,
+        },
+      },
+    };
+  }
+
+  async function readOutboxEvent(scanId: string, idempotencyKey: string) {
+    const eventKey = confirmationEventId(scanId, idempotencyKey);
+    const [row] = await database.db
+      .select()
+      .from(outboxMessages)
+      .where(
+        and(
+          eq(outboxMessages.topic, SCAN_CONFIRMED_EVENT),
+          eq(outboxMessages.idempotencyKey, eventKey),
+        ),
+      )
+      .limit(1);
+    if (!row) {
+      throw new Error(`No scan.confirmed.v1 outbox row for scan ${scanId}.`);
+    }
+    return {
+      row,
+      eventKey,
+      event: SCAN_CONFIRMED_EVENT_CONTRACT.consumerSchema.parse(row.payload),
+    };
+  }
+
+  /**
+   * `confirmation_receipts` is shared across every test in this file, the
+   * same way `outbox_messages` is (see `dispatchUntil` above) -- an earlier
+   * test's confirmed-but-never-dispatched receipt can still be sitting in
+   * the table. Dispatch repeatedly, draining unrelated rows with a no-op
+   * publish, until the target receipt is reached.
+   */
+  async function dispatchConfirmationReceiptUntil(
+    targetKey: string,
+    publish: (payload: unknown) => Promise<void>,
+    now = new Date(Date.now() + 1_000),
+  ) {
+    for (let attempts = 0; attempts < 50; attempts += 1) {
+      const result = await dispatchNextConfirmationReceipt(
+        database.db,
+        async (payload, idempotencyKey) => {
+          if (idempotencyKey === targetKey) {
+            await publish(payload);
+          }
+        },
+        now,
+      );
+      if (result.status === "idle") {
+        throw new Error(`Target receipt ${targetKey} was never dispatched.`);
+      }
+      if (result.idempotencyKey === targetKey) {
+        return result;
+      }
+    }
+    throw new Error(`Target receipt ${targetKey} was not reached in time.`);
+  }
+
+  it("records a pending confirmation and its event, writing no library rows", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+
+    const result = await confirmScan(database.db, input);
+
+    expect(result.created).toBe(true);
+    expect(result.record).toMatchObject({
+      scanId,
+      status: "pending",
+      release: null,
+      libraryItem: null,
+      completedAt: null,
+    });
+
+    const { row, event } = await readOutboxEvent(scanId, input.idempotencyKey);
+    expect(row).toMatchObject({
+      aggregateType: "scan_confirmation",
+      publishedAt: null,
+    });
+    expect(event).toMatchObject({
+      scanId,
+      userId,
+      idempotencyKey: input.idempotencyKey,
+      list: "collection",
+    });
+
+    const [storedConfirmation] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    expect(storedConfirmation).toMatchObject({
+      status: "pending",
+      releaseId: null,
+      libraryItemId: null,
+      copyId: null,
+    });
+    expect(
+      await database.db
+        .select()
+        .from(libraryItems)
+        .where(eq(libraryItems.confirmedFromScanId, scanId)),
+    ).toHaveLength(0);
+  });
+
+  it("replays a pending confirmation idempotently and still conflicts on a different payload, never treating it as removed", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+
+    const first = await confirmScan(database.db, input);
+    const replay = await confirmScan(database.db, input);
+
+    expect(first.created).toBe(true);
+    expect(replay.created).toBe(false);
+    expect(replay.record).toEqual(first.record);
+
+    await expect(
+      confirmScan(database.db, {
+        ...input,
+        confirmation: { ...input.confirmation, title: "A different title" },
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+
+    // A conflict must not have deleted-and-reset the pending row (the
+    // ADR-0018 "removed" branch, which a pending confirmation's null
+    // libraryItemId could otherwise be mistaken for).
+    const [stillPending] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    expect(stillPending).toMatchObject({ status: "pending" });
+  });
+
+  it("processScanConfirmation resolves the release and writes the library row exactly once, even if the event is delivered twice", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+    await confirmScan(database.db, input);
+    const { event, eventKey } = await readOutboxEvent(
+      scanId,
+      input.idempotencyKey,
+    );
+
+    await processScanConfirmation(database.db, event);
+    await processScanConfirmation(database.db, event);
+
+    const receipts = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.idempotencyKey, eventKey));
+    expect(receipts).toHaveLength(1);
+
+    const libraryRows = await database.db
+      .select()
+      .from(libraryItems)
+      .where(eq(libraryItems.confirmedFromScanId, scanId));
+    expect(libraryRows).toHaveLength(1);
+    const copyRows = await database.db
+      .select()
+      .from(libraryCopies)
+      .where(eq(libraryCopies.confirmedFromScanId, scanId));
+    expect(copyRows).toHaveLength(1);
+  });
+
+  it("applyConfirmationCompletion projects the completion and is idempotent against redelivery or a missing row", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+    await confirmScan(database.db, input);
+    const { event, eventKey } = await readOutboxEvent(
+      scanId,
+      input.idempotencyKey,
+    );
+    await processScanConfirmation(database.db, event);
+    const [receipt] = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.idempotencyKey, eventKey));
+    const completion =
+      CONFIRMATION_COMPLETED_EVENT_CONTRACT.consumerSchema.parse(
+        receipt!.payload,
+      );
+
+    await applyConfirmationCompletion(database.db, completion);
+    const [afterFirst] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    expect(afterFirst).toMatchObject({
+      status: "completed",
+      releaseId: completion.releaseId,
+      libraryItemId: completion.libraryItemId,
+      copyId: completion.copyId,
+    });
+
+    // Redelivery after completion is a silent no-op, not a re-application.
+    await applyConfirmationCompletion(database.db, completion);
+    const [afterRedelivery] = await database.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    expect(afterRedelivery).toEqual(afterFirst);
+
+    // A completion event naming a scan/idempotencyKey with no matching row
+    // is a defensive no-op, not a throw -- this handler runs from a queue
+    // consumer with no request to fail back to.
+    await expect(
+      applyConfirmationCompletion(database.db, {
+        ...completion,
+        scanId: randomUUID(),
+        idempotencyKey: `orphan-${randomUUID()}`,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("dispatchNextConfirmationReceipt claims, backs off on a failed publish, and marks published on success", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+    await confirmScan(database.db, input);
+    const { event, eventKey } = await readOutboxEvent(
+      scanId,
+      input.idempotencyKey,
+    );
+    await processScanConfirmation(database.db, event);
+
+    const firstDispatchAt = new Date(Date.now() + 1_000);
+    await dispatchConfirmationReceiptUntil(
+      eventKey,
+      async () => {
+        throw new Error("synthetic delivery failure");
+      },
+      firstDispatchAt,
+    );
+    const [afterDeferral] = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.idempotencyKey, eventKey));
+    expect(afterDeferral).toMatchObject({
+      publishAttempts: 1,
+      publishedAt: null,
+      lastError: "Queue publication failed.",
+    });
+    expect(afterDeferral?.availableAt.getTime()).toBeGreaterThan(
+      firstDispatchAt.getTime(),
+    );
+
+    const publishedPayloads: unknown[] = [];
+    // Past the backoff delay this deferral just set, and far enough ahead
+    // that any other test's stale, similarly-backed-off row is also due --
+    // this dispatcher has no target-matching of its own, only the
+    // draining helper above does.
+    const published = await dispatchConfirmationReceiptUntil(
+      eventKey,
+      async (payload) => {
+        publishedPayloads.push(payload);
+      },
+      new Date(firstDispatchAt.getTime() + 60_000),
+    );
+    expect(published.status).toBe("published");
+    expect(publishedPayloads).toEqual([
+      expect.objectContaining({ scanId, idempotencyKey: event.idempotencyKey }),
+    ]);
+
+    const [receipt] = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.idempotencyKey, eventKey));
+    expect(receipt?.publishedAt).toBeInstanceOf(Date);
+  });
+
+  it("runs the full pipeline end to end without a queue, from a pending confirmation to a completed projection", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+
+    const pending = await confirmScan(database.db, input);
+    expect(pending.record.status).toBe("pending");
+
+    const { event, eventKey } = await readOutboxEvent(
+      scanId,
+      input.idempotencyKey,
+    );
+    await processScanConfirmation(database.db, event);
+    const dispatched = await dispatchConfirmationReceiptUntil(
+      eventKey,
+      async (payload) => {
+        await applyConfirmationCompletion(
+          database.db,
+          payload as Parameters<typeof applyConfirmationCompletion>[1],
+        );
+      },
+    );
+    expect(dispatched.status).toBe("published");
+
+    await expect(
+      getScanForUser(database.db, { userId, scanId }),
+    ).resolves.toMatchObject({
+      confirmation: {
+        status: "completed",
+        release: { artist: input.confirmation.artist },
+        libraryItem: { list: "collection" },
+      },
+    });
+  });
+
+  it("exports a pending confirmation with a null releaseId and pending status", async () => {
+    const [account] = await database.db.insert(users).values({}).returning();
+    const accountId = account!.id;
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId: accountId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `pipeline-export-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    await confirmScan(database.db, {
+      userId: accountId,
+      scanId: scan!.id,
+      idempotencyKey: `pipeline-export-confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: "Pending Export Artist",
+        title: "Pending Export Title",
+        releaseYear: null,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "wishlist",
+        notes: null,
+        copy: null,
+      },
+    });
+
+    const exported = await getAccountExportForUser(database.db, {
+      userId: accountId,
+    });
+    expect(exported.confirmations).toEqual([
+      expect.objectContaining({
+        scanId: scan!.id,
+        libraryItemId: null,
+        releaseId: null,
+        status: "pending",
+        list: null,
+      }),
+    ]);
+
+    await deleteAccount(database.db, { userId: accountId });
   });
 });

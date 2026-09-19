@@ -152,8 +152,15 @@ resource "aws_iam_role_policy" "worker" {
     Effect   = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
     Resource = [aws_s3_bucket.images.arn, "${aws_s3_bucket.images.arn}/*"]
     }, {
-    Effect   = "Allow", Action = ["sqs:ChangeMessageVisibility", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ReceiveMessage", "sqs:SendMessage"],
-    Resource = [aws_sqs_queue.scan.arn, aws_sqs_queue.scan_dead_letter.arn]
+    Effect = "Allow", Action = ["sqs:ChangeMessageVisibility", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ReceiveMessage", "sqs:SendMessage"],
+    Resource = [
+      aws_sqs_queue.scan.arn,
+      aws_sqs_queue.scan_dead_letter.arn,
+      aws_sqs_queue.confirmation_processing.arn,
+      aws_sqs_queue.confirmation_processing_dead_letter.arn,
+      aws_sqs_queue.confirmation_completion.arn,
+      aws_sqs_queue.confirmation_completion_dead_letter.arn
+    ]
   }] })
 }
 resource "aws_eks_pod_identity_association" "pod" {

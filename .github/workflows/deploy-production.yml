@@ -145,6 +145,10 @@ jobs:
             --from-literal=AUTH_MODE=production --from-literal=NEXT_PUBLIC_AUTH_MODE=production \
             --from-literal=QUEUE_DRIVER=sqs --from-literal=SQS_QUEUE_URL="$(jq -r .scan_queue_url <<<"$runtime")" \
             --from-literal=SQS_DEAD_LETTER_QUEUE_URL="$(jq -r .scan_dlq_url <<<"$runtime")" \
+            --from-literal=SQS_CONFIRMATION_PROCESSING_QUEUE_URL="$(jq -r .confirmation_processing_queue_url <<<"$runtime")" \
+            --from-literal=SQS_CONFIRMATION_PROCESSING_DEAD_LETTER_QUEUE_URL="$(jq -r .confirmation_processing_dlq_url <<<"$runtime")" \
+            --from-literal=SQS_CONFIRMATION_COMPLETION_QUEUE_URL="$(jq -r .confirmation_completion_queue_url <<<"$runtime")" \
+            --from-literal=SQS_CONFIRMATION_COMPLETION_DEAD_LETTER_QUEUE_URL="$(jq -r .confirmation_completion_dlq_url <<<"$runtime")" \
             --from-literal=SQS_MAX_RECEIVE_COUNT=5 --from-literal=SQS_VISIBILITY_TIMEOUT_SECONDS=180 \
             --from-literal=OPENAI_VISION_MODEL=gpt-5.6-sol --from-literal=OPENAI_IMAGE_DETAIL=high --from-literal=OPENAI_TIMEOUT_MS=120000 \
             --from-literal=OUTBOX_POLL_INTERVAL_MS=1000 --from-literal=ANALYSIS_CONCURRENCY=1 \

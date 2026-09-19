@@ -27,6 +27,11 @@ export function buildE2eEnv(): Record<string, string> {
   return {
     DATABASE_URL: url.toString(),
     SCAN_QUEUE_NAME: "vinylhound-scans-e2e",
+    // P4.2 Task 3: same isolation as SCAN_QUEUE_NAME above, so the e2e
+    // worker's confirmation pipeline never shares a BullMQ queue with a
+    // concurrently running `npm run dev:worker` on the same Redis.
+    CONFIRMATION_PROCESSING_QUEUE_NAME: "vinylhound-confirmation-processing-e2e",
+    CONFIRMATION_COMPLETION_QUEUE_NAME: "vinylhound-confirmation-completion-e2e",
     APP_URL: `http://localhost:${E2E_PORT}`,
     OPENAI_API_KEY: "",
     AUTH_MODE: "development",

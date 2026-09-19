@@ -91,6 +91,14 @@ export const recordConditionEnum = pgEnum("record_condition", [
   "poor",
 ]);
 
+// P4.2 Task 3 (ADR-0028, superseding ADR-0005): a confirmation is recorded by
+// `scan` before `core` has resolved a release or written a library row, so
+// its outcome is a state, not just a timestamp.
+export const confirmationStatusEnum = pgEnum("confirmation_status", [
+  "pending",
+  "completed",
+]);
+
 export const users = pgTable(
   "users",
   {
@@ -737,12 +745,15 @@ export const scanConfirmations = pgTable(
       () => scanCandidates.id,
       { onDelete: "set null" },
     ),
-    releaseId: uuid("release_id")
-      .notNull()
-      .references(() => releases.id, { onDelete: "restrict" }),
+    // Nullable (P4.2 Task 3): unknown until the core consumer resolves a
+    // release, restrict against releases only once it is known.
+    releaseId: uuid("release_id").references(() => releases.id, {
+      onDelete: "restrict",
+    }),
     // Nullable so removing a saved record keeps this audit row (ADR-0018);
     // scan_id, release_id, reviewed_release, and confirmed_at still record
-    // exactly what was confirmed.
+    // exactly what was confirmed. Also null, distinguishably, while `status`
+    // is `pending` (P4.2 Task 3) -- see the status-consistency check below.
     libraryItemId: uuid("library_item_id").references(() => libraryItems.id, {
       onDelete: "set null",
     }),
@@ -751,6 +762,11 @@ export const scanConfirmations = pgTable(
     }),
     idempotencyKey: text("idempotency_key").notNull(),
     requestFingerprint: char("request_fingerprint", { length: 64 }).notNull(),
+    // P4.2 Task 3: widened from release-identity fields only to also carry
+    // the submitted list/notes/copy, since the core consumer (a separate
+    // transaction, possibly a separate process by Task 7) needs everything
+    // the user submitted from this one durable row, not just the parts
+    // `confirmScan` itself used to resolve a release.
     reviewedRelease: jsonb("reviewed_release")
       .$type<{
         artist: string;
@@ -772,11 +788,44 @@ export const scanConfirmations = pgTable(
           sourceUrl: string;
           fetchedAt: string;
         } | null;
+        list: "collection" | "wishlist";
+        notes: string | null;
+        copy: {
+          mediaCondition:
+            | "mint"
+            | "near_mint"
+            | "very_good_plus"
+            | "very_good"
+            | "good_plus"
+            | "good"
+            | "fair"
+            | "poor"
+            | null;
+          sleeveCondition:
+            | "mint"
+            | "near_mint"
+            | "very_good_plus"
+            | "very_good"
+            | "good_plus"
+            | "good"
+            | "fair"
+            | "poor"
+            | null;
+          location: string | null;
+          notes: string | null;
+          acquiredAt: string | null;
+        } | null;
       }>()
       .notNull(),
+    // P4.2 Task 3: `status` records where in the async pipeline this
+    // confirmation is. `pending` is set by `confirmScan`'s own transaction;
+    // `completed` is set later, by `applyConfirmationCompletion` projecting
+    // the core consumer's completion event -- never by `confirmScan` itself.
+    status: confirmationStatusEnum("status").notNull().default("pending"),
     confirmedAt: timestamp("confirmed_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("scan_confirmations_user_idempotency_unique").on(
@@ -794,6 +843,92 @@ export const scanConfirmations = pgTable(
     check(
       "scan_confirmations_reviewed_release_check",
       sql`jsonb_typeof(${table.reviewedRelease}) = 'object'`,
+    ),
+    check(
+      "scan_confirmations_status_consistency_check",
+      sql`(
+          ${table.status} = 'pending'
+          and ${table.releaseId} is null
+          and ${table.libraryItemId} is null
+          and ${table.copyId} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.status} = 'completed'
+          and ${table.releaseId} is not null
+          and ${table.completedAt} is not null
+        )`,
+    ),
+  ],
+);
+
+// P4.2 Task 3 (ADR-0028): logically `core`-owned per ADR-0027, physically
+// still alongside every other table until Task 7's schema/role cutover. One
+// row per confirmation, completed at most once, so this single table plays
+// both the "inbox dedupe receipt" role (the unique `idempotencyKey` is the
+// duplicate-delivery guard for `processScanConfirmation`) and the
+// "completion event to dispatch" role (`payload`/`publishAttempts`/
+// `availableAt`/`publishedAt`/`lastError`, claimed by
+// `dispatchNextConfirmationReceipt` the same way `outbox_messages` rows are
+// claimed) -- deliberately not the generalized multi-topic `outbox_messages`
+// shape, since there is exactly one topic here and no aggregate-type
+// registry to speak of.
+export const confirmationReceipts = pgTable(
+  "confirmation_receipts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // Not a foreign key: crosses into scan's ownership (ADR-0027), an
+    // application invariant enforced by the producing transaction, the same
+    // pattern Task 2 already established for outbox_messages.aggregateId.
+    scanId: uuid("scan_id").notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    topic: text("topic").notNull().default("confirmation.completed.v1"),
+    releaseId: uuid("release_id")
+      .notNull()
+      .references(() => releases.id, { onDelete: "restrict" }),
+    // Nullable with `set null` (not `restrict`), matching
+    // scan_confirmations' own pattern: this row is a dedupe/audit record, not
+    // a protected reference, so removing the library item it named (a normal
+    // user action independent of account deletion, ADR-0018) or deleting the
+    // whole account must not be blocked by it. `payload` keeps the original
+    // ID for history even once nulled.
+    libraryItemId: uuid("library_item_id").references(() => libraryItems.id, {
+      onDelete: "set null",
+    }),
+    copyId: uuid("copy_id").references(() => libraryCopies.id, {
+      onDelete: "set null",
+    }),
+    payload: jsonb("payload").notNull(),
+    publishAttempts: integer("publish_attempts").default(0).notNull(),
+    availableAt: timestamp("available_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    completedAt: timestamp("completed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("confirmation_receipts_idempotency_key_unique").on(
+      table.idempotencyKey,
+    ),
+    index("confirmation_receipts_scan_id_idx").on(table.scanId),
+    index("confirmation_receipts_pending_idx")
+      .on(table.availableAt, table.createdAt)
+      .where(sql`${table.publishedAt} is null`),
+    check(
+      "confirmation_receipts_idempotency_key_length_check",
+      sql`char_length(${table.idempotencyKey}) between 1 and 255`,
+    ),
+    check(
+      "confirmation_receipts_publish_attempts_check",
+      sql`${table.publishAttempts} >= 0`,
     ),
   ],
 );
@@ -820,3 +955,6 @@ export type CatalogReferenceRow = typeof catalogReferences.$inferSelect;
 export type PlaylistRow = typeof playlists.$inferSelect;
 export type PlaylistEntryRow = typeof playlistEntries.$inferSelect;
 export type ScanConfirmationRow = typeof scanConfirmations.$inferSelect;
+export type ConfirmationReceiptRow = typeof confirmationReceipts.$inferSelect;
+export type NewConfirmationReceiptRow =
+  typeof confirmationReceipts.$inferInsert;

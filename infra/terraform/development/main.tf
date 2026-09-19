@@ -104,6 +104,65 @@ resource "aws_sqs_queue_redrive_allow_policy" "scan" {
   })
 }
 
+# P4.2 Task 3 (ADR-0028): the two confirmation-pipeline hops, mirroring the
+# scan-analysis queue/DLQ pair above exactly -- same worker Lambda, same
+# visibility timeout, same redrive shape.
+resource "aws_sqs_queue" "confirmation_processing_dlq" {
+  name                      = "${local.name}-confirmation-processing-dlq.fifo"
+  fifo_queue                = true
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+}
+
+resource "aws_sqs_queue" "confirmation_processing" {
+  name                       = "${local.name}-confirmation-processing.fifo"
+  fifo_queue                 = true
+  message_retention_seconds  = 1209600
+  visibility_timeout_seconds = 900
+  receive_wait_time_seconds  = 20
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.confirmation_processing_dlq.arn
+    maxReceiveCount     = 5
+  })
+}
+
+resource "aws_sqs_queue_redrive_allow_policy" "confirmation_processing" {
+  queue_url = aws_sqs_queue.confirmation_processing_dlq.id
+  redrive_allow_policy = jsonencode({
+    redrivePermission = "byQueue"
+    sourceQueueArns   = [aws_sqs_queue.confirmation_processing.arn]
+  })
+}
+
+resource "aws_sqs_queue" "confirmation_completion_dlq" {
+  name                      = "${local.name}-confirmation-completion-dlq.fifo"
+  fifo_queue                = true
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+}
+
+resource "aws_sqs_queue" "confirmation_completion" {
+  name                       = "${local.name}-confirmation-completion.fifo"
+  fifo_queue                 = true
+  message_retention_seconds  = 1209600
+  visibility_timeout_seconds = 900
+  receive_wait_time_seconds  = 20
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.confirmation_completion_dlq.arn
+    maxReceiveCount     = 5
+  })
+}
+
+resource "aws_sqs_queue_redrive_allow_policy" "confirmation_completion" {
+  queue_url = aws_sqs_queue.confirmation_completion_dlq.id
+  redrive_allow_policy = jsonencode({
+    redrivePermission = "byQueue"
+    sourceQueueArns   = [aws_sqs_queue.confirmation_completion.arn]
+  })
+}
+
 resource "aws_secretsmanager_secret" "runtime" {
   for_each = toset([
     "database-url",
@@ -172,7 +231,14 @@ resource "aws_iam_role_policy" "worker" {
         "sqs:ReceiveMessage",
         "sqs:SendMessage"
       ]
-      Resource = [aws_sqs_queue.scan.arn, aws_sqs_queue.scan_dlq.arn]
+      Resource = [
+        aws_sqs_queue.scan.arn,
+        aws_sqs_queue.scan_dlq.arn,
+        aws_sqs_queue.confirmation_processing.arn,
+        aws_sqs_queue.confirmation_processing_dlq.arn,
+        aws_sqs_queue.confirmation_completion.arn,
+        aws_sqs_queue.confirmation_completion_dlq.arn
+      ]
     }]
   })
 }
@@ -216,6 +282,29 @@ resource "aws_lambda_function" "worker" {
 resource "aws_lambda_event_source_mapping" "scan" {
   count                              = var.runtime_configured ? 1 : 0
   event_source_arn                   = aws_sqs_queue.scan.arn
+  function_name                      = aws_lambda_function.worker.arn
+  batch_size                         = 1
+  function_response_types            = ["ReportBatchItemFailures"]
+  maximum_batching_window_in_seconds = 0
+  scaling_config { maximum_concurrency = 2 }
+}
+
+# P4.2 Task 3 (ADR-0028): both confirmation-pipeline queues feed the same
+# worker Lambda -- `handler` routes each record by its `eventSourceARN`
+# (`apps/worker/src/lambda.ts`), not a separate function per queue.
+resource "aws_lambda_event_source_mapping" "confirmation_processing" {
+  count                              = var.runtime_configured ? 1 : 0
+  event_source_arn                   = aws_sqs_queue.confirmation_processing.arn
+  function_name                      = aws_lambda_function.worker.arn
+  batch_size                         = 1
+  function_response_types            = ["ReportBatchItemFailures"]
+  maximum_batching_window_in_seconds = 0
+  scaling_config { maximum_concurrency = 2 }
+}
+
+resource "aws_lambda_event_source_mapping" "confirmation_completion" {
+  count                              = var.runtime_configured ? 1 : 0
+  event_source_arn                   = aws_sqs_queue.confirmation_completion.arn
   function_name                      = aws_lambda_function.worker.arn
   batch_size                         = 1
   function_response_types            = ["ReportBatchItemFailures"]

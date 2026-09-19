@@ -56,6 +56,7 @@ describe("AccountExportResponseSchema", () => {
           scanId: "00000000-0000-4000-8000-000000000002",
           libraryItemId: "00000000-0000-4000-8000-000000000003",
           releaseId: "00000000-0000-4000-8000-000000000004",
+          status: "completed",
           artist: "Miles Davis",
           title: "Kind of Blue",
           list: "collection",

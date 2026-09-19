@@ -132,7 +132,14 @@ resource "aws_iam_role_policy" "worker" {
         "sqs:ReceiveMessage",
         "sqs:SendMessage"
       ]
-      Resource = [aws_sqs_queue.scan.arn, aws_sqs_queue.scan_dead_letter.arn]
+      Resource = [
+        aws_sqs_queue.scan.arn,
+        aws_sqs_queue.scan_dead_letter.arn,
+        aws_sqs_queue.confirmation_processing.arn,
+        aws_sqs_queue.confirmation_processing_dead_letter.arn,
+        aws_sqs_queue.confirmation_completion.arn,
+        aws_sqs_queue.confirmation_completion_dead_letter.arn
+      ]
       }, {
       Effect   = "Allow"
       Action   = ["s3:ListBucket"]
@@ -161,6 +168,11 @@ locals {
     { name = "QUEUE_DRIVER", value = "sqs" },
     { name = "SQS_QUEUE_URL", value = aws_sqs_queue.scan.url },
     { name = "SQS_DEAD_LETTER_QUEUE_URL", value = aws_sqs_queue.scan_dead_letter.url },
+    # P4.2 Task 3 (ADR-0028): the two confirmation-pipeline hops.
+    { name = "SQS_CONFIRMATION_PROCESSING_QUEUE_URL", value = aws_sqs_queue.confirmation_processing.url },
+    { name = "SQS_CONFIRMATION_PROCESSING_DEAD_LETTER_QUEUE_URL", value = aws_sqs_queue.confirmation_processing_dead_letter.url },
+    { name = "SQS_CONFIRMATION_COMPLETION_QUEUE_URL", value = aws_sqs_queue.confirmation_completion.url },
+    { name = "SQS_CONFIRMATION_COMPLETION_DEAD_LETTER_QUEUE_URL", value = aws_sqs_queue.confirmation_completion_dead_letter.url },
     { name = "SQS_MAX_RECEIVE_COUNT", value = "5" },
     { name = "SQS_VISIBILITY_TIMEOUT_SECONDS", value = "180" },
     { name = "S3_REGION", value = var.aws_region },

@@ -168,8 +168,14 @@ describe("scan.analyze.v1", () => {
     ).toEqualTypeOf<AnalyzeScanJob>();
   });
 
-  it("is the only registered topic today", () => {
-    expect(Object.keys(EVENT_CONTRACTS)).toEqual([ANALYZE_SCAN_JOB]);
+  it("registers exactly the topics this codebase produces or consumes today", () => {
+    // P4.2 Task 3 (ADR-0028) added scan.confirmed.v1 and
+    // confirmation.completed.v1 alongside scan.analyze.v1.
+    expect(Object.keys(EVENT_CONTRACTS)).toEqual([
+      ANALYZE_SCAN_JOB,
+      "scan.confirmed.v1",
+      "confirmation.completed.v1",
+    ]);
     expect(getEventContract("scan.analyze.v2")).toBeUndefined();
   });
 });

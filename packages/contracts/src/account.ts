@@ -59,7 +59,10 @@ export const AccountExportConfirmationSchema = z
     // (ADR-0018). The decision itself is still the user's data and is
     // exported, so both the item reference and its list can be absent.
     libraryItemId: z.string().uuid().nullable(),
-    releaseId: z.string().uuid(),
+    // Null while the async confirmation pipeline (P4.2 Task 3) has not yet
+    // resolved a release for a `pending` confirmation.
+    releaseId: z.string().uuid().nullable(),
+    status: z.enum(["pending", "completed"]),
     artist: z.string().min(1),
     title: z.string().min(1),
     list: LibraryListSchema.nullable(),

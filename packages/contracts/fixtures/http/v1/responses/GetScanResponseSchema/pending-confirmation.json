@@ -1,0 +1,63 @@
+{
+  "frozenAt": "2026-09-19",
+  "origin": "P4.2 Task 3 (ADR-0028): GET /scans/{scanId} while a submitted confirmation is still pending -- the shape the scan page's poll loop keeps polling on until confirmation.status flips to \"completed\".",
+  "value": {
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "batchId": null,
+    "source": "single_upload",
+    "status": "identified",
+    "createdAt": "2026-09-10T08:14:05.000Z",
+    "submittedAt": "2026-09-10T08:15:42.000Z",
+    "completedAt": "2026-09-10T08:15:58.000Z",
+    "images": [
+      {
+        "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c05",
+        "filename": "IMG_0421.jpg",
+        "viewType": "front",
+        "mimeType": "image/jpeg"
+      }
+    ],
+    "attempt": {
+      "attemptNumber": 1,
+      "deliveryAttempt": 1,
+      "status": "succeeded",
+      "model": "gpt-5.6-sol",
+      "promptVersion": "v2",
+      "startedAt": "2026-09-10T08:15:45.000Z",
+      "completedAt": "2026-09-10T08:15:58.000Z",
+      "durationMs": 13000,
+      "usage": {
+        "inputTokens": 2210,
+        "outputTokens": 312,
+        "totalTokens": 2522
+      },
+      "error": null,
+      "observations": ["Blue-toned cover with a trumpet player in profile."],
+      "needsReviewReasons": [],
+      "outcomeReason": "high_confidence_clear_lead"
+    },
+    "candidates": [
+      {
+        "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d08",
+        "rank": 1,
+        "artist": "Miles Davis",
+        "title": "Kind of Blue",
+        "releaseYear": 1959,
+        "label": "Columbia",
+        "catalogNumber": "CS 8163",
+        "barcode": null,
+        "confidence": 0.92,
+        "evidence": ["Cover art matches the 1959 Columbia release."],
+        "warnings": []
+      }
+    ],
+    "confirmation": {
+      "selectedCandidateId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d08",
+      "release": null,
+      "libraryItem": null,
+      "status": "pending",
+      "confirmedAt": "2026-09-10T08:20:00.000Z",
+      "completedAt": null
+    }
+  }
+}

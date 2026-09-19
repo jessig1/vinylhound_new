@@ -2,6 +2,7 @@ export * from "./account.ts";
 export * from "./batch.ts";
 export * from "./catalog.ts";
 export * from "./common.ts";
+export * from "./confirmation.ts";
 export * from "./discovery.ts";
 export * from "./events.ts";
 export * from "./library.ts";

@@ -1,0 +1,13 @@
+{
+  "frozenAt": "2026-09-19",
+  "origin": "P4.2 Task 3 (ADR-0028): emitted by POST /scans/{scanId}/confirm the instant confirmScan's own transaction commits, before the async core consumer has resolved a release or written a library row.",
+  "value": {
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "selectedCandidateId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d08",
+    "release": null,
+    "libraryItem": null,
+    "status": "pending",
+    "confirmedAt": "2026-09-10T08:20:00.000Z",
+    "completedAt": null
+  }
+}

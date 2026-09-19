@@ -218,6 +218,12 @@ export const QueueWorkerConfigSchema = z
     REDIS_URL: OptionalNonEmptyStringSchema,
     SQS_QUEUE_URL: z.url().optional(),
     SQS_DEAD_LETTER_QUEUE_URL: z.url().optional(),
+    // P4.2 Task 3 (ADR-0028): the two confirmation-pipeline queue hops,
+    // parallel to SQS_QUEUE_URL above.
+    SQS_CONFIRMATION_PROCESSING_QUEUE_URL: z.url().optional(),
+    SQS_CONFIRMATION_PROCESSING_DEAD_LETTER_QUEUE_URL: z.url().optional(),
+    SQS_CONFIRMATION_COMPLETION_QUEUE_URL: z.url().optional(),
+    SQS_CONFIRMATION_COMPLETION_DEAD_LETTER_QUEUE_URL: z.url().optional(),
     SQS_MAX_RECEIVE_COUNT: z.coerce.number().int().min(1).max(20).default(5),
     SQS_VISIBILITY_TIMEOUT_SECONDS: z.coerce
       .number()
@@ -242,6 +248,18 @@ export const QueueWorkerConfigSchema = z
       .max(600_000)
       .default(120_000),
     SCAN_QUEUE_NAME: z.string().min(1).default("vinylhound-scans"),
+    // P4.2 Task 3 (ADR-0028): the two confirmation-pipeline queue names,
+    // parallel to SCAN_QUEUE_NAME above. Confirmation-receipt dispatch
+    // (hop 2 -> 3) reuses OUTBOX_POLL_INTERVAL_MS rather than a second knob;
+    // Task 5 is where dispatch-fairness/latency tuning belongs.
+    CONFIRMATION_PROCESSING_QUEUE_NAME: z
+      .string()
+      .min(1)
+      .default("vinylhound-confirmation-processing"),
+    CONFIRMATION_COMPLETION_QUEUE_NAME: z
+      .string()
+      .min(1)
+      .default("vinylhound-confirmation-completions"),
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
     ANALYSIS_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(1),
     // A scan left awaiting_upload with no activity (neither the scan nor
@@ -291,6 +309,28 @@ export const QueueWorkerConfigSchema = z
         code: "custom",
         path: ["SQS_QUEUE_URL"],
         message: "SQS_QUEUE_URL is required when QUEUE_DRIVER is sqs.",
+      });
+    }
+    if (
+      value.QUEUE_DRIVER === "sqs" &&
+      !value.SQS_CONFIRMATION_PROCESSING_QUEUE_URL
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SQS_CONFIRMATION_PROCESSING_QUEUE_URL"],
+        message:
+          "SQS_CONFIRMATION_PROCESSING_QUEUE_URL is required when QUEUE_DRIVER is sqs.",
+      });
+    }
+    if (
+      value.QUEUE_DRIVER === "sqs" &&
+      !value.SQS_CONFIRMATION_COMPLETION_QUEUE_URL
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SQS_CONFIRMATION_COMPLETION_QUEUE_URL"],
+        message:
+          "SQS_CONFIRMATION_COMPLETION_QUEUE_URL is required when QUEUE_DRIVER is sqs.",
       });
     }
   });

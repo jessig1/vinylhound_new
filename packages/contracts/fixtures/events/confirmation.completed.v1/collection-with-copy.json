@@ -1,0 +1,13 @@
+{
+  "frozenAt": "2026-09-19",
+  "origin": "P4.2 Task 3 (ADR-0028): the first version of this topic, emitted by processScanConfirmation's transaction and projected onto scan_confirmations by applyConfirmationCompletion.",
+  "value": {
+    "eventVersion": 1,
+    "scanId": "0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "idempotencyKey": "confirm-0d1a1f7e-2b7c-4b6e-9c1d-3f0a5e8b2c01",
+    "releaseId": "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e09",
+    "libraryItemId": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f10",
+    "copyId": "5e6f7a8b-9c0d-4e1f-8a3b-4c5d6e7f8a11",
+    "completedAt": "2026-09-10T08:20:04.000Z"
+  }
+}

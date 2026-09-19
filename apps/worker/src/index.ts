@@ -3,23 +3,40 @@ import {
   createOpenAIAlbumIdentifier,
 } from "@vinylhound/ai";
 import { loadQueueWorkerConfig } from "@vinylhound/config";
-import { ANALYZE_SCAN_JOB, type AnalyzeScanJob } from "@vinylhound/contracts";
+import {
+  ANALYZE_SCAN_JOB,
+  SCAN_CONFIRMED_EVENT,
+  type AnalyzeScanJob,
+  type ConfirmationCompletedEvent,
+  type ScanConfirmedEvent,
+} from "@vinylhound/contracts";
 import {
   cleanupAbandonedScans,
   createDatabase,
   databaseOptionsFromConfig,
+  dispatchNextConfirmationReceipt,
   dispatchNextOutboxMessage,
 } from "@vinylhound/database";
 import {
   createAnalyzeScanWorker,
   createBullMqScanQueue,
+  createConfirmationCompletionQueue,
+  createConfirmationCompletionWorker,
+  createConfirmationProcessingQueue,
+  createConfirmationProcessingWorker,
   createSqsAnalyzeScanWorker,
+  createSqsConfirmationCompletionQueue,
+  createSqsConfirmationCompletionWorker,
+  createSqsConfirmationProcessingQueue,
+  createSqsConfirmationProcessingWorker,
   createSqsScanQueue,
 } from "@vinylhound/queue";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 import { writeFile } from "node:fs/promises";
 
 import { createScanAnalysisHandler } from "./analysis-handler.ts";
+import { createConfirmationCompletionHandler } from "./confirmation-completion-handler.ts";
+import { createConfirmationProcessingHandler } from "./confirmation-processing-handler.ts";
 import { startQueueMetricsPublisher } from "./metrics.ts";
 import { requireOpenAiApiKey } from "./require-openai-key.ts";
 
@@ -83,6 +100,90 @@ const analysisWorker =
         },
       });
 
+// P4.2 Task 3 (ADR-0028): both the "core" consumer (confirmation processing:
+// resolves a release, writes library_items/library_copies) and the "scan"
+// projector (confirmation completion: updates scan_confirmations) run in
+// this same physical process today. The boundary this task draws is
+// transactional -- which tables each handler's own transaction touches --
+// not process isolation; a physical split is Task 7's job.
+const confirmationProcessingQueue =
+  config.QUEUE_DRIVER === "sqs"
+    ? createSqsConfirmationProcessingQueue({
+        queueUrl: config.SQS_CONFIRMATION_PROCESSING_QUEUE_URL!,
+        deadLetterQueueUrl:
+          config.SQS_CONFIRMATION_PROCESSING_DEAD_LETTER_QUEUE_URL,
+      })
+    : createConfirmationProcessingQueue({
+        redisUrl: config.REDIS_URL!,
+        queueName: config.CONFIRMATION_PROCESSING_QUEUE_NAME,
+      });
+const onScanConfirmed = createConfirmationProcessingHandler({
+  database: database.db,
+});
+const confirmationProcessingWorker =
+  config.QUEUE_DRIVER === "sqs"
+    ? createSqsConfirmationProcessingWorker({
+        queueUrl: config.SQS_CONFIRMATION_PROCESSING_QUEUE_URL!,
+        maxAttempts: config.SQS_MAX_RECEIVE_COUNT,
+        visibilityTimeoutSeconds: config.SQS_VISIBILITY_TIMEOUT_SECONDS,
+        onScanConfirmed,
+        onError: (error) => {
+          console.error("[worker] SQS confirmation-processing consumer error", {
+            errorName: error.name,
+          });
+        },
+      })
+    : createConfirmationProcessingWorker({
+        redisUrl: config.REDIS_URL!,
+        queueName: config.CONFIRMATION_PROCESSING_QUEUE_NAME,
+        onScanConfirmed,
+        onError: (error) => {
+          console.error(
+            "[worker] BullMQ confirmation-processing consumer error",
+            { errorName: error.name },
+          );
+        },
+      });
+
+const confirmationCompletionQueue =
+  config.QUEUE_DRIVER === "sqs"
+    ? createSqsConfirmationCompletionQueue({
+        queueUrl: config.SQS_CONFIRMATION_COMPLETION_QUEUE_URL!,
+        deadLetterQueueUrl:
+          config.SQS_CONFIRMATION_COMPLETION_DEAD_LETTER_QUEUE_URL,
+      })
+    : createConfirmationCompletionQueue({
+        redisUrl: config.REDIS_URL!,
+        queueName: config.CONFIRMATION_COMPLETION_QUEUE_NAME,
+      });
+const onConfirmationCompleted = createConfirmationCompletionHandler({
+  database: database.db,
+});
+const confirmationCompletionWorker =
+  config.QUEUE_DRIVER === "sqs"
+    ? createSqsConfirmationCompletionWorker({
+        queueUrl: config.SQS_CONFIRMATION_COMPLETION_QUEUE_URL!,
+        maxAttempts: config.SQS_MAX_RECEIVE_COUNT,
+        visibilityTimeoutSeconds: config.SQS_VISIBILITY_TIMEOUT_SECONDS,
+        onConfirmationCompleted,
+        onError: (error) => {
+          console.error("[worker] SQS confirmation-completion consumer error", {
+            errorName: error.name,
+          });
+        },
+      })
+    : createConfirmationCompletionWorker({
+        redisUrl: config.REDIS_URL!,
+        queueName: config.CONFIRMATION_COMPLETION_QUEUE_NAME,
+        onConfirmationCompleted,
+        onError: (error) => {
+          console.error(
+            "[worker] BullMQ confirmation-completion consumer error",
+            { errorName: error.name },
+          );
+        },
+      });
+
 let stopping = false;
 let nextPoll: NodeJS.Timeout | undefined;
 let activePoll: Promise<void> | undefined;
@@ -105,6 +206,15 @@ async function dispatchAvailableMessages() {
       [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
         await queue.enqueueAnalyzeScan(
           payload as AnalyzeScanJob,
+          idempotencyKey,
+        );
+      },
+      // P4.2 Task 3: no dispatch-loop changes needed beyond this registry
+      // entry -- `dispatchNextOutboxMessage` was already made topic-generic
+      // by Task 2.
+      [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
+        await confirmationProcessingQueue.enqueue(
+          payload as ScanConfirmedEvent,
           idempotencyKey,
         );
       },
@@ -139,6 +249,64 @@ async function poll() {
 function runPoll() {
   activePoll = poll().finally(() => {
     activePoll = undefined;
+  });
+}
+
+let nextConfirmationReceiptPoll: NodeJS.Timeout | undefined;
+let activeConfirmationReceiptPoll: Promise<void> | undefined;
+
+/**
+ * P4.2 Task 3's second dispatch loop (hop 2 -> 3): drains
+ * `confirmation_receipts` the same way `dispatchAvailableMessages` drains
+ * `outbox_messages`, but against the dedicated, single-topic dispatcher
+ * (`dispatchNextConfirmationReceipt`) rather than the generalized one. This
+ * is a naive, independent poll -- not fairly scheduled against the analysis/
+ * confirmation-processing loops above -- which is fine for now; isolating or
+ * fairly scheduling dispatch across all of them is Task 5's job.
+ */
+async function dispatchAvailableConfirmationReceipts() {
+  while (!stopping) {
+    const result = await dispatchNextConfirmationReceipt(
+      database.db,
+      async (payload, idempotencyKey) => {
+        await confirmationCompletionQueue.enqueue(
+          payload as ConfirmationCompletedEvent,
+          idempotencyKey,
+        );
+      },
+    );
+
+    if (result.status !== "published") {
+      return;
+    }
+    console.info("[worker] confirmation_receipt_published", {
+      receiptId: result.receiptId,
+      idempotencyKey: result.idempotencyKey,
+    });
+    await recordHeartbeat();
+  }
+}
+
+async function confirmationReceiptPoll() {
+  try {
+    await dispatchAvailableConfirmationReceipts();
+  } catch (error) {
+    console.error("[worker] confirmation-receipt polling failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+  } finally {
+    if (!stopping) {
+      nextConfirmationReceiptPoll = setTimeout(
+        runConfirmationReceiptPoll,
+        config.OUTBOX_POLL_INTERVAL_MS,
+      );
+    }
+  }
+}
+
+function runConfirmationReceiptPoll() {
+  activeConfirmationReceiptPoll = confirmationReceiptPoll().finally(() => {
+    activeConfirmationReceiptPoll = undefined;
   });
 }
 
@@ -212,14 +380,22 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
   if (nextCleanupPoll) {
     clearTimeout(nextCleanupPoll);
   }
+  if (nextConfirmationReceiptPoll) {
+    clearTimeout(nextConfirmationReceiptPoll);
+  }
   console.info(`[worker] received ${signal}; shutting down cleanly`);
   await Promise.allSettled([
     analysisWorker.close(),
+    confirmationProcessingWorker.close(),
+    confirmationCompletionWorker.close(),
     activePoll,
     activeCleanupPoll,
+    activeConfirmationReceiptPoll,
   ]);
   await metricsPublisher.close();
   await queue.close();
+  await confirmationProcessingQueue.close();
+  await confirmationCompletionQueue.close();
   await database.close();
   console.info("[worker] shutdown complete");
 }
@@ -240,3 +416,4 @@ console.info("[worker] started", {
 void recordHeartbeat();
 runPoll();
 runCleanupPoll();
+runConfirmationReceiptPoll();

@@ -84,7 +84,7 @@ in P4.1 Task 5 alongside its own ECR repository and IAM/Pod execution role.
 Development is unaffected: it keeps the in-process adapter under ADR-0025's
 tier scope.
 
-## Scan and core services (P4.2, ADR-0027)
+## Scan and core services (P4.2, ADR-0027, ADR-0028)
 
 Roadmap P4.2 extracts a second boundary: `scan` (scans, batches, images,
 attempts, and reviewed confirmations) and `core` (users, catalog, library,
@@ -92,18 +92,36 @@ copies, favorites, and playlists). ADR-0027 assigns each of the fifteen
 existing tables to one of the two and keeps a single physical PostgreSQL
 deployment for now — two Postgres schemas and two least-privilege
 credentials, no cross-schema `GRANT`, replacing today's single undivided
-schema and single `DATABASE_URL`. `confirmScan`'s one transaction across
-`scan_attempts`/`scan_candidates`, catalog (`albums`/`releases`/
-`catalog_references`), `library_items`/`library_copies`, and
-`scan_confirmations` (ADR-0005) and `deleteAccount`'s one transaction across
-both schemas (ADR-0014) are today's clearest examples of the coupling this
-boundary targets; eight existing foreign keys will cross the new schema line
-once it takes effect, named exactly in ADR-0027, and stay in place
-unchanged until Task 3 (supersedes ADR-0005) and Task 6 (replaces the
-`restrict` FK and makes account deletion a retryable cross-schema workflow)
-remove the need for them. No schema, role, or code changes exist yet: this
-is a decision record ahead of the extraction, the same shape ADR-0025 was
-for discovery.
+schema and single `DATABASE_URL`. `deleteAccount`'s one transaction across
+both schemas (ADR-0014) is today's remaining clearest example of the coupling
+this boundary targets; eight existing foreign keys will cross the new schema
+line once it takes effect, named exactly in ADR-0027, and stay in place
+unchanged until Task 6 (replaces the `restrict` FK and makes account deletion
+a retryable cross-schema workflow) removes the need for them. No schema,
+role, or credential changes exist yet — the tables still live in one
+undivided schema — but Task 3's transaction split (below) is done.
+
+**Task 3 (ADR-0028) replaced `confirmScan`'s single cross-boundary
+transaction with a three-hop async pipeline**, all still running inside
+today's one `apps/worker` process:
+
+1. `confirmScan` (scan-owned) records a `pending` `scan_confirmations` row
+   and enqueues a `scan.confirmed.v1` event via the generalized
+   `outbox_messages` table (Task 2).
+2. `processScanConfirmation` (core-owned) consumes that event, resolves the
+   release, writes `library_items`/`library_copies`, and atomically records a
+   `confirmation_receipts` row — an inbox dedupe guard and the
+   `confirmation.completed.v1` event to dispatch, in one row.
+3. `applyConfirmationCompletion` (scan-owned) consumes that event and
+   projects the result onto `scan_confirmations`, flipping its `status` to
+   `completed`.
+
+The scan page's existing queued/processing poll loop now also polls while a
+confirmation is `pending`, so the UI never reports a completed save before
+the projection lands. See ADR-0028 for the full design and its documented
+gaps (Task 4: replay/conflict polish and UI; Task 5: dispatch fairness;
+Task 6: the FK/account-deletion rework this pipeline still depends on;
+Task 7: the physical schema/role/process cutover).
 
 ## Deployment evolution
 

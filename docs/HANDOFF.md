@@ -101,6 +101,68 @@ integration` for `@vinylhound/database` (56/56, +1 net new), and `npm run
 build` (all workspaces). `docs/ROADMAP.md`'s P4.2 status row now reads
   "Task 2 of 7 done".
 
+- **P4.2 Task 3 (supersede ADR-0005 with a three-hop async confirmation
+  pipeline) is done (ADR-0028), committed and verified against real
+  Postgres/Redis and a real browser e2e run — not just typechecked.**
+  `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 3 entry and
+  `docs/decisions/0028-async-scan-confirmation.md` have full detail; short
+  version: `confirmScan` now writes only a `pending` `scan_confirmations`
+  row plus a `scan.confirmed.v1` outbox event (no more `library_items`/
+  `library_copies` writes in that transaction); a new
+  `processScanConfirmation` consumes it, resolves the release, writes the
+  library row, and atomically records a new `confirmation_receipts` row
+  (both an inbox-dedupe guard and the `confirmation.completed.v1` event to
+  dispatch); a new `applyConfirmationCompletion` projects that back onto
+  `scan_confirmations`, flipping `status` to `completed`. New migration
+  `019_supersede_scan_confirmation.sql`; two new event contracts
+  (`packages/contracts/src/confirmation.ts`); `ScanConfirmationSummarySchema`
+  gained optional `status`/`completedAt` and nullable `release`/
+  `libraryItem` (old frozen fixtures still round-trip unchanged, per
+  ADR-0022's own doctrine). `packages/queue/src/index.ts` was generalized
+  (`createBullMqTopicQueue`/`Worker` + SQS equivalents) since this made
+  three topics sharing one queue/worker shape; the existing
+  `scan.analyze.v1` functions are now thin, behavior-preserving wrappers.
+  `apps/worker`'s `index.ts`/`e2e-worker.ts` gained a second dispatch loop
+  and two more queue/worker pairs; `lambda.ts` gained SQS-record routing by
+  `eventSourceARN` across all three source queues. The scan page's existing
+  queued/processing poll loop now also polls while a confirmation is
+  `pending`. All three Terraform roots (`development`, `environment`,
+  `production`) gained two more SQS queue/DLQ pairs mirroring the existing
+  scan queue, `fmt`/`validate`-clean; both deploy workflows thread the new
+  queue URLs into the worker's runtime config. Two real bugs were found and
+  fixed before landing: `confirmation_receipts.library_item_id` was
+  initially `NOT NULL ON DELETE RESTRICT`, which would have blocked the
+  existing "remove a saved record" feature and account deletion once a
+  completed confirmation existed for an item — fixed to nullable `SET
+NULL`, matching `scan_confirmations`' own ADR-0018 pattern; and the
+  outbox/receipt dedupe key was initially derived from `scanId` alone,
+  which collided when ADR-0018 lets one scan be confirmed, completed,
+  removed, and reconfirmed more than once — fixed to
+  `confirmationEventId(scanId, idempotencyKey)`. Verified: `lint`,
+  `typecheck`, `format:check --end-of-line auto` on every changed file,
+  `test` (415/415), `test:integration` for `@vinylhound/database` (63/63,
+  all new pipeline tests included) and `@vinylhound/queue` (2/2, against
+  real Redis via BullMQ, proving the generalized queue factory), `npm run
+build` (all workspaces), `npm run check:contracts` (passes; reports, as
+  expected and documented, that the two new nullable-`release`/
+  `libraryItem` response fixtures are rejected by the previous deployed
+  version's stricter schema — the intended, unavoidable consequence of
+  introducing the pending shape), `terraform fmt -check`/`validate
+-backend=false` on all three roots, and — the strongest evidence — a real
+  Playwright run of `apps/web/e2e/scan-flow.e2e.ts` (`mobile-chromium`,
+  6/6 passing) showing the actual pipeline execute end to end
+  (`scan_confirmation_processed` then `confirmation_completion_applied` in
+  the worker log) from a real browser click through real BullMQ/Postgres to
+  the "Saved" success card. Reverted the regenerated
+  `apps/web/next-env.d.ts` and e2e build artifacts afterward per the
+  established convention. Explicitly deferred, per the ADR: Task 4 (deeper
+  replay/conflict spec, a dedicated "Saving…" UI, safe retry, reconciliation),
+  Task 5 (fair dispatch between the analyze and confirmation queues — this
+  task's second poll loop is naive and unscheduled), Task 6 (the
+  `confirmation_receipts`/`scan_confirmations` restrict FKs and a
+  documented account-deletion race this pipeline inherits), Task 7
+  (physical schema/role/process cutover).
+
 - **P4.1 Task 5 (service image/ECR/IAM/configuration, staging ECS delivery,
   gated production EKS definitions, bounded retries/timeouts/contract
   compatibility) is implemented and its roadmap checkbox is closed; the live
@@ -2408,33 +2470,34 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Latest task, 2026-09-19: continuous-capture research and planning only.** Read
-`docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` before changing capture behavior.
-The maintainer explicitly requested no code changes in that session. If a later
-task starts this work, begin with Phase 1's album/no-album baseline and Phase 2's
-browser-detector feasibility gate; confirm target-device priority through the
-task context. The proposal is not an implemented fix or an accepted replacement
-for the P4.2 roadmap. P4.2's next task remains as documented below.
+**Latest task, 2026-09-19: continuous-capture research and planning only** (superseded
+context, kept below). Read `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` before
+changing capture behavior; that work is unrelated to and does not block P4.2.
 
-**Current, 2026-09-19: P4.2 Task 2 is done (ADR-0004 amendment) — see
-"Current state" above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s
-Task 2 entry for full detail.** Continued directly from Task 1 in the same
+**Current, 2026-09-19: P4.2 Task 3 is done (ADR-0028, supersedes ADR-0005) —
+see "Current state" above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s
+Task 3 entry for full detail.** Continued directly from Task 2 in the same
 session; issue [#19](https://github.com/jessig1/vinylhound_new/issues/19)
 (P4.1's live staging rehearsal) is still open and unchanged. **Next session:
-P4.2 Task 3** — supersede ADR-0005 at cutover: one scan transaction stores
-the reviewed confirmation and a versioned event (using the now-generalized
-outbox from Task 2 — a new topic, a confirmation-shaped aggregate, no
-attempt number needed); a core consumer atomically records an inbox dedupe
-receipt, catalog/library changes, and a completion event; scan consumes
-completion into a projection. No cross-service dual writes. Read ADR-0027
-(the scan/core table split Task 3 must respect — `confirmScan` currently
-writes `library_items`/`library_copies` directly and must stop),
-`packages/database/src/confirmation-repository.ts`'s `confirmScan` (the
-transaction being split), and the new
-`packages/database/src/outbox-repository.ts` (the generalized dispatcher
-Task 3's confirmation event will register a second topic against, via
-`packages/contracts/src/events.ts`'s `EVENT_CONTRACTS` registry) before
-starting.
+P4.2 Task 4** — specify same-key/same-payload replay and same-key/different-payload
+conflict precisely (Task 3's `confirmScan` only carried forward ADR-0005's
+original idempotency-key/fingerprint compare, adapted for a `pending` state,
+not a full spec); duplicate delivery must not create another physical copy
+(Task 3's `processScanConfirmation` inbox-dedupe check already gives this,
+but confirm it holds under the fuller spec); show `Saving` until completion,
+then the stable library reference (Task 3 reused the existing loading
+treatment for `apps/web/src/app/scans/[scanId]/page.tsx`'s pending state —
+deliberately not a dedicated design); expose delay/failure with safe retry
+and reconciliation (nothing exists yet for a confirmation stuck pending —
+e.g. after Task 3's noted Task-6-owned account-deletion race, or any other
+hop-2/3 failure with no automatic retry surfaced to the user). Read
+ADR-0028 in full (the exact pipeline: `confirmScan` →
+`scan.confirmed.v1` → `processScanConfirmation` → `confirmation_receipts` →
+`confirmation.completed.v1` → `applyConfirmationCompletion`), and
+`packages/database/src/confirmation-repository.ts`,
+`confirmation-processing-repository.ts`, and
+`confirmation-receipt-repository.ts` (the three functions/tables Task 4
+extends, not replaces) before starting.
 
 Prior context, superseded but still relevant: P4.1 is closed out — all five
 tasks are checked in `docs/roadmap/p4.1-extract-discovery.md`. (`docs/ROADMAP.md`
@@ -5575,3 +5638,103 @@ repository.ts`'s daily-analysis quota count and `operations-repository.ts`'s
   the working tree was clean at session start (last commit `5529b93 p4.2
 task 1`), so every changed/new file listed above belongs to this session
   alone.
+
+- **2026-09-19 - Claude.** Completed P4.2 Task 3 (ADR-0028, supersedes
+  ADR-0005) at the maintainer's explicit direction ("work on p4.2 task 3"),
+  continuing directly from Task 2. Given the size (a new async pipeline
+  touching contracts, database, queue, three worker entry points, HTTP/UI,
+  and three Terraform roots), used plan mode: two parallel Explore agents
+  mapped the existing worker/queue pipeline and the confirm HTTP/UI flow,
+  then one Plan agent read every file in full and validated/corrected the
+  design (the dispatcher-sharing decision, the queue-generalization
+  decision, and a compatibility-fixture subtlety) before any code was
+  written; the maintainer approved the resulting plan before implementation
+  started.
+  **What changed**, in the order it was built: `packages/database/src/
+schema.ts`/new migration `019_supersede_scan_confirmation.sql` (a
+  `confirmation_status` enum and `status`/`completed_at` on
+  `scan_confirmations`, `release_id` now nullable, a status-consistency
+  CHECK, and a new `confirmation_receipts` table); `packages/contracts/src/
+confirmation.ts` (new `scan.confirmed.v1`/`confirmation.completed.v1`
+  event contracts, registered in `events.ts`, with fixtures) and
+  `library.ts`/`account.ts` (nullable `release`/`libraryItem`, optional
+  `status`/`completedAt`, nullable export `releaseId`); `packages/database/
+src/confirmation-repository.ts` rewritten (`confirmScan` now scan-only,
+  new `applyConfirmationCompletion`), new `confirmation-processing-
+repository.ts` (`processScanConfirmation`, the core consumer) and
+  `confirmation-receipt-repository.ts` (`dispatchNextConfirmationReceipt`,
+  deliberately not sharing code with `dispatchNextOutboxMessage` — validated
+  as the right call by the Plan agent, not just assumed); `packages/queue/
+src/index.ts` generalized into `createBullMqTopicQueue`/`Worker` (+ SQS
+  equivalents) since three topics now shared one shape, with the existing
+  `scan.analyze.v1` functions reimplemented as unchanged-signature wrappers;
+  `packages/config/src/index.ts` (four new SQS URL vars, two new BullMQ
+  queue-name vars); `apps/worker/src/index.ts`/`e2e-worker.ts` (a second
+  dispatch loop, two new queue/worker pairs, new handler factories
+  `confirmation-processing-handler.ts`/`confirmation-completion-
+handler.ts`) and `lambda.ts` (SQS-record routing by `eventSourceARN`
+  across three source queues — flagged by the Plan agent as real work this
+  task owns, not something to wave through as "add two more workers");
+  `apps/web/src/app/scans/[scanId]/page.tsx` (the existing queued/processing
+  poll loop now also polls on a pending confirmation; render guards on
+  `status`); all three Terraform roots (`development`, `environment`,
+  `production`) gained two more SQS queue/DLQ pairs mirroring the existing
+  scan queue, and both `deploy-development.yml`/`deploy-production.yml`
+  thread the new queue URLs through.
+  **Two real bugs were found and fixed during verification, not just typed
+  around:** (1) `confirmation_receipts.library_item_id` was first modeled as
+  `NOT NULL ... ON DELETE RESTRICT`; tracing what `deleteAccount` and the
+  existing "remove a saved record" (ADR-0018) code paths actually do showed
+  this would have blocked both once a completed confirmation existed for an
+  item, so it became nullable `SET NULL`, matching `scan_confirmations`'
+  own established pattern. (2) The outbox/receipt dedupe key was first
+  derived from `scanId` alone; the database integration suite caught this
+  immediately (a real `23505` unique-violation) on the pre-existing
+  "saves a scan again after its item was removed" test, because ADR-0018
+  lets one scan be confirmed, completed, removed, and reconfirmed more than
+  once — fixed to `confirmationEventId(scanId, idempotencyKey)`, exported
+  from `confirmation-repository.ts` and reused by
+  `confirmation-processing-repository.ts` and the test suite's own
+  `confirmScanAndComplete`/`dispatchConfirmationReceiptUntil` helpers.
+  **Verification, in order:** `npm run typecheck`/`lint`/`test` (415/415,
+  clean) after each structural change; `docker compose up -d`, `npm run
+db:migrate` (confirmed migration 019 applies cleanly); `npm run
+test:integration --workspace @vinylhound/database` (63/63 — new tests cover
+  hop 1 alone writing no library rows, replay/conflict while pending never
+  mistaken for ADR-0018 "removed", `processScanConfirmation` duplicate-
+  delivery safety, `applyConfirmationCompletion` idempotency, `dispatchNext-
+ConfirmationReceipt` claim/backoff/publish mirroring the existing outbox
+  dispatcher's own test shape, a full no-queue pipeline run, and a pending
+  account-export case); extended `packages/queue/src/bullmq.integration.ts`
+  with an equivalent test for the new generic factory and ran it against
+  real Redis (2/2) rather than trusting the refactor by inspection; `npm run
+build` (all workspaces, reverted the regenerated `next-env.d.ts`); `npm run
+check:contracts` (passes; reports, as expected and documented by ADR-0022's
+  own doctrine, that the two new nullable-`release`/`libraryItem` response
+  fixtures are rejected by the previous deployed version's stricter schema
+  — the correct, unavoidable, and intentional consequence of introducing the
+  pending shape, not a bug); `terraform fmt -check`/`validate -backend=false`
+  on all three Terraform roots. Finally, rather than stopping at
+  typechecking the UI/worker wiring, ran the actual
+  `apps/web/e2e/scan-flow.e2e.ts` suite against `mobile-chromium`
+  (6/6 passing, including the confirm test) — the worker log showed
+  `scan_confirmation_processed` then `confirmation_completion_applied` for
+  the confirmed scan, proving the full pipeline executes for real, end to
+  end, from a real browser click through real BullMQ/Postgres to the
+  "Saved" success card, not merely that the types line up. This also caught
+  a real isolation gap: `apps/web/e2e/env.ts`'s `buildE2eEnv` already gave
+  the analyze-scan BullMQ queue a dedicated e2e name to avoid colliding with
+  a concurrent `npm run dev:worker` on the same Redis, but the two new
+  confirmation queues did not have the same treatment; added
+  `CONFIRMATION_PROCESSING_QUEUE_NAME`/`CONFIRMATION_COMPLETION_QUEUE_NAME`
+  e2e overrides to match. Reverted e2e build artifacts and `next-env.d.ts`
+  afterward. New `docs/decisions/0028-async-scan-confirmation.md` (also
+  added the standard "superseded by" note to ADR-0005 itself, per the
+  ADR-0011/ADR-0018 precedent, without rewriting it); updated
+  `docs/decisions/README.md`, `docs/ARCHITECTURE.md`'s "Scan and core
+  services" section, `docs/ROADMAP.md` (P4.2 status row), and
+  `docs/roadmap/p4.2-scans-async-confirmation.md` (Task 3 checkbox and
+  completion note). Updated this file's "Current state" and "Resume point"
+  to match. Left uncommitted, since this session was not asked to commit;
+  the working tree was clean at session start (last commit `a6462e7 p 4.2.2`),
+  so every changed/new file belongs to this session alone.

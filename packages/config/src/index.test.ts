@@ -245,6 +245,12 @@ describe("QueueWorkerConfigSchema", () => {
       SQS_QUEUE_URL: "https://sqs.us-east-1.amazonaws.com/123/scans.fifo",
       SQS_DEAD_LETTER_QUEUE_URL:
         "https://sqs.us-east-1.amazonaws.com/123/scans-dlq.fifo",
+      // P4.2 Task 3: the two confirmation-pipeline queues, also required
+      // under QUEUE_DRIVER=sqs.
+      SQS_CONFIRMATION_PROCESSING_QUEUE_URL:
+        "https://sqs.us-east-1.amazonaws.com/123/confirmation-processing.fifo",
+      SQS_CONFIRMATION_COMPLETION_QUEUE_URL:
+        "https://sqs.us-east-1.amazonaws.com/123/confirmation-completion.fifo",
     });
 
     expect(config.REDIS_URL).toBeUndefined();

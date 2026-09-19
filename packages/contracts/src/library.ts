@@ -87,7 +87,7 @@ export const CopyDetailsInputSchema = z
  * directly from `/discover` with no scan involved. Keeping one shape means a
  * saved record carries identical fields whichever door it came through.
  */
-const ReviewedReleaseShape = {
+export const ReviewedReleaseShape = {
   artist: z.string().trim().min(1).max(255),
   title: z.string().trim().min(1).max(255),
   releaseYear: z.number().int().min(1900).max(2200).nullable(),
@@ -220,10 +220,18 @@ export const DeleteLibraryCopyResponseSchema = z
   .object({ id: z.string().uuid() })
   .strict();
 
+/**
+ * P4.2 Task 3: a confirmation is recorded before the core consumer has
+ * resolved a release or written a library row, so `release`/`libraryItem`
+ * are null until `status` (added here) is `"completed"`. Both new fields are
+ * plain optional (no default), not just nullable, so a response fixture
+ * frozen before this change -- which has neither key at all -- still
+ * round-trips unchanged (ADR-0022).
+ */
 export const ScanConfirmationSummarySchema = z
   .object({
     selectedCandidateId: z.string().uuid().nullable(),
-    release: ConfirmedReleaseSchema,
+    release: ConfirmedReleaseSchema.nullable(),
     libraryItem: z
       .object({
         id: z.string().uuid(),
@@ -231,8 +239,11 @@ export const ScanConfirmationSummarySchema = z
         notes: z.string().nullable(),
         copy: LibraryCopySchema.nullable(),
       })
-      .strict(),
+      .strict()
+      .nullable(),
+    status: z.enum(["pending", "completed"]).optional(),
     confirmedAt: z.string().datetime(),
+    completedAt: z.string().datetime().nullable().optional(),
   })
   .strict();
 

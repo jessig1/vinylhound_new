@@ -89,11 +89,17 @@ export default function ScanResultPage() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogSearched, setCatalogSearched] = useState(false);
   const [pollVersion, setPollVersion] = useState(0);
-  const confirmedAt = scan?.confirmation?.confirmedAt;
+  // P4.2 Task 3: a pending confirmation also has confirmedAt set (the
+  // moment the user submitted it), so success-focus must wait for the
+  // completion projection, not just a confirmation existing.
+  const completedAt =
+    scan?.confirmation?.status === "completed"
+      ? scan.confirmation.confirmedAt
+      : undefined;
 
   useEffect(() => {
-    if (confirmedAt) successHeading.current?.focus();
-  }, [confirmedAt]);
+    if (completedAt) successHeading.current?.focus();
+  }, [completedAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,7 +138,13 @@ export default function ScanResultPage() {
           setSelectedCandidateId(startManually ? null : (first?.id ?? null));
           draftInitialized.current = true;
         }
-        if (nextScan.status === "queued" || nextScan.status === "processing") {
+        if (
+          nextScan.status === "queued" ||
+          nextScan.status === "processing" ||
+          // P4.2 Task 3: keep polling until the completion projection lands
+          // -- the UI must never report a completed save before it arrives.
+          nextScan.confirmation?.status === "pending"
+        ) {
           timer = setTimeout(poll, 2_000);
         }
       } catch (caught) {
@@ -300,9 +312,15 @@ export default function ScanResultPage() {
           selectedCandidateId: saved.selectedCandidateId,
           release: saved.release,
           libraryItem: saved.libraryItem,
+          status: saved.status,
           confirmedAt: saved.confirmedAt,
+          completedAt: saved.completedAt,
         },
       });
+      // P4.2 Task 3: the response no longer carries the finished library
+      // reference synchronously -- restart the poll loop (already used by
+      // `retry()`) so it keeps checking until the projection completes.
+      setPollVersion((current) => current + 1);
     } catch (caught) {
       setSubmitError(
         caught instanceof Error
@@ -388,8 +406,27 @@ export default function ScanResultPage() {
   }
   if (!scan) return null;
 
-  if (scan.confirmation) {
+  if (scan.confirmation?.status === "pending") {
+    // P4.2 Task 3: the reviewed confirmation was recorded, but the async
+    // pipeline hasn't projected a completed library reference yet -- the
+    // poll loop above keeps checking. Deliberately reuses the existing
+    // loading treatment rather than a dedicated "Saving…" design; that
+    // polish is Task 4's job.
+    return (
+      <LoadingState
+        title="Saving your confirmation…"
+        message="This finishes in the background. You can leave this page and return from the same link."
+        error={actionError ?? loadingError}
+        batchId={scan.batchId}
+      />
+    );
+  }
+
+  if (scan.confirmation?.status === "completed") {
     const confirmation = scan.confirmation;
+    if (!confirmation.release || !confirmation.libraryItem) {
+      throw new Error("A completed confirmation is missing its release.");
+    }
     return (
       <main className="content-page scan-result-page">
         <section className="result-success-card">

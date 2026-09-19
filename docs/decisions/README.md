@@ -29,3 +29,4 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0025: Extract discovery as the first service boundary](0025-extract-discovery-first.md)
 - [ADR-0026: Discovery keeps a single replica; the coordination substrate stays in-process](0026-discovery-coordination-substrate.md)
 - [ADR-0027: Scan and core own separate PostgreSQL schemas in one deployment](0027-scan-core-schema-ownership.md)
+- [ADR-0028: Scan confirmation is a three-hop async pipeline, not one transaction](0028-async-scan-confirmation.md)

@@ -1,3 +1,9 @@
+import {
+  CONFIRMATION_COMPLETED_EVENT,
+  CONFIRMATION_COMPLETED_EVENT_CONTRACT,
+  SCAN_CONFIRMED_EVENT,
+  SCAN_CONFIRMED_EVENT_CONTRACT,
+} from "./confirmation.ts";
 import { ANALYZE_SCAN_JOB, ANALYZE_SCAN_JOB_CONTRACT } from "./scan.ts";
 import type { EventContract } from "./versioning.ts";
 
@@ -13,6 +19,8 @@ import type { EventContract } from "./versioning.ts";
  */
 export const EVENT_CONTRACTS = {
   [ANALYZE_SCAN_JOB]: ANALYZE_SCAN_JOB_CONTRACT,
+  [SCAN_CONFIRMED_EVENT]: SCAN_CONFIRMED_EVENT_CONTRACT,
+  [CONFIRMATION_COMPLETED_EVENT]: CONFIRMATION_COMPLETED_EVENT_CONTRACT,
 } as const satisfies Record<string, EventContract>;
 
 export type EventTopic = keyof typeof EVENT_CONTRACTS;

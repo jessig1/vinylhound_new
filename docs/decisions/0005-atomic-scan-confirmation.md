@@ -1,7 +1,19 @@
 # ADR-0005: Atomic scan confirmation and list placement
 
-- Status: accepted
+- Status: accepted; superseded by
+  [ADR-0028](0028-async-scan-confirmation.md) (2026-09-19)
 - Date: 2026-08-26
+
+> **Superseded.** The "one PostgreSQL transaction" design below — a single
+> transaction spanning `scan_confirmations`, `library_items`, and
+> `library_copies` — was replaced by ADR-0028 (P4.2 Task 3): `confirmScan`
+> now records only the reviewed confirmation and a versioned event in its own
+> transaction; a separate "core" consumer resolves the release and writes the
+> library rows; a third transaction projects completion back onto
+> `scan_confirmations`. The product-level guarantees this ADR states (no
+> stranded list update, converts wishlist to owned, never downgrades, and the
+> narrower-than-general-library-management scope) still hold — ADR-0028
+> changes how they are delivered, not what they promise.
 
 ## Context
 
