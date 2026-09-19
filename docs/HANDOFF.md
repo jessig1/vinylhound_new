@@ -15,6 +15,55 @@ the log.
 
 ## Current state — verified 2026-09-18
 
+- **P4.1 Task 5 (service image/ECR/IAM/configuration, staging ECS delivery,
+  gated production EKS definitions, bounded retries/timeouts/contract
+  compatibility) is implemented and its roadmap checkbox is closed; the live
+  rehearsal is tracked separately in
+  [issue #19](https://github.com/jessig1/vinylhound_new/issues/19), and
+  [issue #20](https://github.com/jessig1/vinylhound_new/issues/20) tracks the
+  other outstanding manual task found while closing this out (P3.4 Task 4's
+  usability test).** Full detail is in `docs/ROADMAP.md`'s P4.1 Task 5 entry
+  — this is the summary. `Dockerfile.discovery` builds and, verified locally by
+  actually running the container, serves `GET /healthz`. Staging gets a real
+  `discovery` ECS task/service (ADR-0026's binding single-replica,
+  stop-then-start rollout: `deployment_minimum_healthy_percent = 0`, no
+  autoscaling target), reachable from web only over ECS Service Connect
+  (`discovery:4001`, an HTTP Cloud Map namespace so no added Route 53 cost).
+  Production gets a matching, gated `infra/kubernetes/production/discovery.yaml`
+  (`Recreate`, `replicas: 1`, no HPA/PDB, plain `ClusterIP`), wired into
+  `deploy-production.yml`'s existing digest-resolution/configmap/secret
+  pattern. A `discovery_shared_secret` is Terraform-generated independently
+  in both staging and production (internal-only, so no external value to
+  supply). `packages/catalog/src/remote-client-support.ts` gained
+  `callWithRetry` (3 attempts, ~300ms total backoff, only for
+  already-`retryable` categories) used by both remote clients, which also
+  switched from a strict `.safeParse` to the P3.3 Task 4 tolerant
+  `parseResponse` reader — a real gap Task 5 introduces, since web and
+  discovery are now two independently deployed images for the first time
+  and can genuinely skew versions in a way an in-process adapter never
+  could. +12 net new tests for the retry/non-retry paths. **A real,
+  previously undetected, critical bug was found and fixed while verifying
+  the discovery image actually boots, not assumed from the code**:
+  `Dockerfile.worker` and `Dockerfile.worker-lambda`'s currently pinned Node
+  base image digests both resolve to Node 22.23.2, which rejects the
+  constructor-parameter-property syntax in `packages/ai`'s and
+  `packages/catalog`'s provider-error classes under its default strip-only
+  native TypeScript loading — reproduced directly against both pinned
+  digests, confirmed `--experimental-transform-types` fixes it, and verified
+  by rebuilding and running both worker images (not just reasoning about it).
+  This means the worker's current production Docker image would crash on
+  boot if built and deployed from `main` as it stood before this fix; it
+  went undetected only because staging/production have not been redeployed
+  since whatever earlier commit bumped the pinned Node digest. Verified
+  locally (no AWS access from this session): `lint`, `typecheck`, `test`
+  (403/403), `format:check`, `npm run build` (all workspaces), `terraform
+fmt`/`validate` on all three touched roots, and `kubeconform -strict`
+  against `infra/kubernetes/production` (13/13 valid). **Not done and not
+  attempted without confirmation**: actually running `deploy-staging.yml`
+  against real AWS, which also needs the maintainer to add
+  `ECR_DISCOVERY_REPOSITORY` as a new staging/production GitHub environment
+  variable first (`docs/PUBLIC_REPOSITORY.md`, updated). See "Resume point."
+
 - **The provider-cache known gap ADR-0026 recorded (no count bound, only TTL
   expiry) is closed, uncommitted in the working tree for maintainer review.**
   New shared `packages/catalog/src/bounded-cache.ts`
@@ -2271,44 +2320,45 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-18: P4.1 Task 4 is complete and committed (docs-only) —
-Tasks 1-4 of P4.1 are done, only Task 5 remains.** See "Current state" above
-for the full account. In short: new ADR-0026 decides discovery keeps its
-rate limiter/cache in-process, pinned to exactly one replica per environment
-(staging, production), with a non-overlapping rollout strategy required at
-Task 5's cutover — not a PostgreSQL-backed lease, which was rejected as a
-bigger reversal than it looks (a real database dependency for
-`apps/discovery`, still database-free per Task 3, with no measured traffic
-to justify it). Confirmed the single-replica tradeoff against the real
-deployment configs: every other production workload already runs multiple
-replicas (`web.yaml`: 2-6 with an HPA and PDB; `worker.yaml`: HPA to 5;
-staging autoscales both), and neither ECS's nor Kubernetes' default rolling
-deploy avoids briefly overlapping two discovery processes even at replica
-count 1 — so the ADR states the non-overlapping rollout requirement
-explicitly (ECS `deployment_minimum_healthy_percent = 0`, or Kubernetes
-`Recreate`) rather than leaving Task 5 to copy the web/worker default. A
-revisit trigger is recorded for once real discovery load exists. No
-application, contract, or test file changed.
+**Current, 2026-09-18: P4.1 is closed out — all five tasks are checked in
+`docs/ROADMAP.md`.** See "Current state" above and `docs/ROADMAP.md`'s P4.1
+Task 5 entry for full implementation detail. Everything code/config-side is
+done and locally verified: the Dockerfile, the staging ECS task/service
+(ADR-0026's single-replica, stop-then-start rollout, Service Connect
+networking), the gated production Kubernetes Deployment/Service, the
+Terraform-generated shared secret in both roots, both CI/CD workflows,
+bounded retries and tolerant response parsing in both remote clients, and a
+real pre-existing worker/Lambda boot bug found and fixed along the way
+(`--experimental-transform-types` needed in `Dockerfile.worker`/
+`Dockerfile.worker-lambda`).
 
-**Next is P4.1 Task 5**: add service image/ECR/IAM/configuration and staging
-ECS delivery; prepare gated production EKS definitions retaining
-development's in-process port; test bounded retries, timeouts, failures, and
-contract compatibility. This is the substantial remaining piece of P4.1 —
-unlike Tasks 3-4, it is real implementation work, not verification or a
-decision record. It must implement ADR-0026's binding requirement: discovery
-pinned to exactly one replica in both `infra/terraform/environment/ecs.tf`
-(a new `aws_ecs_service`/task definition, `deployment_minimum_healthy_percent
-= 0`/`maximum_percent = 100`, no `aws_appautoscaling_target`) and
-`infra/kubernetes/production/` (a new `discovery.yaml`, `strategy: { type:
-Recreate }`, no HPA, no PodDisruptionBudget), plus a fourth ECR repository
-and its own Pod Identity/IAM role (`infra/terraform/bootstrap/main.tf`
-currently provisions exactly three: `web`, `worker`, `worker-lambda`) and
-wiring `DISCOVERY_SERVICE_URL`/`DISCOVERY_SERVICE_SHARED_SECRET` into
-`apps/web`'s staging/production runtime config so it actually calls the
-extracted service instead of the in-process adapter there. Read
+**Task 5's checkbox is closed as implementation-complete, deliberately ahead
+of its own live rehearsal**, which is now tracked in
+[issue #19](https://github.com/jessig1/vinylhound_new/issues/19) rather than
+held against the roadmap: adding `ECR_DISCOVERY_REPOSITORY` as a staging/
+production GitHub environment variable, triggering `deploy-staging.yml`,
+demonstrating a discovery-only deploy/rollback, exercising bounded
+cache/rate coordination under concurrent callers, and recording the
+proceed/revise/rollback decision P4.1's own exit paragraph asks for before
+P4.2 formally starts. None of that was attempted from this session: it
+spends real AWS money and needs GitHub environment admin access neither
+available nor appropriate for an agent to use unilaterally. Production's
+discovery definitions are prepared but intentionally untested; production
+activation stays gated on issues #8-#10, unchanged by this task.
+[Issue #20](https://github.com/jessig1/vinylhound_new/issues/20) tracks the
+other outstanding manual, non-blocking task found while closing this out:
+P3.4 Task 4's five-participant usability test, which had no tracking issue
+before now.
+
+**Next session**: either pick up issue #19's rehearsal (the honest
+completion of P4.1), or — if the maintainer decides to proceed without
+it — start P4.2 Task 1 (define scan/core ownership boundaries) with that
+decision explicitly recorded rather than silently skipped. Read
 `docs/ROADMAP.md`'s P4.1 section, ADR-0025, and ADR-0026 in full before
-starting. Nothing in Phase 2's still-open issues (#8-#10) blocks P4.1
-itself, only later EKS/production-rehearsal-adjacent work.
+touching any of Task 5's infrastructure further — the single-replica/
+Service-Connect/Recreate choices are load-bearing, not incidental, and
+reverting any of them without re-reading the ADRs' reasoning would reopen a
+decision that is already made.
 
 Prior context, superseded but still relevant: P3.5 Task 5 (commit `9ad4c14`)
 added `scripts/affected/` (`npm run test:affected` / `npm run build:affected`)
@@ -5126,3 +5176,104 @@ auto` on every changed/new file. Reverted the generated
   is a strict narrowing of unbounded growth to a large explicit ceiling, not
   a semantic change. Left uncommitted for the maintainer's review per this
   repository's convention.
+
+- **2026-09-18 - Claude.** Implemented P4.1 Task 5: service image/ECR/IAM/
+  configuration, staging ECS delivery, gated production EKS definitions, and
+  bounded retries/timeouts/contract compatibility for the discovery service
+  extracted in earlier P4.1 tasks. Full detail is in this file's "Current
+  state" and `docs/ROADMAP.md`'s P4.1 Task 5 entry; this log entry is the
+  short version. `Dockerfile.discovery` added, following `Dockerfile.worker`'s
+  two-stage build/runtime pattern; `tsconfig.discovery-runtime.json` added to
+  emit JS siblings for `packages/catalog`/`config`/`contracts`/`service-auth`.
+  `infra/terraform/bootstrap/main.tf` gained a fourth ECR repository.
+  `infra/terraform/environment/{ecs,network,storage,variables,outputs}.tf`
+  gained a `discovery` task definition/service/security-group/execution-role/
+  shared-secret implementing ADR-0026's binding requirement exactly: fixed
+  `desired_count = 1`, `deployment_minimum_healthy_percent = 0`/
+  `maximum_percent = 100`, no autoscaling target, reachable from web only
+  over a new ECS Service Connect HTTP namespace (no Route 53 cost) at
+  `discovery:4001`. `infra/terraform/production/{foundation,variables,
+outputs}.tf` gained the matching shared secret and image variable;
+  `infra/kubernetes/production/discovery.yaml` (new) and `namespace.yaml`
+  (new ServiceAccount) implement the Kubernetes side (`Recreate`,
+  `replicas: 1`, no HPA/PDB, plain `ClusterIP`), wired into
+  `deploy-production.yml`'s existing digest-resolution/configmap/secret
+  pattern; `deploy-staging.yml` and `platform.yml`'s container matrix treat
+  discovery as a fourth service alongside web/worker/worker-lambda.
+  `docs/PUBLIC_REPOSITORY.md` documents the new required
+  `ECR_DISCOVERY_REPOSITORY` GitHub environment variable.
+  `packages/catalog/src/remote-client-support.ts` gained `callWithRetry`
+  (bounded 3 attempts, ~300ms total linear backoff, retried only for
+  already-`retryable` categories); both `remote-catalog-client.ts` and
+  `remote-discovery-client.ts` use it around their existing per-attempt
+  `AbortSignal.timeout`, and both switched from a strict `.safeParse` to the
+  P3.3 Task 4 tolerant `parseResponse` reader for discovery's responses — a
+  real, newly-relevant gap, since Task 5 makes web and discovery two
+  independently built and deployed images for the first time, where they
+  previously always deployed as one process. +12 net new tests
+  (bounded-retry-then-succeed, give-up-after-the-bound, and
+  never-retry-a-non-retryable-failure, for both clients).
+  Found and fixed a real, previously undetected, critical bug while
+  verifying the discovery image actually boots rather than assuming it from
+  the code: `Dockerfile.worker` and `Dockerfile.worker-lambda`'s currently
+  pinned Node base image digests (`node:22-bookworm-slim` and
+  `public.ecr.aws/lambda/nodejs:22`, both already pinned in this repository)
+  resolve to Node 22.23.2, confirmed directly by pulling and running each
+  digest, which rejects TypeScript constructor parameter properties — used
+  by `packages/ai/src/album-identifier.ts`'s `ProviderError` and
+  `packages/catalog`'s `CatalogProviderError`/`DiscoveryProviderError` — in
+  its default strip-only native TypeScript loading. This bites because
+  `apps/worker`'s bare `@vinylhound/ai` import resolves through that
+  package's own `"exports": "./src/index.ts"` straight to raw TypeScript
+  source, not to the `tsc --project tsconfig.worker-runtime.json` JavaScript
+  siblings the Dockerfile already emits — those never intercept this
+  resolution path, since Node's module resolution follows the exports map
+  literally rather than preferring a co-located `.js` file. Confirmed
+  `--experimental-transform-types` fixes it in both, applied as a CMD flag
+  in `Dockerfile.worker`/`Dockerfile.discovery` and as `NODE_OPTIONS` in
+  `Dockerfile.worker-lambda` (whose CMD is a bare Lambda handler name, not a
+  `node <file>` invocation this Dockerfile controls directly). Verified by
+  actually rebuilding and running both worker images (the worker reached its
+  outbox-poll loop against a fake SQS queue instead of crashing at import
+  time) and the discovery image (served `GET /healthz`), not by reasoning
+  about the fix alone. This means the worker's production Docker image, if
+  built and deployed from `main` as it stood before this fix, would have
+  crashed on boot; it went undetected only because staging/production have
+  not been redeployed since whatever earlier commit bumped the pinned Node
+  digest past whatever version last tolerated this.
+  Verified locally (no AWS access from this session): `lint`, `typecheck`
+  (`tsc --project tsconfig.json --noEmit`), `test` (403/403, +12 net new),
+  `format:check` (`--end-of-line auto` on every changed file, this
+  repository's known CRLF-checkout artifact), `npm run build` (all
+  workspaces including `@vinylhound/discovery`), `terraform fmt -check`/
+  `validate` on all three touched roots (`bootstrap`, `environment`,
+  `production`, each `init -backend=false`), and `kubeconform -strict`
+  against `infra/kubernetes/production` (13/13 resources valid across 5
+  files, matching `platform.yml`'s own CI check). Reverted the generated
+  `apps/web/next-env.d.ts` artifact after the build, per the established
+  convention. Did not trigger `deploy-staging.yml` or any other AWS-costing
+  workflow: that requires the maintainer to first add
+  `ECR_DISCOVERY_REPOSITORY` as a GitHub environment variable and to
+  authorize spending real AWS money against shared staging infrastructure,
+  neither of which this session can or should decide unilaterally. Recorded
+  exactly what remains in this file's "Resume point" above (superseded by
+  the follow-up entry below, which closes the roadmap checkbox and opens
+  tracking issues for the remaining manual work).
+
+- **2026-09-19 - Claude.** At the maintainer's direction, closed out P4.1
+  Task 5's roadmap checkbox and tagged/pushed the P4.1 milestone rather than
+  holding the checkbox open until the live rehearsal above completes. Opened
+  two GitHub issues so the deferred manual work stays tracked instead of
+  silently dropped: [#19](https://github.com/jessig1/vinylhound_new/issues/19)
+  for Task 5's own staging deploy/rollback rehearsal and the proceed/revise/
+  rollback decision P4.1's exit paragraph asks for before P4.2, and
+  [#20](https://github.com/jessig1/vinylhound_new/issues/20) for P3.4 Task
+  4's five-participant usability test, found to have no tracking issue while
+  surveying outstanding manual work (Phase 2's own manual gates — the fork PR
+  rehearsal, remaining Lambda/Fargate demos, load/failure drills, and the
+  full production rehearsal — already have issues #12/#13/#14/#15 and did not
+  need new ones). Updated `docs/ROADMAP.md`'s P4.1 Task 5 entry (checkbox now
+  `[x]`, both stale "not started"/"stays open" notes corrected to point at
+  #19) and this file's "Current state" and "Resume point" to match. Committed
+  everything from this session as `p4.1.5`, tagged `phase-4-p4.1` (all five
+  P4.1 tasks now checked), and pushed both to `origin/main`.

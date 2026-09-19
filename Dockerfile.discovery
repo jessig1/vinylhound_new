@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1.7
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /workspace
+
+COPY package.json package-lock.json ./
+COPY apps/discovery/package.json apps/discovery/package.json
+COPY packages/catalog/package.json packages/catalog/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/service-auth/package.json packages/service-auth/package.json
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY . .
+# Workspace packages export TypeScript source for local tooling. Emit their
+# JavaScript siblings so the compiled service's `.js` specifiers resolve in
+# the production image without shipping a TypeScript loader (mirrors
+# Dockerfile.worker's identical two-step build for the same reason).
+RUN npm run build --workspace @vinylhound/discovery \
+  && node node_modules/typescript/bin/tsc --project tsconfig.discovery-runtime.json \
+  && npm prune --omit=dev
+
+FROM ${NODE_IMAGE} AS runtime
+WORKDIR /workspace
+ENV NODE_ENV=production
+
+# The pinned base image predates Debian's libpcre2-8-0 security backport
+# (10.42-1+deb12u1, already in bookworm-security); pull it in explicitly
+# instead of waiting on a new base image digest.
+RUN apt-get update \
+    && apt-get upgrade -y libpcre2-8-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The runtime needs Node, not npm/corepack. Removing package-manager tooling
+# eliminates its transitive vulnerability surface from the shipped image.
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm \
+    /usr/local/bin/npx \
+    /usr/local/bin/corepack
+
+COPY --from=build --chown=node:node /workspace/package.json ./package.json
+COPY --from=build --chown=node:node /workspace/node_modules ./node_modules
+COPY --from=build --chown=node:node /workspace/packages ./packages
+COPY --from=build --chown=node:node /workspace/apps/discovery/package.json ./apps/discovery/package.json
+COPY --from=build --chown=node:node /workspace/apps/discovery/dist ./apps/discovery/dist
+
+USER 1000:1000
+EXPOSE 4001
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:4001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+
+# --experimental-transform-types: required because @vinylhound/catalog's
+# provider-error classes use constructor parameter properties, which Node's
+# default strip-only TypeScript support rejects when it resolves the bare
+# "@vinylhound/catalog"/"@vinylhound/service-auth" specifiers straight
+# through each package's `"exports": "./src/index.ts"` to raw source. See
+# the identical, more detailed note in Dockerfile.worker, where this was
+# first found and fixed.
+CMD ["node", "--experimental-transform-types", "apps/discovery/dist/index.js"]

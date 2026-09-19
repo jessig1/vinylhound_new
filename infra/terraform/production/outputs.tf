@@ -32,10 +32,11 @@ output "database_ca_base64" {
 }
 output "runtime_secret_arns" {
   value = {
-    database_url          = aws_secretsmanager_secret.database_url.arn
-    clerk_secret_key      = aws_secretsmanager_secret.clerk_secret_key.arn
-    clerk_publishable_key = aws_secretsmanager_secret.clerk_publishable_key.arn
-    openai_api_key        = aws_secretsmanager_secret.openai_api_key.arn
+    database_url            = aws_secretsmanager_secret.database_url.arn
+    clerk_secret_key        = aws_secretsmanager_secret.clerk_secret_key.arn
+    clerk_publishable_key   = aws_secretsmanager_secret.clerk_publishable_key.arn
+    openai_api_key          = aws_secretsmanager_secret.openai_api_key.arn
+    discovery_shared_secret = aws_secretsmanager_secret.discovery_shared_secret.arn
   }
 }
 output "kubernetes_runtime" {

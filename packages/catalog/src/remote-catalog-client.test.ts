@@ -150,6 +150,79 @@ describe("createRemoteCatalogClient", () => {
     });
   });
 
+  it("retries a retryable failure and succeeds within the bound", async () => {
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls < 3) {
+        return jsonResponse(
+          {
+            error: {
+              code: "catalog_provider_unavailable",
+              message: "Temporarily unreachable.",
+              requestId: "22222222-2222-4222-8222-222222222222",
+            },
+          },
+          502,
+        );
+      }
+      return jsonResponse({ results: [candidate] });
+    });
+    const client = createRemoteCatalogClient({
+      baseUrl: BASE_URL,
+      sharedSecret: SECRET,
+      fetch: request as typeof fetch,
+    });
+
+    const results = await client.searchReleases({
+      artist: "a",
+      title: "b",
+      userId,
+    });
+
+    expect(results).toEqual([candidate]);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up after the retry bound on a persistent retryable failure", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 500 }));
+    const client = createRemoteCatalogClient({
+      baseUrl: BASE_URL,
+      sharedSecret: SECRET,
+      fetch: request as typeof fetch,
+    });
+
+    await expect(
+      client.searchReleases({ artist: "a", title: "b", userId }),
+    ).rejects.toMatchObject({ category: "provider_unavailable" });
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("never retries a non-retryable failure", async () => {
+    const request = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: {
+            code: "catalog_not_found",
+            message: "No such release.",
+            requestId: "33333333-3333-4333-8333-333333333333",
+          },
+        },
+        404,
+      ),
+    );
+    const client = createRemoteCatalogClient({
+      baseUrl: BASE_URL,
+      sharedSecret: SECRET,
+      fetch: request as typeof fetch,
+    });
+
+    await expect(
+      client.getReleaseDetails({ releaseId, userId }),
+    ).rejects.toMatchObject({ category: "not_found" });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a response that does not match the expected schema", async () => {
     const request = vi.fn(async () => jsonResponse({ not: "expected" }));
     const client = createRemoteCatalogClient({

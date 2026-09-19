@@ -57,4 +57,20 @@ STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["node", "-e", "const{mtimeMs}=require('node:fs').statSync(process.env.WORKER_HEALTH_FILE);if(Date.now()-mtimeMs>120000)process.exit(1)"]
 
-CMD ["node", "apps/worker/dist/index.js"]
+
+# --experimental-transform-types: apps/worker/dist's compiled output imports
+# workspace packages (@vinylhound/ai, @vinylhound/queue, ...) by their bare
+# specifier, which Node's own module resolution follows through each
+# package's `"exports": "./src/index.ts"` straight to TypeScript source —
+# the "emit JavaScript siblings" step above never intercepts this, since
+# Node resolves the exports map literally rather than preferring a co-located
+# .js file. Node 22's native TypeScript support loads plain, "erasable" TS
+# without a flag, but several of those packages' error classes use
+# constructor parameter properties (e.g. `packages/ai/src/
+# album-identifier.ts`'s `ProviderError`), which is non-erasable and throws
+# `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` in the default strip-only mode —
+# reproduced directly against this image's own pinned Node version while
+# building apps/discovery for P4.1 Task 5, which hits the identical
+# cross-package .ts resolution path. This flag switches Node to full
+# transform mode so that syntax loads correctly instead.
+CMD ["node", "--experimental-transform-types", "apps/worker/dist/index.js"]

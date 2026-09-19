@@ -212,6 +212,24 @@ resource "aws_secretsmanager_secret" "openai_api_key" {
   recovery_window_in_days = 30
 }
 
+# Signs/verifies service-identity tokens between web and the discovery
+# service (ADR-0025/ADR-0026, P4.1 Task 5) — see the identical staging
+# resource in infra/terraform/environment/storage.tf for the full reasoning.
+# Production keeps its own independently generated value; the two
+# environments never need to share this secret.
+resource "random_password" "discovery_shared_secret" {
+  length  = 48
+  special = false
+}
+resource "aws_secretsmanager_secret" "discovery_shared_secret" {
+  name                    = "${local.name}/discovery-shared-secret"
+  recovery_window_in_days = 30
+}
+resource "aws_secretsmanager_secret_version" "discovery_shared_secret" {
+  secret_id     = aws_secretsmanager_secret.discovery_shared_secret.id
+  secret_string = random_password.discovery_shared_secret.result
+}
+
 resource "aws_sqs_queue" "scan_dead_letter" {
   name                      = "${local.name}-scans-dlq.fifo"
   fifo_queue                = true

@@ -36,13 +36,14 @@ jobs:
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
           ECR_WEB_REPOSITORY: ${{ vars.ECR_WEB_REPOSITORY }}
           ECR_WORKER_REPOSITORY: ${{ vars.ECR_WORKER_REPOSITORY }}
+          ECR_DISCOVERY_REPOSITORY: ${{ vars.ECR_DISCOVERY_REPOSITORY }}
           VPC_CIDR: ${{ vars.VPC_CIDR }}
           DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
           APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
           BUDGET_ALERT_EMAIL: ${{ vars.BUDGET_ALERT_EMAIL }}
         run: |
           missing=()
-          for name in AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET ECR_WEB_REPOSITORY ECR_WORKER_REPOSITORY VPC_CIDR DOMAIN_NAME APP_HOSTNAME BUDGET_ALERT_EMAIL; do
+          for name in AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET ECR_WEB_REPOSITORY ECR_WORKER_REPOSITORY ECR_DISCOVERY_REPOSITORY VPC_CIDR DOMAIN_NAME APP_HOSTNAME BUDGET_ALERT_EMAIL; do
             [[ -n "${!name}" ]] || missing+=("$name")
           done
           if (( ${#missing[@]} > 0 )); then
@@ -101,6 +102,20 @@ jobs:
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Resolve existing discovery image
+        id: existing-discovery
+        if: steps.configuration.outputs.configured == 'true'
+        env:
+          REPOSITORY_URL: ${{ vars.ECR_DISCOVERY_REPOSITORY }}
+        run: |
+          repository="${REPOSITORY_URL#*/}"
+          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and push web
         id: web
         if: steps.configuration.outputs.configured == 'true' && steps.existing-web.outputs.exists != 'true'
@@ -129,6 +144,20 @@ jobs:
           tags: ${{ vars.ECR_WORKER_REPOSITORY }}:${{ github.sha }}-staging
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
+      - name: Build and push discovery
+        id: discovery
+        if: steps.configuration.outputs.configured == 'true' && steps.existing-discovery.outputs.exists != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.discovery
+          platforms: linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ vars.ECR_DISCOVERY_REPOSITORY }}:${{ github.sha }}-staging
+          cache-from: type=gha,scope=discovery
+          cache-to: type=gha,mode=max,scope=discovery
       - name: Initialize environment state
         id: state
         if: steps.configuration.outputs.configured == 'true'
@@ -153,6 +182,7 @@ jobs:
           TF_VAR_deploy_services: "false"
           TF_VAR_web_image: ${{ vars.ECR_WEB_REPOSITORY }}@${{ steps.web.outputs.digest || steps.existing-web.outputs.digest }}
           TF_VAR_worker_image: ${{ vars.ECR_WORKER_REPOSITORY }}@${{ steps.worker.outputs.digest || steps.existing-worker.outputs.digest }}
+          TF_VAR_discovery_image: ${{ vars.ECR_DISCOVERY_REPOSITORY }}@${{ steps.discovery.outputs.digest || steps.existing-discovery.outputs.digest }}
           TF_VAR_deployment_version: ${{ github.sha }}
           TF_VAR_expires_at: staging-pipeline
         run: terraform -chdir=infra/terraform/environment apply -auto-approve
@@ -172,6 +202,7 @@ jobs:
           TF_VAR_deploy_services: "true"
           TF_VAR_web_image: ${{ vars.ECR_WEB_REPOSITORY }}@${{ steps.web.outputs.digest || steps.existing-web.outputs.digest }}
           TF_VAR_worker_image: ${{ vars.ECR_WORKER_REPOSITORY }}@${{ steps.worker.outputs.digest || steps.existing-worker.outputs.digest }}
+          TF_VAR_discovery_image: ${{ vars.ECR_DISCOVERY_REPOSITORY }}@${{ steps.discovery.outputs.digest || steps.existing-discovery.outputs.digest }}
           TF_VAR_deployment_version: ${{ github.sha }}
           TF_VAR_expires_at: staging-pipeline
         run: terraform -chdir=infra/terraform/environment apply -auto-approve
@@ -179,7 +210,7 @@ jobs:
         if: steps.configuration.outputs.configured == 'true'
         run: |
           cluster="$(terraform -chdir=infra/terraform/environment output -raw ecs_cluster_name)"
-          aws ecs wait services-stable --cluster "$cluster" --services web worker
+          aws ecs wait services-stable --cluster "$cluster" --services web worker discovery
       - name: Smoke test
         if: steps.configuration.outputs.configured == 'true'
         run: |
@@ -189,7 +220,7 @@ jobs:
       - name: Mark images as staging verified
         if: steps.configuration.outputs.configured == 'true'
         run: |
-          for repository in vinylhound-web vinylhound-worker; do
+          for repository in vinylhound-web vinylhound-worker vinylhound-discovery; do
             source_digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'imageDetails[0].imageDigest' --output text)"
             verified_digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="staging-passed-${GITHUB_SHA}" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
             if [[ "$verified_digest" == "$source_digest" ]]; then

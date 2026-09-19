@@ -2,6 +2,7 @@ import {
   DiscoveryAlbumDetailResponseSchema,
   DiscoveryArtistDetailResponseSchema,
   DiscoverySearchResponseSchema,
+  parseResponse,
   type DiscoveryAlbum,
   type DiscoveryAlbumDetail,
   type DiscoveryArtist,
@@ -14,13 +15,18 @@ import {
 
 import {
   DiscoveryProviderError,
+  isDiscoveryProviderError,
   type DiscoveryProvider,
   type DiscoveryProviderErrorCategory,
   type DiscoverySearchInput,
   type GetDiscoveryAlbumInput,
   type GetDiscoveryArtistInput,
 } from "./discovery-provider.ts";
-import { isRetryableCategory, readWireError } from "./remote-client-support.ts";
+import {
+  callWithRetry,
+  isRetryableCategory,
+  readWireError,
+} from "./remote-client-support.ts";
 
 const DISCOVERY_ERROR_CATEGORIES = new Set<DiscoveryProviderErrorCategory>([
   "not_configured",
@@ -57,7 +63,7 @@ export function createRemoteDiscoveryClient(
   const request = options.fetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? 10_000;
 
-  async function call(path: string, userId: string): Promise<unknown> {
+  async function callOnce(path: string, userId: string): Promise<unknown> {
     const token = signServiceRequest(options.sharedSecret, { userId });
     let response: Response;
     try {
@@ -89,6 +95,15 @@ export function createRemoteDiscoveryClient(
     }
   }
 
+  // Bounded retry (P4.1 Task 5, ADR-0026): a single discovery replica can be
+  // briefly unreachable across a stop-then-start deploy or pod eviction.
+  function call(path: string, userId: string): Promise<unknown> {
+    return callWithRetry(
+      () => callOnce(path, userId),
+      (error) => isDiscoveryProviderError(error) && error.retryable,
+    );
+  }
+
   return {
     async search(input: DiscoverySearchInput): Promise<DiscoverySearchResults> {
       const params = new URLSearchParams({ q: input.query });
@@ -98,15 +113,15 @@ export function createRemoteDiscoveryClient(
         `/internal/v1/discovery/search?${params.toString()}`,
         input.userId,
       );
-      const parsed = DiscoverySearchResponseSchema.safeParse(payload);
-      if (!parsed.success) {
+      try {
+        return parseResponse(DiscoverySearchResponseSchema, payload);
+      } catch {
         throw new DiscoveryProviderError(
           "invalid_response",
           false,
           "The discovery service's search response did not match the expected schema.",
         );
       }
-      return parsed.data;
     },
 
     async getArtist(
@@ -116,15 +131,15 @@ export function createRemoteDiscoveryClient(
         `/internal/v1/discovery/artists/${encodeURIComponent(input.artistId)}`,
         input.userId,
       );
-      const parsed = DiscoveryArtistDetailResponseSchema.safeParse(payload);
-      if (!parsed.success) {
+      try {
+        return parseResponse(DiscoveryArtistDetailResponseSchema, payload);
+      } catch {
         throw new DiscoveryProviderError(
           "invalid_response",
           false,
           "The discovery service's artist response did not match the expected schema.",
         );
       }
-      return parsed.data;
     },
 
     async getAlbum(
@@ -134,15 +149,15 @@ export function createRemoteDiscoveryClient(
         `/internal/v1/discovery/albums/${encodeURIComponent(input.albumId)}`,
         input.userId,
       );
-      const parsed = DiscoveryAlbumDetailResponseSchema.safeParse(payload);
-      if (!parsed.success) {
+      try {
+        return parseResponse(DiscoveryAlbumDetailResponseSchema, payload).album;
+      } catch {
         throw new DiscoveryProviderError(
           "invalid_response",
           false,
           "The discovery service's album response did not match the expected schema.",
         );
       }
-      return parsed.data.album;
     },
   };
 }

@@ -44,13 +44,14 @@ jobs:
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
           ECR_WEB_REPOSITORY: ${{ vars.ECR_WEB_REPOSITORY }}
           ECR_WORKER_REPOSITORY: ${{ vars.ECR_WORKER_REPOSITORY }}
+          ECR_DISCOVERY_REPOSITORY: ${{ vars.ECR_DISCOVERY_REPOSITORY }}
           VPC_CIDR: ${{ vars.VPC_CIDR }}
           DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
           APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
           BUDGET_ALERT_EMAIL: ${{ vars.BUDGET_ALERT_EMAIL }}
         run: |
           missing=()
-          for name in AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET ECR_WEB_REPOSITORY ECR_WORKER_REPOSITORY VPC_CIDR DOMAIN_NAME APP_HOSTNAME BUDGET_ALERT_EMAIL; do
+          for name in AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET ECR_WEB_REPOSITORY ECR_WORKER_REPOSITORY ECR_DISCOVERY_REPOSITORY VPC_CIDR DOMAIN_NAME APP_HOSTNAME BUDGET_ALERT_EMAIL; do
             [[ -n "${!name}" ]] || missing+=("$name")
           done
           if (( ${#missing[@]} > 0 )); then
@@ -83,8 +84,10 @@ jobs:
         run: |
           web_digest="$(aws ecr describe-images --repository-name vinylhound-web --image-ids imageTag="staging-passed-${COMMIT_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
           worker_digest="$(aws ecr describe-images --repository-name vinylhound-worker --image-ids imageTag="staging-passed-${COMMIT_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
+          discovery_digest="$(aws ecr describe-images --repository-name vinylhound-discovery --image-ids imageTag="staging-passed-${COMMIT_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
           echo "TF_VAR_web_image=${{ vars.ECR_WEB_REPOSITORY }}@${web_digest}" >> "$GITHUB_ENV"
           echo "TF_VAR_worker_image=${{ vars.ECR_WORKER_REPOSITORY }}@${worker_digest}" >> "$GITHUB_ENV"
+          echo "TF_VAR_discovery_image=${{ vars.ECR_DISCOVERY_REPOSITORY }}@${discovery_digest}" >> "$GITHUB_ENV"
       - name: Set activation metadata
         env:
           {
@@ -130,8 +133,9 @@ jobs:
           clerk_secret="$(secret_value "$(jq -r .clerk_secret_key <<<"$secrets")")"
           clerk_public="$(secret_value "$(jq -r .clerk_publishable_key <<<"$secrets")")"
           openai_key="$(secret_value "$(jq -r .openai_api_key <<<"$secrets")")"
+          discovery_secret="$(secret_value "$(jq -r .discovery_shared_secret <<<"$secrets")")"
           database_ca="$(terraform -chdir=infra/terraform/production output -raw database_ca_base64)"
-          for value in "$database_url" "$clerk_secret" "$clerk_public" "$openai_key"; do echo "::add-mask::$value"; done
+          for value in "$database_url" "$clerk_secret" "$clerk_public" "$openai_key" "$discovery_secret"; do echo "::add-mask::$value"; done
           kubectl -n vinylhound create configmap runtime \
             --from-literal=NODE_ENV=production --from-literal=APP_URL="$(jq -r .app_url <<<"$runtime")" \
             --from-literal=DATABASE_MAX_CONNECTIONS=5 --from-literal=DATABASE_CONNECT_TIMEOUT_MS=30000 \
@@ -149,9 +153,12 @@ jobs:
             --from-literal=USER_ACTIVE_SCAN_LIMIT="$(jq -r .user_active_scan_limit <<<"$runtime")" \
             --from-literal=USER_MONTHLY_SPEND_LIMIT_USD="$(jq -r .user_monthly_spend_limit_usd <<<"$runtime")" \
             --from-literal=SCAN_COST_RESERVATION_USD="$(jq -r .scan_cost_reservation_usd <<<"$runtime")" \
+            --from-literal=DISCOVERY_SERVICE_URL=http://discovery:4001 \
+            --from-literal=DISCOVERY_SERVICE_PORT=4001 \
             --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n vinylhound create secret generic web-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=CLERK_SECRET_KEY="$clerk_secret" --from-literal=NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$clerk_public" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n vinylhound create secret generic web-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=CLERK_SECRET_KEY="$clerk_secret" --from-literal=NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$clerk_public" --from-literal=DISCOVERY_SERVICE_SHARED_SECRET="$discovery_secret" --dry-run=client -o yaml | kubectl apply -f -
           kubectl -n vinylhound create secret generic worker-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=OPENAI_API_KEY="$openai_key" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n vinylhound create secret generic discovery-secrets --from-literal=DISCOVERY_SERVICE_SHARED_SECRET="$discovery_secret" --dry-run=client -o yaml | kubectl apply -f -
       - name: Migrate database
         id: migrate
         run: |
@@ -174,8 +181,10 @@ jobs:
         run: |
           sed "s|vinylhound.invalid/web:deployment-required|${TF_VAR_web_image}|" infra/kubernetes/production/web.yaml | kubectl apply -f -
           sed "s|vinylhound.invalid/worker:deployment-required|${TF_VAR_worker_image}|" infra/kubernetes/production/worker.yaml | kubectl apply -f -
+          sed "s|vinylhound.invalid/discovery:deployment-required|${TF_VAR_discovery_image}|" infra/kubernetes/production/discovery.yaml | kubectl apply -f -
           kubectl -n vinylhound rollout status deployment/web --timeout=10m
           kubectl -n vinylhound rollout status deployment/worker --timeout=10m
+          kubectl -n vinylhound rollout status deployment/discovery --timeout=10m
       - name: Smoke test CloudFront path
         run: |
           url="$(terraform -chdir=infra/terraform/production output -raw application_url)"

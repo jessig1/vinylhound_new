@@ -27,6 +27,16 @@ RUN npm run build --workspace @vinylhound/worker \
 FROM ${LAMBDA_NODE_IMAGE} AS runtime
 WORKDIR ${LAMBDA_TASK_ROOT}
 
+# The Lambda Runtime Interface Client loads the handler itself rather than
+# via a plain `node <file>` CMD this Dockerfile controls directly, so the
+# fix lives in NODE_OPTIONS instead of a CLI flag — AWS's Lambda Node.js
+# runtime honors it when it launches Node to load the handler module. See
+# Dockerfile.worker's matching comment for why this flag is required at all:
+# @vinylhound/ai's `ProviderError` constructor parameter property fails
+# Node's default strip-only TypeScript loading when this bare specifier
+# resolves through the package's `"exports": "./src/index.ts"`.
+ENV NODE_OPTIONS=--experimental-transform-types
+
 COPY --from=build /workspace/package.json ./package.json
 COPY --from=build /workspace/node_modules ./node_modules
 COPY --from=build /workspace/packages ./packages

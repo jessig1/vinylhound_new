@@ -151,4 +151,68 @@ describe("createRemoteDiscoveryClient", () => {
       retryable: true,
     });
   });
+
+  it("retries a retryable failure and succeeds within the bound", async () => {
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls < 3) return new Response(null, { status: 500 });
+      return jsonResponse({
+        artists: [artist],
+        albums: [],
+        tracks: [],
+        query: "miles",
+        type: "all",
+      });
+    });
+    const client = createRemoteDiscoveryClient({
+      baseUrl: BASE_URL,
+      sharedSecret: SECRET,
+      fetch: request as typeof fetch,
+    });
+
+    const results = await client.search({ query: "miles", userId });
+
+    expect(results.artists).toEqual([artist]);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up after the retry bound on a persistent retryable failure", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 500 }));
+    const client = createRemoteDiscoveryClient({
+      baseUrl: BASE_URL,
+      sharedSecret: SECRET,
+      fetch: request as typeof fetch,
+    });
+
+    await expect(
+      client.search({ query: "miles", userId }),
+    ).rejects.toMatchObject({ category: "provider_unavailable" });
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("never retries a non-retryable failure", async () => {
+    const request = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: {
+            code: "discovery_not_configured",
+            message: "Discovery is not configured for this deployment.",
+            requestId: "11111111-1111-4111-8111-111111111111",
+          },
+        },
+        503,
+      ),
+    );
+    const client = createRemoteDiscoveryClient({
+      baseUrl: BASE_URL,
+      sharedSecret: SECRET,
+      fetch: request as typeof fetch,
+    });
+
+    await expect(
+      client.search({ query: "miles", userId }),
+    ).rejects.toMatchObject({ category: "not_configured" });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
 });

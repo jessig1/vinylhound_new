@@ -18,3 +18,9 @@ kind: ServiceAccount
 metadata:
   name: worker
   namespace: vinylhound
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: discovery
+  namespace: vinylhound

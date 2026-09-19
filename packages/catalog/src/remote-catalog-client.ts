@@ -1,6 +1,7 @@
 import {
   GetCatalogReleaseResponseSchema,
   SearchCatalogReleasesResponseSchema,
+  parseResponse,
   type CatalogReleaseCandidate,
   type CatalogReleaseDetail,
 } from "@vinylhound/contracts";
@@ -11,12 +12,17 @@ import {
 
 import {
   CatalogProviderError,
+  isCatalogProviderError,
   type CatalogProvider,
   type CatalogProviderErrorCategory,
   type GetCatalogReleaseDetailsInput,
   type SearchCatalogReleasesInput,
 } from "./catalog-provider.ts";
-import { isRetryableCategory, readWireError } from "./remote-client-support.ts";
+import {
+  callWithRetry,
+  isRetryableCategory,
+  readWireError,
+} from "./remote-client-support.ts";
 
 const CATALOG_ERROR_CATEGORIES = new Set<CatalogProviderErrorCategory>([
   "rate_limit",
@@ -50,7 +56,7 @@ export function createRemoteCatalogClient(
   const request = options.fetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? 10_000;
 
-  async function call(path: string, userId: string): Promise<unknown> {
+  async function callOnce(path: string, userId: string): Promise<unknown> {
     const token = signServiceRequest(options.sharedSecret, { userId });
     let response: Response;
     try {
@@ -82,6 +88,15 @@ export function createRemoteCatalogClient(
     }
   }
 
+  // Bounded retry (P4.1 Task 5, ADR-0026): a single discovery replica can be
+  // briefly unreachable across a stop-then-start deploy or pod eviction.
+  function call(path: string, userId: string): Promise<unknown> {
+    return callWithRetry(
+      () => callOnce(path, userId),
+      (error) => isCatalogProviderError(error) && error.retryable,
+    );
+  }
+
   return {
     async searchReleases(
       input: SearchCatalogReleasesInput,
@@ -97,15 +112,16 @@ export function createRemoteCatalogClient(
         `/internal/v1/catalog/releases?${params.toString()}`,
         input.userId,
       );
-      const parsed = SearchCatalogReleasesResponseSchema.safeParse(payload);
-      if (!parsed.success) {
+      try {
+        return parseResponse(SearchCatalogReleasesResponseSchema, payload)
+          .results;
+      } catch {
         throw new CatalogProviderError(
           "invalid_response",
           false,
           "The discovery service's search response did not match the expected schema.",
         );
       }
-      return parsed.data.results;
     },
 
     async getReleaseDetails(
@@ -115,15 +131,15 @@ export function createRemoteCatalogClient(
         `/internal/v1/catalog/releases/${encodeURIComponent(input.releaseId)}`,
         input.userId,
       );
-      const parsed = GetCatalogReleaseResponseSchema.safeParse(payload);
-      if (!parsed.success) {
+      try {
+        return parseResponse(GetCatalogReleaseResponseSchema, payload).release;
+      } catch {
         throw new CatalogProviderError(
           "invalid_response",
           false,
           "The discovery service's release response did not match the expected schema.",
         );
       }
-      return parsed.data.release;
     },
   };
 }

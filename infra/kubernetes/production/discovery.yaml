@@ -1,0 +1,68 @@
+# ADR-0026 (P4.1 Task 5): discovery is pinned to exactly one replica with a
+# stop-then-start rollout, deliberately unlike web.yaml/worker.yaml. No
+# HorizontalPodAutoscaler and no PodDisruptionBudget — there is only ever one
+# pod, and Recreate already guarantees the old one is gone before the new one
+# starts, so there is nothing an autoscaler or a disruption budget would do
+# here beyond what the fixed replica count and strategy already guarantee.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discovery
+  namespace: vinylhound
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app.kubernetes.io/name: vinylhound-discovery }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: vinylhound-discovery }
+    spec:
+      serviceAccountName: discovery
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: discovery
+          image: vinylhound.invalid/discovery:deployment-required
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 4001
+          envFrom:
+            - configMapRef: { name: runtime }
+            - secretRef: { name: discovery-secrets }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: discovery
+  namespace: vinylhound
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: vinylhound-discovery }
+  ports:
+    - name: http
+      port: 4001
+      targetPort: http

@@ -66,6 +66,16 @@ variable "worker_image" {
   }
 }
 
+variable "discovery_image" {
+  description = "Immutable ECR discovery image reference including sha256 digest."
+  type        = string
+  default     = ""
+  validation {
+    condition     = !var.environment_active || can(regex("@sha256:[0-9a-f]{64}$", var.discovery_image))
+    error_message = "An active environment requires a digest-pinned discovery_image."
+  }
+}
+
 variable "deployment_version" {
   description = "Git commit or release identifier included in runtime logs."
   type        = string

@@ -988,9 +988,133 @@ remain authoritative until the corresponding cutover.
       and rollout constraints preventing overlapping independent limiters.
       Per-process Maps cannot enforce a global provider limit. AWS Redis does not
       exist today; ElastiCache requires an explicit budget decision.
-- [ ] **Task 5.** Add service image/ECR/IAM/configuration and staging ECS delivery; prepare
+- [x] **Task 5.** Add service image/ECR/IAM/configuration and staging ECS delivery; prepare
       gated production EKS definitions and retain development's in-process port.
       Test bounded retries, timeouts, failures, and contract compatibility.
+
+**Closed 2026-09-18 as implementation-complete; the live rehearsal is tracked
+separately in [issue #19](https://github.com/jessig1/vinylhound_new/issues/19)
+rather than held against this checkbox.** Implementation landed 2026-09-18.
+P4.1's own exit criterion — actually deploying and rolling back a
+discovery-only change in staging — still has not been rehearsed (see
+`docs/HANDOFF.md`'s Resume point for what remains). What is done:
+
+- **Image and delivery.** `Dockerfile.discovery` builds and runs correctly
+  (verified locally: built the image, ran the container, and curled
+  `/healthz`); `bootstrap/main.tf`'s ECR `for_each` gained a fourth
+  repository (`vinylhound-discovery`); `platform.yml`'s PR container
+  build/scan matrix, `deploy-staging.yml` (build/push, digest resolution,
+  `staging-passed-<sha>` tagging), and `deploy-production.yml` (resolving
+  the staging-verified digest) all treat it as a fourth service alongside
+  web/worker/worker-lambda.
+- **Staging (ECS).** A new `discovery` task definition and service in
+  `infra/terraform/environment/ecs.tf`, gated the same way as web/worker
+  (`local.active_count`/`local.service_count`, `deploy_services`). Reachable
+  from web only, over ECS Service Connect (`aws_service_discovery_http_namespace`
+  — an HTTP namespace, so no Route 53 hosted zone and no added fixed cost) at
+  the in-cluster name `discovery:4001`; its own security group accepts 4001
+  from web's security group only, nothing else. ADR-0026's binding
+  requirement is implemented exactly: `deployment_minimum_healthy_percent = 0`
+  / `maximum_percent = 100` (stop-then-start), no
+  `aws_appautoscaling_target`, `desired_count` fixed at `1`. The deployment
+  circuit breaker is kept (unlike web/worker's rationale might suggest) since
+  it decides rollback eligibility from deployment history, not from an old
+  task still running — the one thing standing between a bad discovery image
+  and the service sitting at zero healthy tasks indefinitely.
+- **Production (EKS), prepared but gated.** `infra/kubernetes/production/discovery.yaml`
+  (`replicas: 1`, `strategy: { type: Recreate }`, no HPA, no
+  `PodDisruptionBudget`, a plain `ClusterIP` Service — production needs no
+  Service Connect equivalent since Kubernetes Services already provide
+  in-namespace DNS) plus a `discovery` ServiceAccount in `namespace.yaml`.
+  `deploy-production.yml` resolves discovery's staging-verified digest,
+  creates a `discovery-secrets` Secret, adds `DISCOVERY_SERVICE_URL`/
+  `DISCOVERY_SERVICE_PORT` to the shared `runtime` ConfigMap and
+  `DISCOVERY_SERVICE_SHARED_SECRET` to `web-secrets`, and applies/waits on
+  the new Deployment. Discovery needs no AWS IAM role in EKS (no S3/SQS/
+  database access — nothing to grant) and none was added, matching ADR-0026's
+  "no new Aurora credential, IAM role, or migration-owned schema" consequence.
+  Production activation itself remains gated on issues #8-#10 as already
+  documented; nothing here changes that.
+- **Shared secret.** `discovery_shared_secret` (`random_password`, 48 chars,
+  `aws_secretsmanager_secret`) generated independently in both
+  `infra/terraform/environment/storage.tf` (staging) and
+  `infra/terraform/production/foundation.tf` (production) — internal-only,
+  so Terraform generates it rather than requiring an externally supplied
+  value like Clerk/OpenAI's secrets. Added to both roots'
+  `runtime_secret_arns` output, so the existing generic "verify runtime
+  secrets exist" step in both deploy workflows covers it with no workflow
+  change beyond what the output map already drives.
+- **Bounded retries, timeouts, contract compatibility.** `packages/catalog/
+src/remote-client-support.ts` gained `callWithRetry` (3 attempts, 100ms/
+  200ms linear backoff, retried only when the category is already
+  `retryable`); both `remote-catalog-client.ts` and
+  `remote-discovery-client.ts` wrap their existing per-attempt
+  `AbortSignal.timeout` call with it. This is what actually makes ADR-0026's
+  accepted "brief outage during a deploy or pod eviction" not surface to
+  every caller: a request racing a stop-then-start discovery deploy now gets
+  a second and third chance within ~300ms instead of failing on the first
+  hit. Both remote clients also switched from a strict `.safeParse` to
+  `parseResponse` (the P3.3 Task 4 tolerant reader) for reading discovery's
+  responses — a real, newly-relevant gap Task 5 introduces: web and
+  discovery are now two independently built and deployed images for the
+  first time, so a version-skew window between them is possible in a way it
+  never was when discovery ran in-process, and ADR-0022's "producers strict,
+  consumers tolerant" rule already exists precisely for this. New tests
+  cover bounded retry-then-succeed, give-up-after-the-bound, and
+  never-retry-a-non-retryable-failure for both clients (`packages/catalog/
+src/remote-catalog-client.test.ts`, `remote-discovery-client.test.ts`).
+- **A real, unrelated, previously-undetected critical bug found and fixed
+  while verifying the discovery image actually boots**: `Dockerfile.worker`
+  and `Dockerfile.worker-lambda`'s CMD would crash immediately on startup
+  with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` against their currently pinned
+  Node base image (confirmed directly: both the plain `node:22-bookworm-
+slim` digest and the `public.ecr.aws/lambda/nodejs:22` digest already
+  pinned in this repository resolve to Node 22.23.2, which rejects
+  TypeScript constructor parameter properties — used by
+  `packages/ai/src/album-identifier.ts`'s `ProviderError` and by
+  `packages/catalog`'s `CatalogProviderError`/`DiscoveryProviderError` — in
+  its default strip-only native TypeScript loading, since `apps/worker`'s
+  bare `@vinylhound/ai` import resolves through that package's own
+  `"exports": "./src/index.ts"` straight to raw source, not to the
+  `tsc --project tsconfig.worker-runtime.json` JavaScript siblings the
+  Dockerfile also emits — those never intercept this resolution path at
+  all). Reproduced against the exact pinned digests, confirmed
+  `--experimental-transform-types` fixes it in both, and verified the fix
+  by rebuilding and running both images (worker started and reached its
+  outbox-poll loop; discovery served `/healthz`) rather than trusting the
+  reasoning alone. This means the worker's production Docker image, if
+  built and deployed from `main` as it stood before this fix, would have
+  crashed on boot — apparently undetected only because staging/production
+  have not been redeployed since whatever earlier commit bumped the pinned
+  Node digest past whatever version last worked. `tsconfig.discovery-
+runtime.json` was added following the same two-step pattern as `tsconfig.
+worker-runtime.json`, compiling `packages/catalog`, `config`, `contracts`,
+  and `service-auth`.
+
+Verified locally (no AWS access from this session): `lint`, `typecheck`
+(`tsc --project tsconfig.json --noEmit`), `test` (403/403, +12 net new),
+`format:check` (on every changed file, `--end-of-line auto` per this
+repository's known CRLF-checkout artifact), `npm run build` (all
+workspaces, including `@vinylhound/discovery`), `terraform fmt -check` and
+`terraform validate` (bootstrap, environment, production — all three
+`init -backend=false`), and `kubeconform -strict` against
+`infra/kubernetes/production` (13/13 resources valid across 5 files,
+matching `platform.yml`'s own check). Also manually verified: `docker build
+--file Dockerfile.discovery` succeeds and the resulting container serves
+`GET /healthz`; the same rebuild-and-run check for `Dockerfile.worker`
+confirms the transform-types fix.
+
+Not done, and explicitly not attempted without confirmation given the real
+AWS cost and shared-infrastructure risk: actually running `deploy-staging.yml`
+against a real AWS account, which additionally requires the maintainer to
+first configure `ECR_DISCOVERY_REPOSITORY` as a new staging/production GitHub
+environment variable (`docs/PUBLIC_REPOSITORY.md`, updated to name it) —
+nothing here can create that. P4.1's exit criterion (deploy/rollback rehearsal,
+bounded cache/rate coordination under concurrent callers) is therefore still
+open, tracked in
+[issue #19](https://github.com/jessig1/vinylhound_new/issues/19) rather than
+against this checkbox, and is the next thing to do once that variable exists
+and the maintainer authorizes a staging run.
 
 Task 1 completed 2026-09-18 (ADR-0025). The proceed decision rests on
 ADR-0009's unmet shared-limiter/cache requirement (both MusicBrainz's
@@ -1132,7 +1256,9 @@ decision record only, like Task 1 — but that gap was closed same-day in a
 follow-up (new `packages/catalog/src/bounded-cache.ts`, a shared
 capacity-and-TTL-bounded cache with LRU eviction, wired into both
 `musicbrainz-catalog.ts` and `spotify-discovery.ts`; see this file's session
-log). Task 5's implementation has not started.
+log). Task 5 is implemented (see its own entry above) but not rehearsed;
+[issue #19](https://github.com/jessig1/vinylhound_new/issues/19) tracks the
+remaining live deploy/rollback rehearsal this Exit paragraph asks for.
 
 Exit: deploy and roll back a discovery-only change in staging without rebuilding
 web/worker. Demonstrate bounded cache and provider-wide rate coordination under

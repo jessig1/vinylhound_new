@@ -35,7 +35,8 @@ Configure these non-secret variables in all three:
 - `BUDGET_ALERT_EMAIL`
 
 Development also requires `ECR_WORKER_LAMBDA_REPOSITORY`. Staging and
-production require `ECR_WORKER_REPOSITORY` and `VPC_CIDR`.
+production require `ECR_WORKER_REPOSITORY`, `ECR_DISCOVERY_REPOSITORY`
+(P4.1 Task 5's extracted discovery service), and `VPC_CIDR`.
 
 Configure the same state/network/domain values plus `AWS_PLAN_ROLE_ARN` as
 repository variables for the trusted staging Terraform plan. That plan is

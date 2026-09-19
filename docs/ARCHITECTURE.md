@@ -73,6 +73,17 @@ bare header. `apps/discovery` is stateless and owns no canonical rows:
 ADR-0025 for why this is the first extraction and ADR-0009 for the shared
 cache/rate-limit requirement that motivated it.
 
+Per ADR-0026, `apps/discovery` runs as exactly one instance per environment
+with a stop-then-start rollout, not the multi-replica pattern web/worker use:
+a staging ECS service (`deployment_minimum_healthy_percent = 0`, no
+autoscaling target, reached from web over ECS Service Connect at the
+in-cluster name `discovery`) and a production Kubernetes `Deployment`
+(`strategy: { type: Recreate }`, `replicas: 1`, no HPA, no
+`PodDisruptionBudget`, reached over a plain `ClusterIP` Service) — both added
+in P4.1 Task 5 alongside its own ECR repository and IAM/Pod execution role.
+Development is unaffected: it keeps the in-process adapter under ADR-0025's
+tier scope.
+
 ## Deployment evolution
 
 For personal use, web and worker can run on one host with one PostgreSQL/Redis deployment. Scale in this order only when measurements justify it:

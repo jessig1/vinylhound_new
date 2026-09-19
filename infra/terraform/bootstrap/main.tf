@@ -47,7 +47,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "terraform_state" {
 }
 
 resource "aws_ecr_repository" "application" {
-  for_each             = toset(["web", "worker", "worker-lambda"])
+  for_each             = toset(["web", "worker", "worker-lambda", "discovery"])
   name                 = "vinylhound-${each.key}"
   image_tag_mutability = "IMMUTABLE"
   force_delete         = false

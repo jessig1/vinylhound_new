@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "sourceMap": false,
+    "declaration": false,
+    "isolatedModules": false
+  },
+  "include": [
+    "packages/catalog/src/**/*.ts",
+    "packages/config/src/**/*.ts",
+    "packages/contracts/src/**/*.ts",
+    "packages/service-auth/src/**/*.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.integration.ts",
+    "**/node_modules",
+    "**/dist"
+  ]
+}

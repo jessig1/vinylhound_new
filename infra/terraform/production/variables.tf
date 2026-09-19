@@ -62,6 +62,14 @@ variable "worker_image" {
     error_message = "An active production environment requires a digest-pinned worker image."
   }
 }
+variable "discovery_image" {
+  type    = string
+  default = ""
+  validation {
+    condition     = !var.environment_active || can(regex("@sha256:[0-9a-f]{64}$", var.discovery_image))
+    error_message = "An active production environment requires a digest-pinned discovery image."
+  }
+}
 variable "database_max_acu" {
   type    = number
   default = 4

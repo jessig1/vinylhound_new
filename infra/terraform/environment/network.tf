@@ -142,6 +142,27 @@ resource "aws_security_group" "worker" {
   }
 }
 
+# Discovery (ADR-0025/ADR-0026, P4.1 Task 5): reachable only from web, over
+# Service Connect, on its own container port. No inbound access from the
+# internet or the ALB — it is not a public-facing service.
+resource "aws_security_group" "discovery" {
+  name_prefix = "${local.name}-discovery-"
+  description = "VinylHound discovery task"
+  vpc_id      = aws_vpc.main.id
+  ingress {
+    from_port       = 4001
+    to_port         = 4001
+    protocol        = "tcp"
+    security_groups = [aws_security_group.web.id]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
 resource "aws_security_group" "database" {
   name_prefix = "${local.name}-database-"
   description = "Aurora access from application tasks"
