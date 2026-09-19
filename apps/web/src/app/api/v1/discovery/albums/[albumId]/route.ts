@@ -18,8 +18,11 @@ export const GET = withRoute(
     const { albumId } = await route.params;
 
     const context = getServerContext();
-    await requireUserId(context);
-    const album = await requireDiscovery(context).getAlbum(albumId);
+    const userId = await requireUserId(context);
+    const album = await requireDiscovery(context).getAlbum({
+      albumId,
+      userId,
+    });
 
     const response = jsonResponse(
       DiscoveryAlbumDetailResponseSchema.parse({ album }),

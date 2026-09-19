@@ -17,6 +17,8 @@ import {
   DiscoveryProviderError,
   type DiscoveryProvider,
   type DiscoverySearchInput,
+  type GetDiscoveryAlbumInput,
+  type GetDiscoveryArtistInput,
 } from "./discovery-provider.ts";
 
 const SpotifyIdSchema = z.string().regex(/^[A-Za-z0-9]{22}$/);
@@ -342,7 +344,7 @@ export function createSpotifyDiscovery(
       } satisfies DiscoverySearchResults);
     },
 
-    async getArtist(artistId: string) {
+    async getArtist({ artistId }: GetDiscoveryArtistInput) {
       const id = requireSpotifyId(artistId, "artist");
       const [artistPayload, albumsPayload] = await Promise.all([
         cachedCall(`artist:${id}`, `/artists/${id}`, new URLSearchParams()),
@@ -382,7 +384,9 @@ export function createSpotifyDiscovery(
       return { artist, albums };
     },
 
-    async getAlbum(albumId: string): Promise<DiscoveryAlbumDetail> {
+    async getAlbum({
+      albumId,
+    }: GetDiscoveryAlbumInput): Promise<DiscoveryAlbumDetail> {
       const id = requireSpotifyId(albumId, "album");
       const payload = await cachedCall(
         `album:${id}`,

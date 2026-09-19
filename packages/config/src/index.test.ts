@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DevelopmentWebConfigSchema,
+  DiscoveryServiceConfigSchema,
   QueueWorkerConfigSchema,
   ServerConfigSchema,
 } from "./index.ts";
@@ -134,6 +135,89 @@ describe("DevelopmentWebConfigSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("defaults to no discovery service, keeping the in-process adapters", () => {
+    const config = DevelopmentWebConfigSchema.parse(baseEnv);
+
+    expect(config.DISCOVERY_SERVICE_URL).toBeUndefined();
+    expect(config.DISCOVERY_SERVICE_SHARED_SECRET).toBeUndefined();
+  });
+
+  it("rejects a discovery service URL without its shared secret, and vice versa", () => {
+    const urlOnly = DevelopmentWebConfigSchema.safeParse({
+      ...baseEnv,
+      DISCOVERY_SERVICE_URL: "http://discovery.internal:4001",
+    });
+    const secretOnly = DevelopmentWebConfigSchema.safeParse({
+      ...baseEnv,
+      DISCOVERY_SERVICE_SHARED_SECRET: "a".repeat(32),
+    });
+
+    expect(urlOnly.success).toBe(false);
+    expect(secretOnly.success).toBe(false);
+  });
+
+  it("rejects a discovery service shared secret shorter than 32 characters", () => {
+    const result = DevelopmentWebConfigSchema.safeParse({
+      ...baseEnv,
+      DISCOVERY_SERVICE_URL: "http://discovery.internal:4001",
+      DISCOVERY_SERVICE_SHARED_SECRET: "too-short",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a discovery service URL paired with a long enough shared secret", () => {
+    const config = DevelopmentWebConfigSchema.parse({
+      ...baseEnv,
+      DISCOVERY_SERVICE_URL: "http://discovery.internal:4001",
+      DISCOVERY_SERVICE_SHARED_SECRET: "a".repeat(32),
+    });
+
+    expect(config.DISCOVERY_SERVICE_URL).toBe("http://discovery.internal:4001");
+  });
+});
+
+describe("DiscoveryServiceConfigSchema", () => {
+  const baseEnv = {
+    APP_URL: "http://localhost:3000",
+    DISCOVERY_SERVICE_SHARED_SECRET: "a".repeat(32),
+  };
+
+  it("defaults the port and requires no database or storage credentials", () => {
+    const config = DiscoveryServiceConfigSchema.parse(baseEnv);
+
+    expect(config.DISCOVERY_SERVICE_PORT).toBe(4_001);
+    expect(config.SPOTIFY_CLIENT_ID).toBeUndefined();
+  });
+
+  it("rejects a shared secret shorter than 32 characters", () => {
+    const result = DiscoveryServiceConfigSchema.safeParse({
+      ...baseEnv,
+      DISCOVERY_SERVICE_SHARED_SECRET: "too-short",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects partial Spotify credentials", () => {
+    const result = DiscoveryServiceConfigSchema.safeParse({
+      ...baseEnv,
+      SPOTIFY_CLIENT_ID: "only-the-id",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts paired Spotify credentials", () => {
+    const config = DiscoveryServiceConfigSchema.parse({
+      ...baseEnv,
+      SPOTIFY_CLIENT_ID: "id",
+      SPOTIFY_CLIENT_SECRET: "secret",
+    });
+
+    expect(config.SPOTIFY_CLIENT_ID).toBe("id");
   });
 });
 

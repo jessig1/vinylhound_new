@@ -16,6 +16,7 @@
     "dev": "npm run dev --workspace @vinylhound/web",
     "dev:web": "npm run dev --workspace @vinylhound/web",
     "dev:worker": "npm run dev --workspace @vinylhound/worker",
+    "dev:discovery": "npm run dev --workspace @vinylhound/discovery",
     "db:migrate": "npm run db:migrate --workspace @vinylhound/database",
     "db:migration:create": "npm run db:migration:create --workspace @vinylhound/database --",
     "ops:restore-test": "node scripts/verify-postgres-restore.mjs",

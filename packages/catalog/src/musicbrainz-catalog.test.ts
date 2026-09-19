@@ -4,6 +4,7 @@ import { createMusicBrainzCatalog } from "./musicbrainz-catalog.ts";
 
 const releaseId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const releaseGroupId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const userId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 function response(status = 200) {
   return new Response(
@@ -48,10 +49,12 @@ describe("MusicBrainz catalog", () => {
     const first = await catalog.searchReleases({
       artist: "Miles Davis",
       title: "Kind of Blue",
+      userId,
     });
     const second = await catalog.searchReleases({
       artist: "Miles Davis",
       title: "Kind of Blue",
+      userId,
     });
 
     expect(second).toEqual(first);
@@ -95,8 +98,16 @@ describe("MusicBrainz catalog", () => {
       },
     });
 
-    await catalog.searchReleases({ artist: "Miles Davis", title: "Blue" });
-    await catalog.searchReleases({ artist: "Miles Davis", title: "Sketches" });
+    await catalog.searchReleases({
+      artist: "Miles Davis",
+      title: "Blue",
+      userId,
+    });
+    await catalog.searchReleases({
+      artist: "Miles Davis",
+      title: "Sketches",
+      userId,
+    });
 
     expect(request).toHaveBeenCalledTimes(3);
     expect(sleeps).toEqual([1_000, 1_000]);
@@ -142,8 +153,8 @@ describe("MusicBrainz catalog", () => {
       now: () => Date.parse("2026-08-31T12:00:00.000Z"),
     });
 
-    const first = await catalog.getReleaseDetails(releaseId);
-    const second = await catalog.getReleaseDetails(releaseId);
+    const first = await catalog.getReleaseDetails({ releaseId, userId });
+    const second = await catalog.getReleaseDetails({ releaseId, userId });
 
     expect(second).toEqual(first);
     expect(request).toHaveBeenCalledTimes(1);
@@ -171,7 +182,9 @@ describe("MusicBrainz catalog", () => {
       now: () => 0,
     });
 
-    await expect(catalog.getReleaseDetails(releaseId)).rejects.toMatchObject({
+    await expect(
+      catalog.getReleaseDetails({ releaseId, userId }),
+    ).rejects.toMatchObject({
       category: "not_found",
       retryable: false,
     });
@@ -185,9 +198,9 @@ describe("MusicBrainz catalog", () => {
       fetch: request as typeof fetch,
     });
 
-    await expect(catalog.getReleaseDetails("not-a-uuid")).rejects.toMatchObject(
-      { category: "not_found" },
-    );
+    await expect(
+      catalog.getReleaseDetails({ releaseId: "not-a-uuid", userId }),
+    ).rejects.toMatchObject({ category: "not_found" });
     expect(request).not.toHaveBeenCalled();
   });
 });

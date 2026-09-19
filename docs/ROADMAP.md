@@ -977,7 +977,7 @@ remain authoritative until the corresponding cutover.
 
 - [x] **Task 1.** Use P3.5 evidence and ADR-0009's shared catalog coordination requirement to
       record the reason to extract, expected benefit, cost, and rollback path.
-- [ ] **Task 2.** Move provider adapters, bounded cache, and rate coordination behind an
+- [x] **Task 2.** Move provider adapters, bounded cache, and rate coordination behind an
       authenticated internal discovery API. Browser traffic stays behind web;
       require service identity and user authorization, not just a user-ID header.
 - [ ] **Task 3.** Keep canonical `albums`, `releases`, and `catalog_references` with the
@@ -1010,6 +1010,53 @@ coordination substrate itself is left to Task 4's own ADR — this decision
 rules out adding ElastiCache by default (no Redis/ElastiCache exists in
 `infra/terraform` today) but does not choose between a single replica and a
 PostgreSQL-backed lease.
+
+Task 2 completed 2026-09-18: a new `apps/discovery` standalone service now
+hosts the `packages/catalog` MusicBrainz/Spotify adapters unchanged, behind
+five routes (`GET /internal/v1/catalog/releases` and its `/{releaseId}` detail
+route, `GET /internal/v1/discovery/search`, `/discovery/artists/{id}`, and
+`/discovery/albums/{id}`) plus an unauthenticated `/healthz`. Browser traffic
+is unaffected: it still only ever reaches `apps/web`'s existing `/api/v1/
+catalog/*` and `/api/v1/discovery/*` routes, which now select an
+implementation of the _same_ `CatalogProvider`/`DiscoveryProvider` port
+interfaces (`packages/catalog`) at construction time
+(`apps/web/src/server/context.ts`) — the in-process adapters when
+`DISCOVERY_SERVICE_URL` is unset (development, per ADR-0025's tier scope), or
+a new HTTP client (`createRemoteCatalogClient`/`createRemoteDiscoveryClient`)
+when it is set. Every remote call carries a signed, 30-second-lived token
+(new `packages/service-auth`, `signServiceRequest`/`verifyServiceRequest`,
+HMAC-SHA256 over `node:crypto` — no new dependency) binding the specific
+authenticated `userId` `requireUserId` already resolved, so the port
+interfaces themselves gained a required `userId` field on every method's
+input rather than that identity being smuggled in some other way. This is
+the "service identity and user authorization, not just a user-ID header" the
+task asked for: only a holder of the shared secret (`apps/web`) can produce a
+valid signature, and the signature binds a specific user, expiring before it
+could be meaningfully replayed. `apps/discovery` re-throws the identical
+`CatalogProviderError`/`DiscoveryProviderError` types the in-process adapters
+throw (recovered from a `catalog_<category>`/`discovery_<category>` wire
+error code shared with `apps/web`'s existing `errorResponse` via new
+`catalogProviderErrorStatus`/`discoveryProviderErrorStatus` helpers in
+`packages/catalog`), so `apps/web/src/server/http.ts` needed zero changes
+regardless of which implementation is wired up. `apps/discovery` is a plain
+Node app (Fetch `Request`/`Response`, no framework dependency, mirroring
+`apps/web`'s own `withRoute`/`errorResponse` shape) so route logic reads the
+same in both apps; a small `node:http` bridge in `server.ts` is the only
+Node-specific code. Verified with 90 new unit tests (`service-auth` token
+round-trip/tamper/expiry, both remote clients against a mocked `fetch`,
+`apps/discovery`'s auth boundary and all five routes including the
+`not_configured`/`not_found`/malformed-query paths) plus a real manual smoke
+test: a live `apps/discovery` process rejected a missing, tampered, and
+wrong-secret token with 401, and a validly signed request returned a real
+MusicBrainz result end to end through the actual `node:http` server (not
+just the in-memory dispatcher the unit tests exercise). `npm run build`
+(including `apps/web`'s Next build, after adding
+`@vinylhound/service-auth` to its `transpilePackages`) and the full
+`lint`/`typecheck`/`test` suite (390/390) are clean. Explicitly out of scope
+here, per the roadmap's own task split: containerizing `apps/discovery`,
+ECR/IAM/staging delivery (Task 5), and the coordination substrate ADR
+(Task 4) — this service does not yet run anywhere outside a developer's own
+`npm run dev:discovery`.
 
 Exit: deploy and roll back a discovery-only change in staging without rebuilding
 web/worker. Demonstrate bounded cache and provider-wide rate coordination under

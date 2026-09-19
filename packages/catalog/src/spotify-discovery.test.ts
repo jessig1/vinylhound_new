@@ -5,6 +5,7 @@ import { createSpotifyDiscovery } from "./spotify-discovery.ts";
 
 const TOKEN_URL = "https://accounts.test/token";
 const BASE_URL = "https://api.test/v1";
+const userId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -64,8 +65,8 @@ describe("createSpotifyDiscovery", () => {
       return jsonResponse({ artists: { items: [milesArtist] } });
     });
 
-    await provider.search({ query: "miles davis", type: "artist" });
-    await provider.search({ query: "coltrane", type: "artist" });
+    await provider.search({ query: "miles davis", type: "artist", userId });
+    await provider.search({ query: "coltrane", type: "artist", userId });
 
     expect(calls.filter((url) => url === TOKEN_URL)).toHaveLength(1);
   });
@@ -96,7 +97,7 @@ describe("createSpotifyDiscovery", () => {
       });
     });
 
-    const results = await provider.search({ query: "kind of blue" });
+    const results = await provider.search({ query: "kind of blue", userId });
 
     expect(results.artists[0]).toMatchObject({
       id: "0kbYTNQb4Pb1rPbbaF0pT4",
@@ -137,6 +138,7 @@ describe("createSpotifyDiscovery", () => {
     const results = await provider.search({
       query: "kind of blue",
       type: "album",
+      userId,
     });
 
     expect(results.albums).toHaveLength(1);
@@ -166,9 +168,10 @@ describe("createSpotifyDiscovery", () => {
       return jsonResponse(milesArtist);
     });
 
-    const { artist, albums } = await provider.getArtist(
-      "0kbYTNQb4Pb1rPbbaF0pT4",
-    );
+    const { artist, albums } = await provider.getArtist({
+      artistId: "0kbYTNQb4Pb1rPbbaF0pT4",
+      userId,
+    });
 
     expect(artist.name).toBe("Miles Davis");
     expect(albums).toHaveLength(2);
@@ -206,7 +209,10 @@ describe("createSpotifyDiscovery", () => {
       });
     });
 
-    const album = await provider.getAlbum("1weenld61qoidwYuZ1GESA");
+    const album = await provider.getAlbum({
+      albumId: "1weenld61qoidwYuZ1GESA",
+      userId,
+    });
 
     expect(album).toMatchObject({
       title: "Kind of Blue",
@@ -229,7 +235,9 @@ describe("createSpotifyDiscovery", () => {
       throw new Error("should not reach the API");
     });
 
-    await expect(provider.getAlbum("not-a-spotify-id")).rejects.toMatchObject({
+    await expect(
+      provider.getAlbum({ albumId: "not-a-spotify-id", userId }),
+    ).rejects.toMatchObject({
       category: "not_found",
     });
     expect(calls).toHaveLength(0);
@@ -252,7 +260,11 @@ describe("createSpotifyDiscovery", () => {
         : jsonResponse({ artists: { items: [milesArtist] } });
     });
 
-    const results = await provider.search({ query: "miles", type: "artist" });
+    const results = await provider.search({
+      query: "miles",
+      type: "artist",
+      userId,
+    });
 
     expect(tokenRequests).toBe(2);
     expect(results.artists).toHaveLength(1);
@@ -265,7 +277,7 @@ describe("createSpotifyDiscovery", () => {
     });
 
     await expect(
-      provider.search({ query: "miles", type: "artist" }),
+      provider.search({ query: "miles", type: "artist", userId }),
     ).rejects.toMatchObject({ category: "rate_limit", retryable: true });
   });
 
@@ -277,7 +289,7 @@ describe("createSpotifyDiscovery", () => {
     });
 
     const failure = await provider
-      .search({ query: "miles", type: "artist" })
+      .search({ query: "miles", type: "artist", userId })
       .catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(DiscoveryProviderError);
@@ -294,7 +306,7 @@ describe("createSpotifyDiscovery", () => {
     });
 
     await expect(
-      provider.getAlbum("1weenld61qoidwYuZ1GESA"),
+      provider.getAlbum({ albumId: "1weenld61qoidwYuZ1GESA", userId }),
     ).rejects.toMatchObject({ category: "not_found" });
   });
 
@@ -311,7 +323,7 @@ describe("createSpotifyDiscovery", () => {
     });
 
     const failure = await provider
-      .search({ query: "miles", type: "artist" })
+      .search({ query: "miles", type: "artist", userId })
       .catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(DiscoveryProviderError);
@@ -334,7 +346,7 @@ describe("createSpotifyDiscovery", () => {
     });
 
     const failure = await provider
-      .search({ query: "miles", type: "artist" })
+      .search({ query: "miles", type: "artist", userId })
       .catch((error: unknown) => error);
 
     expect(failure).toMatchObject({

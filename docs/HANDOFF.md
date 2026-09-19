@@ -15,6 +15,74 @@ the log.
 
 ## Current state — verified 2026-09-18
 
+- **P4.1 Task 2 (move provider adapters, bounded cache, and rate coordination
+  behind an authenticated internal discovery API; browser traffic stays
+  behind web; require service identity and user authorization, not just a
+  user-ID header) is complete and uncommitted in the working tree for
+  maintainer review.** A new standalone app, `apps/discovery`, now hosts the
+  unchanged `packages/catalog` MusicBrainz/Spotify adapters behind five
+  routes (`GET /internal/v1/catalog/releases` and its `/{releaseId}` detail
+  route, `GET /internal/v1/discovery/search`, `/discovery/artists/{id}`,
+  `/discovery/albums/{id}`) plus an unauthenticated `/healthz`. Full detail
+  is in `docs/ROADMAP.md`'s new Task 2 note under P4.1; only the headline is
+  repeated here.
+  Browser traffic never reaches `apps/discovery` directly: `apps/web`'s
+  existing `/api/v1/catalog/*`/`/api/v1/discovery/*` routes are unchanged,
+  and `apps/web/src/server/context.ts` now picks which implementation of the
+  _same_ `CatalogProvider`/`DiscoveryProvider` port interfaces
+  (`packages/catalog`) to construct — the in-process adapters when
+  `DISCOVERY_SERVICE_URL` is unset (development, per ADR-0025's tier scope,
+  unchanged default), or a new HTTP client
+  (`createRemoteCatalogClient`/`createRemoteDiscoveryClient`) when it is set.
+  Every internal request is signed with a new, dependency-free mechanism,
+  `packages/service-auth` (`signServiceRequest`/`verifyServiceRequest`,
+  HMAC-SHA256 over `node:crypto`): a short-lived (30s) token binds the
+  specific authenticated `userId` `requireUserId` already resolved to a
+  shared secret only `apps/web` holds, so the port interfaces themselves
+  gained a required `userId` on every method's input. That is the "service
+  identity and user authorization, not just a user-ID header" the task
+  asked for — network-layer service identity (mTLS/IAM SigV4/private-subnet
+  ingress) is still P4.1 Task 5's job, not this one's.
+  `apps/discovery` re-throws the identical `CatalogProviderError`/
+  `DiscoveryProviderError` types the in-process adapters already throw
+  (recovered from a `catalog_<category>`/`discovery_<category>` wire error
+  code shared with `apps/web`'s existing `errorResponse`, via two new
+  `catalogProviderErrorStatus`/`discoveryProviderErrorStatus` helpers now
+  living in `packages/catalog` so both apps use one status-mapping table),
+  so `apps/web/src/server/http.ts` needed zero changes regardless of which
+  implementation is wired up. `apps/discovery` itself is a small
+  dependency-free Node app built on the Fetch `Request`/`Response` API
+  (Node 22 ships these globally) with a `withRoute`/`errorResponse` shape
+  deliberately mirroring `apps/web/src/server/http.ts`, bridged to a real
+  `node:http` server in `server.ts` — no Express/Fastify dependency, matching
+  this repository's preference for small custom mechanisms over new
+  dependencies where the problem is small (same reasoning as P3.5 Task 5's
+  `scripts/affected/`).
+  Verified with 90 new unit tests (`packages/service-auth`: token
+  round-trip, expiry boundary, tampered payload, wrong secret, malformed
+  token; `packages/catalog`'s two new remote clients against a mocked
+  `fetch`, including the wire-error-to-category mapping and a network
+  failure; `apps/discovery`'s auth boundary and all five routes, including
+  `not_configured`/`not_found`/malformed-query paths) plus a real manual
+  smoke test this session ran directly: a live `apps/discovery` process
+  (real `node:http`, not the in-memory dispatcher the unit tests exercise)
+  correctly rejected a missing, tampered, and wrong-secret token with 401,
+  and a validly signed request returned a real MusicBrainz result end to
+  end. `npm run build` (including `apps/web`'s Next build, after adding
+  `@vinylhound/service-auth` to its `transpilePackages` — it is now a
+  transitive dependency of `packages/catalog`, which apps/web bundles as
+  source) and `lint`/`typecheck`/`test` (390/390, up from 361) are clean;
+  verified with `--end-of-line auto` per this checkout's known CRLF quirk
+  (plain `npm run check`'s `format:check` still flags ~75 files including
+  many this session never touched, confirming it is the pre-existing
+  checkout artifact, not a regression).
+  Explicitly out of scope here, matching the roadmap's own task split:
+  containerizing `apps/discovery` and its ECR/IAM/staging delivery (Task 5),
+  and the coordination-substrate ADR (Task 4, PostgreSQL lease vs. single
+  replica) — this service does not run anywhere outside a developer's own
+  `npm run dev:discovery` yet. Left uncommitted for the maintainer's review
+  per this repository's convention.
+
 - **P4.1 Task 1 (record discovery extraction's reason, expected benefit,
   cost, and rollback path, using P3.5 evidence and ADR-0009's shared-catalog-
   coordination requirement) is complete and committed — Phase 4 has started.**
@@ -2090,31 +2158,42 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-18: P4.1 Task 1 is complete and committed — Phase 4 has
-started (ADR-0025).** See "Current state" above for the full account. In
-short: the proceed decision to extract discovery is recorded because of
-ADR-0009's still-unmet shared-limiter/cache requirement (both providers'
-caches and MusicBrainz's rate limiter are closure-scoped to the single
-`apps/web` process today), not measured load — P3.5 recorded no
-catalog/discovery traffic to point at. Scope: discovery stays stateless
-(adapters/cache/rate coordination only; canonical catalog tables stay with
-core, per Task 3), only staging/production get the extracted service
-(development keeps the in-process adapter, which is also the rollback path),
-and the coordination substrate itself (PostgreSQL lease vs. single replica)
-is left to Task 4's own ADR — this one only rules out adding ElastiCache by
-default. **Next is P4.1 Task 2**: move the MusicBrainz/Spotify adapters,
-their bounded caches, and rate/token coordination behind a new authenticated
-internal discovery API (service identity and user authorization, not a
-forwarded user-ID header); `apps/web`'s `CatalogProvider`/`DiscoveryProvider`
-construction in `context.ts:43-54` becomes an HTTP client instead of the
-in-process adapters for staging/production, while development keeps
-constructing the in-process adapters directly (per this ADR's tier scope).
-Read `docs/ROADMAP.md`'s P4.1 section and ADR-0025 in full before starting;
-Task 3 (confirm catalog-table ownership stays with core — already stated in
-the ADR but the roadmap tracks it as its own checkbox) and Task 4 (the
-coordination-substrate ADR) are natural companions to sequence alongside
-Task 2's actual code. Nothing in Phase 2's still-open issues (#8-#10) blocks
-P4.1 itself, only later EKS/production-rehearsal-adjacent work.
+**Current, 2026-09-18: P4.1 Task 2 is complete, uncommitted — Tasks 1-2 of
+P4.1 are done.** See "Current state" above for the full account. In short: a
+new standalone `apps/discovery` app now hosts the unchanged
+`packages/catalog` MusicBrainz/Spotify adapters behind five internal routes
+plus `/healthz`; `apps/web`'s `CatalogProvider`/`DiscoveryProvider`
+construction (`context.ts`) picks the in-process adapters (development,
+default, unchanged) or a new signed HTTP client
+(`createRemoteCatalogClient`/`createRemoteDiscoveryClient`, when
+`DISCOVERY_SERVICE_URL` is set) — both implement the identical port
+interfaces, so `apps/web`'s routes and HTTP error mapping needed no changes.
+Every internal call carries a short-lived token (new
+`packages/service-auth`, HMAC-SHA256, no new dependency) binding the
+authenticated `userId` to a shared secret, satisfying "service identity and
+user authorization, not just a user-ID header." 90 new unit tests plus a
+real manual smoke test (a live `apps/discovery` process, real MusicBrainz
+call, 401 on missing/tampered/wrong-secret tokens) back this; full
+`lint`/`typecheck`/`test`/`build` are clean.
+
+**Next is P4.1 Task 3** (keep canonical `albums`, `releases`, and
+`catalog_references` with core/library and its transaction; discovery owns
+no canonical records) — this is already true in the code today (`confirmScan`
+in `packages/database/src/confirmation-repository.ts` never called a live
+catalog/discovery provider even before this session, and Task 2 did not
+change that), so Task 3 is likely a documentation/verification pass
+confirming and formally recording that invariant rather than a code change —
+verify this assumption before assuming there is nothing to do. **Task 4**
+(decide the coordination substrate in its own ADR: PostgreSQL-backed
+cache/rate lease for replicas, or a single discovery replica with explicit
+availability/rollout constraints — ADR-0025 deliberately left this open,
+only ruling out ElastiCache by default) is the more substantial remaining
+decision before Task 5 (service image/ECR/IAM/staging delivery; bounded
+retries, timeouts, failure and contract-compatibility tests). Read
+`docs/ROADMAP.md`'s P4.1 section, ADR-0025, and this session's Task 2 note
+in full before starting either. Nothing in Phase 2's still-open issues
+(#8-#10) blocks P4.1 itself, only later EKS/production-rehearsal-adjacent
+work.
 
 Prior context, superseded but still relevant: P3.5 Task 5 (commit `9ad4c14`)
 added `scripts/affected/` (`npm run test:affected` / `npm run build:affected`)
@@ -4683,3 +4762,79 @@ README.md`'s index, checked P4.1 Task 1 in `docs/ROADMAP.md` with a
   check/build/test command applies; verified via `git status` that only the
   three docs files above changed. Left uncommitted for the maintainer's
   review per this repository's convention.
+
+- **2026-09-18 - Claude (continuing, same day).** Picked up P4.1 Task 2
+  directly after the Task 1 session above. Read the plan review's G5/G6/G9
+  findings and ADR-0025 again before writing code, then explored the current
+  `apps/web` catalog/discovery routes, `packages/catalog`'s two port
+  interfaces and adapters, `apps/web/src/server/{context,auth,http}.ts`, and
+  confirmed `confirmScan` never calls a live provider (so Task 3's invariant
+  already holds structurally).
+  Built, in order: `packages/service-auth` (new package —
+  `signServiceRequest`/`verifyServiceRequest`, HMAC-SHA256 over
+  `node:crypto`, a home-rolled minimal signed-token format rather than a JWT
+  library, matching this repo's "small custom mechanism over a new
+  dependency" preference from P3.5 Task 5's ADR) with 8 unit tests covering
+  round-trip, expiry boundary, tamper, and wrong-secret cases; extended
+  `packages/config` with a `DISCOVERY_SERVICE_URL`/
+  `DISCOVERY_SERVICE_SHARED_SECRET` optional pair (validated together,
+  32-char secret minimum) on `DevelopmentWebConfigSchema`, plus a new
+  `DiscoveryServiceConfigSchema`/`loadDiscoveryServiceConfig` for the
+  standalone app — deliberately not extending `InfrastructureConfigShape`,
+  since this service has no database or storage credentials; changed
+  `packages/catalog`'s `CatalogProvider`/`DiscoveryProvider` port method
+  signatures to require `userId` on every input (a real, deliberate
+  breaking change to an internal port, not a wire contract — updated both
+  in-process adapters, both existing test files, and every `apps/web` call
+  site to thread it through from `requireUserId`), and added
+  `catalogProviderErrorStatus`/`discoveryProviderErrorStatus` plus two new
+  remote client implementations (`createRemoteCatalogClient`/
+  `createRemoteDiscoveryClient`) with 11 new unit tests against a mocked
+  `fetch`, covering the signed-token header, both success paths, wire-error
+  category recovery, an unrecognized-failure fallback, a network failure,
+  and a schema-mismatch rejection.
+  Wired `apps/web/src/server/context.ts` to select the in-process adapters
+  or the new remote clients based on whether both `DISCOVERY_SERVICE_URL`
+  and its secret are set, threaded `userId` through all five affected
+  `apps/web` routes, and added `@vinylhound/service-auth` to
+  `next.config.ts`'s `transpilePackages` (a real gap that would have
+  otherwise repeated P3.3 Task 1's `@vinylhound/catalog` bundling bug, this
+  time for the new transitive dependency `packages/catalog` picked up).
+  Built the new `apps/discovery` app from scratch: `context.ts` (reuses
+  `createMusicBrainzCatalog`/`createSpotifyDiscovery` unchanged), `http.ts`
+  (a `withRoute`/`errorResponse`/`requireServiceUserId` boundary mirroring
+  `apps/web/src/server/http.ts`'s shape), `routes.ts` (five routes plus a
+  hand-rolled `dispatch` router — deliberately not a routing library for
+  five fixed routes), `server.ts` (a small `node:http` <-> Fetch
+  `Request`/`Response` bridge, since Node 22 ships the Fetch API globally
+  and every handler is written against it, matching `apps/web`'s route
+  shape), and `index.ts` (bootstrap plus `SIGINT`/`SIGTERM` shutdown
+  mirroring `apps/worker/src/index.ts`'s convention). 18 new unit tests
+  cover the auth boundary, error mapping, and all five routes including
+  `not_configured`/`not_found`/malformed-query paths, using a stub
+  `CatalogProvider`/`DiscoveryProvider` context.
+  Ran a real manual smoke test beyond the unit tests, since `dispatch()`
+  tests bypass `server.ts`'s actual `node:http` bridging code: started a
+  live `apps/discovery` process (`npx tsx apps/discovery/src/index.ts`),
+  confirmed `/healthz` with no auth, a missing/tampered/wrong-secret token
+  all correctly rejected with 401, and a validly signed request returning a
+  real MusicBrainz result end to end (found no issues; the bridge worked on
+  the first real run). Verified `lint`, `typecheck` (clean root `tsc`), a
+  separate `npm run build --workspace @vinylhound/discovery` (its own
+  deployable-output tsconfig, mirroring `apps/worker`'s pattern), `test`
+  (390/390, +90 net new across four new files and edits to two existing
+  ones), the full `npm run build` (all five workspaces including `apps/web`'s
+  Next build), and `format:check`/`prettier --check` with `--end-of-line
+auto` on every changed/new file (plain `npm run check`'s `format:check`
+  still flags ~75 files including many untouched this session — confirmed
+  pre-existing CRLF-checkout noise per this file's own memory note, not a
+  regression). Reverted the generated `apps/web/next-env.d.ts` artifact once
+  after the full build, per the established convention. Cleaned up the
+  smoke-test process and its scratch files before finishing.
+  Checked P4.1 Task 2 in `docs/ROADMAP.md` with a completion note, added a
+  short "Discovery service" section to `docs/ARCHITECTURE.md`, added
+  `apps/discovery`/`packages/service-auth` to `AGENTS.md`'s architectural
+  boundaries and a `dev:discovery` root script, extended `.env.example` with
+  the new variables, and updated this file's "Current state" and "Resume
+  point" to point at P4.1 Task 3/4 next. Left uncommitted for the
+  maintainer's review per this repository's convention.

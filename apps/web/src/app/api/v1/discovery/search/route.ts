@@ -29,11 +29,12 @@ export const GET = withRoute(
     }
 
     const context = getServerContext();
-    await requireUserId(context);
+    const userId = await requireUserId(context);
     const results = await requireDiscovery(context).search({
       query: parsed.data.q,
       type: parsed.data.type,
       limit: parsed.data.limit,
+      userId,
     });
 
     const response = jsonResponse(

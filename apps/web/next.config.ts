@@ -30,6 +30,7 @@ const nextConfig: NextConfig = {
     "@vinylhound/contracts",
     "@vinylhound/database",
     "@vinylhound/domain",
+    "@vinylhound/service-auth",
     "@vinylhound/storage",
   ],
 };

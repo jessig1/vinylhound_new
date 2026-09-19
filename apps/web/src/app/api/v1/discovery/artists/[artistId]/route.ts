@@ -18,12 +18,14 @@ export const GET = withRoute(
     const { artistId } = await route.params;
 
     const context = getServerContext();
-    await requireUserId(context);
+    const userId = await requireUserId(context);
     // A malformed Spotify ID is answered as not_found by the adapter rather
     // than as a 400, because an unknown ID and an unparseable one are the
     // same outcome to the caller: no such artist.
-    const { artist, albums } =
-      await requireDiscovery(context).getArtist(artistId);
+    const { artist, albums } = await requireDiscovery(context).getArtist({
+      artistId,
+      userId,
+    });
 
     const response = jsonResponse(
       DiscoveryArtistDetailResponseSchema.parse({ artist, albums }),

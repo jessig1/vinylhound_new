@@ -18,8 +18,11 @@ export const GET = withRoute(
     const parsedReleaseId = parseUuid(rawReleaseId, "releaseId");
 
     const context = getServerContext();
-    await requireUserId(context);
-    const release = await context.catalog.getReleaseDetails(parsedReleaseId);
+    const userId = await requireUserId(context);
+    const release = await context.catalog.getReleaseDetails({
+      releaseId: parsedReleaseId,
+      userId,
+    });
     const response = jsonResponse(
       GetCatalogReleaseResponseSchema.parse({ release }),
       200,

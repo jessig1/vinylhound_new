@@ -16,6 +16,7 @@ OpenAI Codex is the primary implementation agent; Claude is the continuation and
 - `docker compose up -d` — start local PostgreSQL, Redis, and object storage.
 - `npm run dev` — start the web application.
 - `npm run dev:worker` — start the background worker skeleton.
+- `npm run dev:discovery` — start the standalone discovery service (staging/production only; unused by default local development, which keeps the in-process adapters — ADR-0025).
 - `npm run check` — run formatting, linting, type checks, and tests.
 - `npm run check:contracts` — prove contract compatibility with the previous deployed version (needs git; CI runs it as its own step).
 - `npm run build` — build all implemented workspaces.
@@ -24,9 +25,11 @@ OpenAI Codex is the primary implementation agent; Claude is the continuation and
 
 - `apps/web` owns browser UX and HTTP endpoints. It must never contain provider secrets.
 - `apps/worker` owns slow, retryable, and batch work.
+- `apps/discovery` owns the MusicBrainz/Spotify provider adapters for staging/production (ADR-0025); it is stateless and owns no canonical rows. Development keeps the in-process adapters behind the same ports.
 - `packages/contracts` owns schemas crossing process or network boundaries.
 - `packages/domain` owns provider- and framework-independent business rules.
-- `packages/ai`, `packages/storage`, and `packages/queue` expose ports and provider adapters.
+- `packages/ai`, `packages/catalog`, `packages/storage`, and `packages/queue` expose ports and provider adapters.
+- `packages/service-auth` owns the signed-token mechanism internal services use to assert caller identity and the acting user, together, to each other.
 - `packages/database` owns migrations and database access once persistence is implemented.
 
 Dependencies should point inward: apps may depend on packages; provider packages may depend on contracts/domain; domain must not depend on apps, databases, queues, or web frameworks.

@@ -115,6 +115,14 @@ export const DevelopmentWebConfigSchema = z
     // they do without an OpenAI key. Server-side only — never a NEXT_PUBLIC_.
     SPOTIFY_CLIENT_ID: OptionalNonEmptyStringSchema,
     SPOTIFY_CLIENT_SECRET: OptionalNonEmptyStringSchema,
+    // Both unset (the default): apps/web constructs the MusicBrainz/Spotify
+    // adapters in process, exactly as before ADR-0025. Both set: apps/web
+    // instead calls the standalone apps/discovery service over HTTP, signing
+    // each request with the shared secret (see @vinylhound/service-auth).
+    // ADR-0025 scopes this to staging/production; development leaves both
+    // empty on purpose.
+    DISCOVERY_SERVICE_URL: z.url().optional(),
+    DISCOVERY_SERVICE_SHARED_SECRET: OptionalNonEmptyStringSchema,
     ...OperationsConfigShape,
   })
   .superRefine((value, ctx) => {
@@ -126,6 +134,28 @@ export const DevelopmentWebConfigSchema = z
         code: "custom",
         path: ["SPOTIFY_CLIENT_ID"],
         message: "Spotify client ID and secret must be provided together.",
+      });
+    }
+    if (
+      Boolean(value.DISCOVERY_SERVICE_URL) !==
+      Boolean(value.DISCOVERY_SERVICE_SHARED_SECRET)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DISCOVERY_SERVICE_URL"],
+        message:
+          "DISCOVERY_SERVICE_URL and DISCOVERY_SERVICE_SHARED_SECRET must be provided together.",
+      });
+    }
+    if (
+      value.DISCOVERY_SERVICE_SHARED_SECRET &&
+      value.DISCOVERY_SERVICE_SHARED_SECRET.length < 32
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DISCOVERY_SERVICE_SHARED_SECRET"],
+        message:
+          "DISCOVERY_SERVICE_SHARED_SECRET must be at least 32 characters.",
       });
     }
     if (value.AUTH_MODE !== value.NEXT_PUBLIC_AUTH_MODE) {
@@ -265,9 +295,51 @@ export const QueueWorkerConfigSchema = z
     }
   });
 
+// apps/discovery (P4.1 Task 2, ADR-0025): a small standalone service that
+// owns the MusicBrainz/Spotify adapters for staging/production. It holds no
+// database or object-storage credentials — it is a stateless read path, not
+// a system of record — which is why this schema does not extend
+// InfrastructureConfigShape.
+export const DiscoveryServiceConfigSchema = z
+  .object({
+    NODE_ENV: NodeEnvironmentSchema,
+    // Deliberately not a bare PORT: apps/web (`next dev`/`next start`) reads
+    // that same name from the identical shared root .env this app also
+    // loads, and a same-name value here would silently move Next's own port
+    // instead of this app's.
+    DISCOVERY_SERVICE_PORT: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(65_535)
+      .default(4_001),
+    // Only used to build MusicBrainz's required User-Agent string, matching
+    // apps/web's own `VinylHound/0.1.0 (${APP_URL})` convention.
+    APP_URL: z.url(),
+    DISCOVERY_SERVICE_SHARED_SECRET: z.string().min(32),
+    SPOTIFY_CLIENT_ID: OptionalNonEmptyStringSchema,
+    SPOTIFY_CLIENT_SECRET: OptionalNonEmptyStringSchema,
+    DEPLOYMENT_VERSION: z.string().min(1).default("development"),
+    ENVIRONMENT_NAME: z.string().min(1).default("development"),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      Boolean(value.SPOTIFY_CLIENT_ID) !== Boolean(value.SPOTIFY_CLIENT_SECRET)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SPOTIFY_CLIENT_ID"],
+        message: "Spotify client ID and secret must be provided together.",
+      });
+    }
+  });
+
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type DevelopmentWebConfig = z.infer<typeof DevelopmentWebConfigSchema>;
 export type QueueWorkerConfig = z.infer<typeof QueueWorkerConfigSchema>;
+export type DiscoveryServiceConfig = z.infer<
+  typeof DiscoveryServiceConfigSchema
+>;
 
 export function loadDevelopmentWebConfig(
   environment: NodeJS.ProcessEnv = process.env,
@@ -285,4 +357,10 @@ export function loadQueueWorkerConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): QueueWorkerConfig {
   return QueueWorkerConfigSchema.parse(environment);
+}
+
+export function loadDiscoveryServiceConfig(
+  environment: NodeJS.ProcessEnv = process.env,
+): DiscoveryServiceConfig {
+  return DiscoveryServiceConfigSchema.parse(environment);
 }

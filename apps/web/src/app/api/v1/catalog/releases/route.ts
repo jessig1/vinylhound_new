@@ -33,8 +33,11 @@ export const GET = withRoute(
     }
 
     const context = getServerContext();
-    await requireUserId(context);
-    const results = await context.catalog.searchReleases(parsed.data);
+    const userId = await requireUserId(context);
+    const results = await context.catalog.searchReleases({
+      ...parsed.data,
+      userId,
+    });
     const response = jsonResponse(
       SearchCatalogReleasesResponseSchema.parse({ results }),
       200,

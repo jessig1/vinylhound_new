@@ -35,12 +35,19 @@ agents; if it is stale, the next session inherits a false picture.
 
 ## Commands and environment
 
-Commands are listed in `AGENTS.md`. Notes for this machine (Windows 11,
-PowerShell):
+Commands are listed in `AGENTS.md`. Notes for this machine (Windows 11; the
+user's shell is WSL2 Ubuntu, but this checkout stays at
+`C:\Users\essig\Desktop\vinylhound` on the Windows drive):
 
-- Use `copy .env.example .env`, not `cp`.
-- Git prints LF-to-CRLF warnings; the repository is LF. Do not "fix" line
-  endings.
+- Run `npm`/`node`/`npx` as usual from the WSL shell — `~/.bashrc` wraps them
+  to invoke the Windows-native binaries (via WSL interop) whenever the cwd is
+  inside this repo, forwarding to plain WSL node/npm everywhere else. This
+  works around a real WSL2 DrvFs bug: running WSL's own Linux npm against a
+  `/mnt/c/...` path throws spurious `ENOTDIR`/`ENOENT` errors from concurrent
+  `mkdir` calls during install on a monorepo this size. Don't remove or
+  "simplify" that wrapper — it's the fix, not a workaround to clean up.
+- Use `cp .env.example .env` (a WSL shell, even though npm/node route to
+  Windows binaries for this repo).
 - `npm run check` and `npm run build` are infrastructure-free.
   `npm run test:integration` requires `docker compose up -d` first.
 - Leave `OPENAI_API_KEY` empty for tests and CI; a non-empty key makes the

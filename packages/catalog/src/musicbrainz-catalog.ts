@@ -188,7 +188,7 @@ export function createMusicBrainzCatalog(
       return results;
     },
 
-    async getReleaseDetails(releaseId) {
+    async getReleaseDetails({ releaseId }) {
       const parsedId = z.string().uuid().safeParse(releaseId);
       if (!parsedId.success) {
         throw new CatalogProviderError(

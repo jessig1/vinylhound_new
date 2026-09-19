@@ -5,6 +5,8 @@ import { loadEnvConfig } from "@next/env";
 import { loadDevelopmentWebConfig } from "@vinylhound/config";
 import {
   createMusicBrainzCatalog,
+  createRemoteCatalogClient,
+  createRemoteDiscoveryClient,
   createSpotifyDiscovery,
 } from "@vinylhound/catalog";
 import {
@@ -29,6 +31,20 @@ loadEnvConfig(
 function createServerContext() {
   const config = loadDevelopmentWebConfig();
 
+  // Both unset (the default, including every local/CI run): construct the
+  // MusicBrainz/Spotify adapters in process, exactly as before ADR-0025. Both
+  // set (staging/production per ADR-0025's tier scope): call the standalone
+  // apps/discovery service instead, over an authenticated internal API
+  // (P4.1 Task 2) rather than duplicating provider credentials into a second
+  // process's config.
+  const discoveryService =
+    config.DISCOVERY_SERVICE_URL && config.DISCOVERY_SERVICE_SHARED_SECRET
+      ? {
+          baseUrl: config.DISCOVERY_SERVICE_URL,
+          sharedSecret: config.DISCOVERY_SERVICE_SHARED_SECRET,
+        }
+      : null;
+
   return {
     config,
     database: createDatabase(databaseOptionsFromConfig(config)),
@@ -40,14 +56,22 @@ function createServerContext() {
       secretAccessKey: config.S3_SECRET_ACCESS_KEY,
       forcePathStyle: config.S3_FORCE_PATH_STYLE,
     }),
-    catalog: createMusicBrainzCatalog({
-      userAgent: `VinylHound/0.1.0 (${config.APP_URL})`,
-    }),
-    // Null whenever Spotify credentials are unset. Discovery is an additive
-    // browse surface, so the app boots and scanning keeps working without it;
-    // the routes answer 503 and /discover explains itself (ADR-0019).
-    discovery:
-      config.SPOTIFY_CLIENT_ID && config.SPOTIFY_CLIENT_SECRET
+    catalog: discoveryService
+      ? createRemoteCatalogClient(discoveryService)
+      : createMusicBrainzCatalog({
+          userAgent: `VinylHound/0.1.0 (${config.APP_URL})`,
+        }),
+    // Null whenever discovery has no route to Spotify at all — locally, that
+    // is unset Spotify credentials; behind the discovery service, the remote
+    // client is still constructed (it has no credentials of its own to
+    // check), and an actual call surfaces the service's own 503 as the same
+    // DiscoveryProviderError("not_configured", ...) requireDiscovery expects.
+    // Discovery is an additive browse surface either way, so the app boots
+    // and scanning keeps working without it; the routes answer 503 and
+    // /discover explains itself (ADR-0019).
+    discovery: discoveryService
+      ? createRemoteDiscoveryClient(discoveryService)
+      : config.SPOTIFY_CLIENT_ID && config.SPOTIFY_CLIENT_SECRET
         ? createSpotifyDiscovery({
             clientId: config.SPOTIFY_CLIENT_ID,
             clientSecret: config.SPOTIFY_CLIENT_SECRET,

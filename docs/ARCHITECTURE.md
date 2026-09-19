@@ -55,6 +55,24 @@ deduplication ID and the scan ID as the message group.
 - Domain: review policy, legal status transitions, duplicate rules, and library invariants.
 - Providers: OpenAI, MusicBrainz catalog, queue, and storage behind interfaces.
 
+## Discovery service (P4.1, ADR-0025)
+
+Development keeps the MusicBrainz/Spotify provider adapters in process behind
+`CatalogProvider`/`DiscoveryProvider` (`packages/catalog`), exactly as
+described above. Staging and production instead run a third, standalone
+process — `apps/discovery` — that owns those same adapters behind an
+authenticated internal HTTP API; `apps/web` calls it through a remote client
+implementing the identical port interfaces
+(`createRemoteCatalogClient`/`createRemoteDiscoveryClient`), selected by
+whether `DISCOVERY_SERVICE_URL` is configured. Every internal request carries
+a short-lived signed token (`@vinylhound/service-auth`) binding the caller's
+authenticated user ID to a shared secret only `apps/web` holds, rather than a
+bare header. `apps/discovery` is stateless and owns no canonical rows:
+`albums`, `releases`, and `catalog_references` stay with core/library, so
+`confirmScan` keeps one transaction across catalog and library writes. See
+ADR-0025 for why this is the first extraction and ADR-0009 for the shared
+cache/rate-limit requirement that motivated it.
+
 ## Deployment evolution
 
 For personal use, web and worker can run on one host with one PostgreSQL/Redis deployment. Scale in this order only when measurements justify it:

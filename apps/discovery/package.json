@@ -1,0 +1,17 @@
+{
+  "name": "@vinylhound/discovery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=../../.env src/index.ts",
+    "build": "tsc --project tsconfig.json",
+    "start": "node --env-file-if-exists=../../.env dist/index.js"
+  },
+  "dependencies": {
+    "@vinylhound/catalog": "0.1.0",
+    "@vinylhound/config": "0.1.0",
+    "@vinylhound/contracts": "0.1.0",
+    "@vinylhound/service-auth": "0.1.0"
+  }
+}

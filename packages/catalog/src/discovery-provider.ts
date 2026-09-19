@@ -10,6 +10,23 @@ export interface DiscoverySearchInput {
   query: string;
   type?: DiscoverySearchType;
   limit?: number;
+  /**
+   * The authenticated caller, threaded through every port method so a
+   * remote implementation (P4.1 Task 2) can assert it to the discovery
+   * service rather than the caller trusting a bare header. Unused by the
+   * in-process adapter, which needs no per-user behavior today.
+   */
+  userId: string;
+}
+
+export interface GetDiscoveryArtistInput {
+  artistId: string;
+  userId: string;
+}
+
+export interface GetDiscoveryAlbumInput {
+  albumId: string;
+  userId: string;
 }
 
 /**
@@ -23,9 +40,19 @@ export interface DiscoverySearchInput {
 export interface DiscoveryProvider {
   search(input: DiscoverySearchInput): Promise<DiscoverySearchResults>;
   getArtist(
-    artistId: string,
+    input: GetDiscoveryArtistInput,
   ): Promise<{ artist: DiscoveryArtist; albums: DiscoveryAlbum[] }>;
-  getAlbum(albumId: string): Promise<DiscoveryAlbumDetail>;
+  getAlbum(input: GetDiscoveryAlbumInput): Promise<DiscoveryAlbumDetail>;
+}
+
+/** Shared by `apps/web`'s HTTP boundary and `apps/discovery` so the two never disagree on status mapping. */
+export function discoveryProviderErrorStatus(
+  category: DiscoveryProviderErrorCategory,
+): number {
+  if (category === "rate_limit") return 429;
+  if (category === "not_found") return 404;
+  if (category === "not_configured") return 503;
+  return 502;
 }
 
 export type DiscoveryProviderErrorCategory =

@@ -7,13 +7,36 @@ export interface SearchCatalogReleasesInput {
   artist: string;
   title: string;
   limit?: number;
+  /**
+   * The authenticated caller, threaded through every port method so a
+   * remote implementation (P4.1 Task 2) can assert it to the discovery
+   * service rather than the caller trusting a bare header. Unused by the
+   * in-process adapter, which needs no per-user behavior today.
+   */
+  userId: string;
+}
+
+export interface GetCatalogReleaseDetailsInput {
+  releaseId: string;
+  userId: string;
 }
 
 export interface CatalogProvider {
   searchReleases(
     input: SearchCatalogReleasesInput,
   ): Promise<CatalogReleaseCandidate[]>;
-  getReleaseDetails(releaseId: string): Promise<CatalogReleaseDetail>;
+  getReleaseDetails(
+    input: GetCatalogReleaseDetailsInput,
+  ): Promise<CatalogReleaseDetail>;
+}
+
+/** Shared by `apps/web`'s HTTP boundary and `apps/discovery` so the two never disagree on status mapping. */
+export function catalogProviderErrorStatus(
+  category: CatalogProviderErrorCategory,
+): number {
+  if (category === "rate_limit") return 429;
+  if (category === "not_found") return 404;
+  return 502;
 }
 
 export type CatalogProviderErrorCategory =
