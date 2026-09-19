@@ -28,6 +28,11 @@ code disagree. State clearly which areas were not examined.
 
 ## Handoff discipline
 
+Complete the shared task-delivery procedure in
+[docs/AGENT_DELIVERY.md](docs/AGENT_DELIVERY.md): track outstanding manual work,
+commit and push each task with its `p-<phase>.<milestone>.<task>` subject, monitor
+the pushed commit's Actions runs, and create/update issues for failures.
+
 Before ending any session that changed files or reached a decision, update
 `docs/HANDOFF.md`: current verified state, work completed, the next resume
 point, and a session-log entry. That file is the only memory shared across

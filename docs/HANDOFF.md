@@ -15,6 +15,24 @@ the log.
 
 ## Current state — verified 2026-09-19
 
+- **P2.1 Task 9 adds mandatory agent delivery rules (`p-2.1.9`).** The
+  maintainer requires issues for outstanding manual actions, a separate commit
+  and push per task, monitoring of the pushed commit's applicable Actions runs,
+  and actionable issues for failures. `AGENTS.md` now mandates
+  `docs/AGENT_DELIVERY.md`; `CLAUDE.md`, `CONTRIBUTING.md`, and P2.1 agree.
+  Commit subjects are exactly `p-<phase>.<milestone>.<task>`, with descriptions
+  in the body. Unplanned work without a roadmap home uses the reserved
+  `p-0.0.<issue-number>` maintenance namespace. Tracking and post-push evidence:
+  [issue #21](https://github.com/jessig1/vinylhound_new/issues/21) and its linked
+  delivery PR on `docs/agent-delivery-rules`. At document-authoring time the
+  push/Actions verification is pending; the agent must complete it before final
+  handoff and record the actual outcomes there. Local lint/typecheck and all
+  403 unit tests passed; changed-file formatting passed, and whole-repository
+  formatting passed with `--end-of-line auto` for this Windows checkout.
+  Existing manual issues are
+  reused, not recreated. This changes agent instructions only, not application
+  code or workflow automation; P4.2 Task 3 remains the next implementation task.
+
 - **Continuous-capture reliability research is complete; implementation was
   explicitly out of scope.** See
   `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` for the code review, primary-source
@@ -2408,7 +2426,14 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Latest task, 2026-09-19: continuous-capture research and planning only.** Read
+**Latest task, 2026-09-19: P2.1 Task 9, agent delivery rules.** Follow
+`docs/AGENT_DELIVERY.md` for all subsequent tasks. Check
+[issue #21](https://github.com/jessig1/vinylhound_new/issues/21) and its linked
+PR for the pushed revision, final Actions results, and any follow-up issues.
+Those post-push records avoid recursive handoff-only commits. The feature
+roadmap resumes at P4.2 Task 3 below unless the maintainer redirects it.
+
+**Prior task, 2026-09-19: continuous-capture research and planning only.** Read
 `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` before changing capture behavior.
 The maintainer explicitly requested no code changes in that session. If a later
 task starts this work, begin with Phase 1's album/no-album baseline and Phase 2's
@@ -5575,3 +5600,19 @@ repository.ts`'s daily-analysis quota count and `operations-repository.ts`'s
   the working tree was clean at session start (last commit `5529b93 p4.2
 task 1`), so every changed/new file listed above belongs to this session
   alone.
+
+- **2026-09-19 - Codex.** Implemented the maintainer's requested delivery rule as
+  P2.1 Task 9 (`p-2.1.9`), tracked in issue #21. Added `docs/AGENT_DELIVERY.md`
+  and mandatory root guidance for manual-action issues, task commits/pushes,
+  monitoring the exact revision's Actions runs, and deduplicated failure issues.
+  Aligned Claude/contributor guidance and the P2.1 checklist. Used a task branch
+  and PR to respect `main` protection; no application/workflow changes. Verified
+  the existing manual-task issues and did not duplicate them. The initial local
+  `npm run check` stopped at formatting, including the existing Windows
+  line-ending warnings; validation details and final remote delivery evidence
+  are recorded in issue #21's linked PR. The previous main revision's CI,
+  Security, Platform, and Deploy development runs completed successfully during
+  this session. Local lint, typecheck, and all 403 unit tests passed, as did
+  changed-file formatting, `git diff --check`, and whole-repository formatting
+  with `--end-of-line auto`. New task-branch runs must still be verified
+  independently; see the durable GitHub delivery record for their final results.

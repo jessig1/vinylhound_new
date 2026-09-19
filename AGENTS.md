@@ -10,6 +10,41 @@ Read `README.md`, then the relevant file under `docs/`. Architecture decisions l
 
 OpenAI Codex is the primary implementation agent; Claude is the continuation and review agent (see `CLAUDE.md`). Cross-session state lives in `docs/HANDOFF.md`: read it at session start, and update its current state, resume point, and session log before ending any session that changed files or reached a decision.
 
+## Required task delivery
+
+Follow [docs/AGENT_DELIVERY.md](docs/AGENT_DELIVERY.md) for every task. The
+maintainer authorizes agents to create/update task issues, commit task changes,
+push task branches, open pull requests when needed to run checks, and inspect
+GitHub Actions without requesting confirmation again. A newer task instruction
+such as "do not commit" overrides this default for that task.
+
+- **Track manual work.** Create a GitHub issue for each required manual action
+  that remains outstanding, including device tests, account configuration,
+  deployment rehearsals, and human verification. Search first and update a
+  matching issue instead of duplicating it. Include runnable steps, prerequisites,
+  acceptance evidence, and the related roadmap task; link it from the handoff.
+- **Commit and push each task separately.** Use the exact commit subject
+  `p-<phase>.<milestone>.<task>`, for example `p-4.2.3`. Put the change summary,
+  verification, and issue references in the commit body. Resolve the task ID
+  before committing, stage only that task's changes, and push before handing off.
+  Do not leave completed changes uncommitted merely because the latest prompt
+  did not repeat "commit and push". Respect branch protection and use a task
+  branch/PR; this rule does not authorize merging or bypassing checks.
+- **Monitor the pushed commit.** Discover all expected Actions workflows for its
+  event/branch and monitor their runs through completion, including downstream
+  workflows where applicable. Confirm the exact SHA and latest attempt. A
+  successful push, an older green run, missing checks, or pending checks does
+  not establish a healthy pipeline. Explain legitimate conditional skips.
+- **Track every pipeline failure.** Inspect failing jobs/steps and create an
+  actionable GitHub issue, or update the matching open issue, with the commit,
+  run/job links, sanitized failure evidence, and the checks needed to verify a
+  fix. This applies even to pre-existing failures or failures followed by a
+  successful retry. Keep failures visible while addressing in-scope fixes.
+- **Report delivery honestly.** Include the task ID, pushed commit/PR, workflow
+  outcomes and links, and manual/failure issues in the final handoff. If access,
+  a runner, or human approval blocks completion, report the blocker and pending
+  work; never describe the pipeline as healthy without verification.
+
 ## Commands
 
 - `npm install` — install all workspace dependencies.
