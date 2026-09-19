@@ -177,10 +177,15 @@ export const outboxMessages = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     topic: text("topic").notNull(),
-    aggregateId: uuid("aggregate_id")
-      .notNull()
-      .references(() => scans.id, { onDelete: "cascade" }),
-    attemptNumber: integer("attempt_number").notNull(),
+    // Not a foreign key: the outbox now carries events for aggregates outside
+    // this schema (P4.2 Task 2, ADR-0027), so existence/ownership is an
+    // application invariant enforced by the producer transaction rather than
+    // a database constraint.
+    aggregateType: text("aggregate_type").notNull(),
+    aggregateId: uuid("aggregate_id").notNull(),
+    // Analysis-specific retry counter; other topics (e.g. a confirmation
+    // event, which fires once) have none.
+    attemptNumber: integer("attempt_number"),
     idempotencyKey: text("idempotency_key").notNull(),
     payload: jsonb("payload").notNull(),
     correlationId: text("correlation_id"),
@@ -198,17 +203,20 @@ export const outboxMessages = pgTable(
     uniqueIndex("outbox_messages_idempotency_key_unique").on(
       table.idempotencyKey,
     ),
-    uniqueIndex("outbox_messages_topic_aggregate_attempt_unique").on(
-      table.topic,
+    index("outbox_messages_aggregate_idx").on(
+      table.aggregateType,
       table.aggregateId,
-      table.attemptNumber,
     ),
     index("outbox_messages_pending_idx")
       .on(table.availableAt, table.createdAt)
       .where(sql`${table.publishedAt} is null`),
     check(
-      "outbox_messages_topic_check",
-      sql`${table.topic} = 'scan.analyze.v1'`,
+      "outbox_messages_topic_format_check",
+      sql`${table.topic} ~ '^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.v[1-9][0-9]*$'`,
+    ),
+    check(
+      "outbox_messages_aggregate_type_length_check",
+      sql`char_length(${table.aggregateType}) between 1 and 63`,
     ),
     check(
       "outbox_messages_idempotency_key_length_check",
@@ -220,7 +228,7 @@ export const outboxMessages = pgTable(
     ),
     check(
       "outbox_messages_attempt_number_check",
-      sql`${table.attemptNumber} > 0`,
+      sql`${table.attemptNumber} is null or ${table.attemptNumber} > 0`,
     ),
     check(
       "outbox_messages_correlation_id_length_check",

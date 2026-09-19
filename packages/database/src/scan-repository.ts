@@ -1,17 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gte,
-  inArray,
-  isNull,
-  lte,
-  sql,
-} from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 
 import {
   ANALYZE_SCAN_JOB,
@@ -19,7 +8,6 @@ import {
   AnalyzeScanJobSchema,
   RETRYABLE_SCAN_STATUSES,
   MAX_SCANS_PER_BATCH,
-  type AnalyzeScanJob,
   type ImageMimeType,
   type ImageViewType,
   type IngestionSource,
@@ -379,6 +367,9 @@ export async function completeImageUpload(
 
 const INITIAL_SCAN_ATTEMPT = 1;
 
+/** This service's sole outbox aggregate type today (P4.2 Task 2). */
+const SCAN_AGGREGATE_TYPE = "scan";
+
 export interface ScanQuotaLimits {
   dailyAnalysisLimit: number;
   activeScanLimit: number;
@@ -435,6 +426,7 @@ async function computeQuotaHeadroom(
     .innerJoin(scans, eq(scans.id, outboxMessages.aggregateId))
     .where(
       and(
+        eq(outboxMessages.topic, ANALYZE_SCAN_JOB),
         eq(scans.userId, input.userId),
         gte(outboxMessages.createdAt, dayStart),
       ),
@@ -672,6 +664,7 @@ export async function submitScan(
 
     await transaction.insert(outboxMessages).values({
       topic: ANALYZE_SCAN_JOB,
+      aggregateType: SCAN_AGGREGATE_TYPE,
       aggregateId: scan.id,
       attemptNumber: INITIAL_SCAN_ATTEMPT,
       idempotencyKey: jobId,
@@ -785,6 +778,7 @@ export async function retryScan(
 
     await transaction.insert(outboxMessages).values({
       topic: ANALYZE_SCAN_JOB,
+      aggregateType: SCAN_AGGREGATE_TYPE,
       aggregateId: scan.id,
       attemptNumber: nextAttemptNumber,
       idempotencyKey: jobId,
@@ -1006,95 +1000,4 @@ export async function getBatchForUser(
     .orderBy(asc(scans.createdAt), asc(scans.id));
 
   return { batch, scanIds: batchScans.map((scan) => scan.id) };
-}
-
-export type OutboxDispatchResult =
-  | { status: "idle" }
-  | { status: "published"; messageId: string; jobId: string }
-  | { status: "deferred"; messageId: string; jobId: string }
-  | { status: "canceled"; messageId: string; jobId: string };
-
-export async function dispatchNextOutboxMessage(
-  db: Database,
-  publish: (job: AnalyzeScanJob, idempotencyKey: string) => Promise<void>,
-  now = new Date(),
-): Promise<OutboxDispatchResult> {
-  return db.transaction(async (transaction) => {
-    const [message] = await transaction
-      .select()
-      .from(outboxMessages)
-      .where(
-        and(
-          isNull(outboxMessages.publishedAt),
-          lte(outboxMessages.availableAt, now),
-        ),
-      )
-      .orderBy(asc(outboxMessages.createdAt))
-      .limit(1)
-      .for("update", { skipLocked: true });
-
-    if (!message) {
-      return { status: "idle" };
-    }
-
-    const [owningScan] = await transaction
-      .select({ status: scans.status })
-      .from(scans)
-      .where(eq(scans.id, message.aggregateId));
-    if (owningScan?.status === "canceled") {
-      await transaction
-        .update(outboxMessages)
-        .set({
-          publishAttempts: sql`${outboxMessages.publishAttempts} + 1`,
-          publishedAt: now,
-          lastError: "Skipped: the owning scan was canceled.",
-        })
-        .where(eq(outboxMessages.id, message.id));
-      return {
-        status: "canceled",
-        messageId: message.id,
-        jobId: message.idempotencyKey,
-      };
-    }
-
-    const nextAttempt = message.publishAttempts + 1;
-    try {
-      // A stored payload may come from a newer web deployment; read it
-      // tolerantly so an unknown advisory field cannot poison the row.
-      const job = ANALYZE_SCAN_JOB_CONTRACT.consumerSchema.parse(
-        message.payload,
-      );
-      await publish(job, message.idempotencyKey);
-    } catch {
-      const delayMs = Math.min(2 ** Math.min(nextAttempt, 6) * 1_000, 60_000);
-      await transaction
-        .update(outboxMessages)
-        .set({
-          publishAttempts: sql`${outboxMessages.publishAttempts} + 1`,
-          availableAt: new Date(now.getTime() + delayMs),
-          lastError: "Queue publication failed.",
-        })
-        .where(eq(outboxMessages.id, message.id));
-      return {
-        status: "deferred",
-        messageId: message.id,
-        jobId: message.idempotencyKey,
-      };
-    }
-
-    await transaction
-      .update(outboxMessages)
-      .set({
-        publishAttempts: sql`${outboxMessages.publishAttempts} + 1`,
-        publishedAt: now,
-        lastError: null,
-      })
-      .where(eq(outboxMessages.id, message.id));
-
-    return {
-      status: "published",
-      messageId: message.id,
-      jobId: message.idempotencyKey,
-    };
-  });
 }

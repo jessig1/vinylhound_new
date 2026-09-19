@@ -57,6 +57,50 @@ the log.
   services" section; `docs/decisions/README.md` and `docs/ROADMAP.md`'s
   P4.2 status row were updated to match.
 
+- **P4.2 Task 2 (generalize the outbox for multiple aggregate types/topics)
+  is done, amending ADR-0004 rather than adding a new ADR.**
+  `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 2 entry has full
+  detail; short version: migration
+  `packages/database/migrations/018_generalize_outbox.sql` adds
+  `outbox_messages.aggregate_type`, drops `aggregate_id`'s foreign key into
+  `scans` (existence/ownership is now a producer-transaction invariant, not
+  a DB constraint — same pattern as ADR-0027's temporary cross-schema FKs),
+  replaces the single-literal `topic` CHECK with a general
+  `<aggregate>.<action>.v<N>` format CHECK matching
+  `packages/contracts/src/versioning.ts`'s `EVENT_TOPIC_PATTERN`, and makes
+  `attempt_number` nullable while dropping the
+  `(topic, aggregate_id, attempt_number)` uniqueness constraint in favor of
+  the `idempotency_key` uniqueness every topic already has. This resolves
+  all four scan-only constraints `docs/PHASE_3_4_PLAN_REVIEW.md`'s G8 named.
+  The dispatcher moved out of `scan-repository.ts` into its own
+  `packages/database/src/outbox-repository.ts` (G8's fourth item) and is now
+  topic-aware: it claims the oldest available row regardless of topic,
+  looks up a publisher from a caller-supplied topic-keyed registry, and
+  parses the stored payload through that topic's registered `EventContract`
+  consumer schema when one is registered. `SELECT ... FOR UPDATE SKIP
+LOCKED` claiming, exponential backoff, and the row lock held across
+  publish are unchanged. The cancellation skip (a canceled scan's queued job
+  marked published without delivery) is now scoped to the `scan.analyze.v1`
+  topic specifically, not every row. Updated all three outbox-consuming call
+  sites (`apps/worker/src/index.ts`/`lambda.ts`/`e2e-worker.ts`) to a
+  single-entry registry for that topic; runtime behavior for scan analysis
+  is unchanged. Also scoped two pre-existing raw joins on
+  `outbox_messages.aggregateId` that assumed every row was a scan-analysis
+  message — `scan-repository.ts`'s daily-analysis quota count and
+  `operations-repository.ts`'s republishable-jobs query — with an explicit
+  `topic = 'scan.analyze.v1'` filter, since the FK's removal means a future
+  non-analysis topic could otherwise join in through a coincidentally
+  matching `aggregateId`. Added an integration test proving the
+  generalization directly (a non-analysis-topic row naming a canceled scan
+  is dispatched, not skipped; a row naming an aggregate ID with no owning
+  row of any kind is dispatched, since there is no FK to violate;
+  `attempt_number` can be omitted). Verified locally against a real,
+  migrated Postgres (`docker compose up -d`, `npm run db:migrate`): `lint`,
+  `typecheck`, `format:check --end-of-line auto`, `test` (403/403), `test:
+integration` for `@vinylhound/database` (56/56, +1 net new), and `npm run
+build` (all workspaces). `docs/ROADMAP.md`'s P4.2 status row now reads
+  "Task 2 of 7 done".
+
 - **P4.1 Task 5 (service image/ECR/IAM/configuration, staging ECS delivery,
   gated production EKS definitions, bounded retries/timeouts/contract
   compatibility) is implemented and its roadmap checkbox is closed; the live
@@ -2372,23 +2416,25 @@ browser-detector feasibility gate; confirm target-device priority through the
 task context. The proposal is not an implemented fix or an accepted replacement
 for the P4.2 roadmap. P4.2's next task remains as documented below.
 
-**Current, 2026-09-19: P4.2 Task 1 is done (ADR-0027) — see "Current state"
-above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 1 entry for
-full detail.** This was started at the maintainer's explicit direction
-("work on p4.2 task 1"), which is the proceed-without-#19 decision the prior
-resume point asked to have recorded rather than silently skipped — issue
-[#19](https://github.com/jessig1/vinylhound_new/issues/19) (P4.1's live
-staging rehearsal) is still open and unchanged by this session. **Next
-session: P4.2 Task 2** — generalize the outbox in its own migration/refactor
-(aggregate type/ID, topic/version, dedupe key, correlation, topic-aware
-dispatch; remove the scan-only FK/topic CHECK and mandatory attempt-number
-assumption named in ADR-0027 and `docs/PHASE_3_4_PLAN_REVIEW.md`'s G8;
-preserve skip-locked claiming, backoff, and replay safety; scope
-cancellation checks to analysis messages only). Read ADR-0027 first — it
-names the exact tables/FKs Task 2 onward operate against — and
-`packages/database/src/scan-repository.ts`'s existing outbox claim/dispatch
-code (topic CHECK and `aggregate_id` FK are in `schema.ts:175-230`) before
-changing it.
+**Current, 2026-09-19: P4.2 Task 2 is done (ADR-0004 amendment) — see
+"Current state" above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s
+Task 2 entry for full detail.** Continued directly from Task 1 in the same
+session; issue [#19](https://github.com/jessig1/vinylhound_new/issues/19)
+(P4.1's live staging rehearsal) is still open and unchanged. **Next session:
+P4.2 Task 3** — supersede ADR-0005 at cutover: one scan transaction stores
+the reviewed confirmation and a versioned event (using the now-generalized
+outbox from Task 2 — a new topic, a confirmation-shaped aggregate, no
+attempt number needed); a core consumer atomically records an inbox dedupe
+receipt, catalog/library changes, and a completion event; scan consumes
+completion into a projection. No cross-service dual writes. Read ADR-0027
+(the scan/core table split Task 3 must respect — `confirmScan` currently
+writes `library_items`/`library_copies` directly and must stop),
+`packages/database/src/confirmation-repository.ts`'s `confirmScan` (the
+transaction being split), and the new
+`packages/database/src/outbox-repository.ts` (the generalized dispatcher
+Task 3's confirmation event will register a second topic against, via
+`packages/contracts/src/events.ts`'s `EVENT_CONTRACTS` registry) before
+starting.
 
 Prior context, superseded but still relevant: P4.1 is closed out — all five
 tasks are checked in `docs/roadmap/p4.1-extract-discovery.md`. (`docs/ROADMAP.md`
@@ -5456,3 +5502,76 @@ baseline.md`), since that is where the large, still-growing dated
   existing roadmap/ADR changes. No build was needed for this documentation-only
   session. Targeted Prettier checks for the plan and handoff and
   `git diff --check` passed; application/package diffs remained empty.
+
+- **2026-09-19 - Claude.** Completed P4.2 Task 2 at the maintainer's explicit
+  direction ("work on task2 of p 4.2"), continuing directly from the prior
+  Task 1 session. Generalized `outbox_messages` beyond scan analysis
+  (migration `packages/database/migrations/018_generalize_outbox.sql`),
+  resolving the four scan-only constraints `docs/PHASE_3_4_PLAN_REVIEW.md`'s
+  G8 named against `packages/database/src/scan-repository.ts:773-852`
+  (the code the prior resume point pointed at): (1) dropped
+  `outbox_messages_aggregate_id_fkey` and added an `aggregate_type` column —
+  existence/ownership of the named aggregate is now an application invariant
+  the producer transaction enforces, the same pattern ADR-0027 already
+  documents for the cross-schema FKs it leaves as a temporary exception;
+  (2) replaced the `topic = 'scan.analyze.v1'` CHECK with a general
+  `<aggregate>.<action>.v<N>` format CHECK matching
+  `packages/contracts/src/versioning.ts`'s `EVENT_TOPIC_PATTERN`; (3) made
+  `attempt_number` nullable and dropped the
+  `(topic, aggregate_id, attempt_number)` uniqueness constraint, since
+  `idempotency_key`'s own uniqueness already serves as this table's dedupe
+  key for every topic; (4) moved the dispatcher out of `scan-repository.ts`
+  into its own `packages/database/src/outbox-repository.ts` and made it
+  topic-aware — `dispatchNextOutboxMessage` now takes a topic-keyed
+  publisher registry instead of one hard-coded `AnalyzeScanJob` publish
+  callback, parses a claimed row's payload through
+  `packages/contracts/src/events.ts`'s `getEventContract(topic)` when one is
+  registered, and scopes the canceled-scan dispatch skip to the
+  `scan.analyze.v1` topic specifically rather than every row (the roadmap's
+  explicit "scope cancellation checks to analysis messages" instruction).
+  `SELECT ... FOR UPDATE SKIP LOCKED` claiming, exponential backoff on
+  publish failure, and holding the row lock across the publish call are
+  byte-for-byte unchanged from the code being replaced. Updated
+  `scan-repository.ts`'s two outbox-insert call sites (`submitScan`,
+  `retryScan`) to set the new `aggregate_type` column, and updated all three
+  outbox-consuming call sites (`apps/worker/src/index.ts`, `lambda.ts`,
+  `e2e-worker.ts`) to pass a single-entry registry keyed on
+  `ANALYZE_SCAN_JOB`; runtime behavior for scan analysis is unchanged.
+  Found and closed two related gaps surfaced by removing the FK: `scan-
+repository.ts`'s daily-analysis quota count and `operations-repository.ts`'s
+  `listRepublishableAnalysisJobs` both joined `outbox_messages` to `scans` on
+  `aggregateId` with no topic filter, which the FK's non-existence now makes
+  a real (if currently latent, since no second topic exists yet) risk of a
+  future non-analysis row joining in incorrectly; both now filter
+  `topic = 'scan.analyze.v1'` explicitly. Added an integration test in
+  `schema.integration.ts` proving the generalization directly rather than by
+  inference: a synthetic non-analysis-topic row naming a _canceled_ scan as
+  its aggregate is dispatched normally, not skipped; a second synthetic row
+  naming an aggregate ID with no owning row in any table dispatches
+  successfully (the FK is gone, not just relaxed); and neither row was given
+  an `attempt_number`, which a `select` confirms stored as `NULL`. Did not
+  create a new ADR: amended ADR-0004 (the outbox's original decision record)
+  with a dated "Amendment (2026-09-19)" section in the same style as its
+  existing 2026-09-03 SQS amendment, since this is an evolution of that
+  decision's mechanism rather than a new architectural choice — ADR-0027
+  already anticipated Task 2 operating entirely inside `scan`'s own schema,
+  which held true; nothing in ADR-0027 changed. Verified against a real,
+  freshly migrated local Postgres, not just typechecking: `docker compose up
+-d`, `npm run db:migrate` (confirmed migration 018 applies cleanly with no
+  manual intervention), `npm run test:integration --workspace
+@vinylhound/database` (56/56 passing, +1 net new test), plus `lint`
+  (clean), `typecheck` (clean), `format:check --end-of-line auto` (clean —
+  plain `prettier --check .` still reports the same 75 pre-existing CRLF
+  warnings this repository already carries, unrelated to this change and
+  confirmed by re-running with `--end-of-line auto`), `test` (403/403,
+  unchanged count), and `npm run build` (all workspaces); reverted the
+  regenerated `apps/web/next-env.d.ts` artifact afterward per the established
+  convention. Updated `docs/decisions/0004-transactional-outbox-and-bullmq.md`
+  (new amendment), `docs/roadmap/p4.2-scans-async-confirmation.md` (Task 2
+  checkbox and completion note), `docs/ROADMAP.md` (P4.2 status row and the
+  Phase 4 summary row, the latter found stale from the Task 1 session and
+  corrected in passing), and this file's "Current state" and "Resume point"
+  to match. Left uncommitted, since this session was not asked to commit;
+  the working tree was clean at session start (last commit `5529b93 p4.2
+task 1`), so every changed/new file listed above belongs to this session
+  alone.

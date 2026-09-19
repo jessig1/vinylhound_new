@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  ANALYZE_SCAN_JOB,
   MAX_LIBRARY_COPIES_PER_ITEM,
   MAX_PLAYLIST_ENTRIES,
   MAX_PLAYLISTS_PER_USER,
@@ -39,6 +40,7 @@ import {
   updateLibraryCopy,
   updateLibraryItem,
 } from "./library-repository.ts";
+import { dispatchNextOutboxMessage } from "./outbox-repository.ts";
 import { placeLibraryRelease } from "./placement-repository.ts";
 import {
   addPlaylistEntry,
@@ -56,7 +58,6 @@ import {
   createOrGetBatch,
   createOrGetImageUpload,
   createOrGetScan,
-  dispatchNextOutboxMessage,
   getBatchForUser,
   getOrCreateUserIdByClerkId,
   getScanQuotaHeadroomForUser,
@@ -106,10 +107,12 @@ async function dispatchUntil(
   for (let attempts = 0; attempts < 50; attempts += 1) {
     const result = await dispatchNextOutboxMessage(
       database.db,
-      async (job, idempotencyKey) => {
-        if (idempotencyKey === targetJobId) {
-          await publishTarget(job);
-        }
+      {
+        [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
+          if (idempotencyKey === targetJobId) {
+            await publishTarget(payload as AnalyzeScanJob);
+          }
+        },
       },
       new Date(Date.now() + 1_000),
     );
@@ -289,8 +292,10 @@ describe("initial scan persistence schema", () => {
     const firstDispatchAt = new Date(Date.now() + 1_000);
     const deferred = await dispatchNextOutboxMessage(
       database.db,
-      async () => {
-        throw new Error("synthetic Redis outage");
+      {
+        [ANALYZE_SCAN_JOB]: async () => {
+          throw new Error("synthetic Redis outage");
+        },
       },
       firstDispatchAt,
     );
@@ -302,8 +307,11 @@ describe("initial scan persistence schema", () => {
     const publishedJobs: Array<{ jobId: string; scanId: string }> = [];
     const published = await dispatchNextOutboxMessage(
       database.db,
-      async (job, jobId) => {
-        publishedJobs.push({ jobId, scanId: job.scanId });
+      {
+        [ANALYZE_SCAN_JOB]: async (payload, jobId) => {
+          const job = payload as AnalyzeScanJob;
+          publishedJobs.push({ jobId, scanId: job.scanId });
+        },
       },
       new Date(firstDispatchAt.getTime() + 3_000),
     );
@@ -2038,6 +2046,86 @@ describe("batch grouping and scan lifecycle", () => {
     await expect(
       cancelScan(database.db, { userId, scanId: scan.record.id }),
     ).resolves.toMatchObject({ created: false });
+  });
+
+  it("dispatches a non-analysis topic without a scan foreign key, a mandatory attempt number, or the cancellation skip (P4.2 Task 2)", async () => {
+    // A canceled scan proves the cancellation skip is scoped to
+    // scan.analyze.v1: a different topic naming this same canceled scan as
+    // its aggregate must still be delivered normally.
+    const canceledScan = await createOrGetScan(database.db, {
+      userId,
+      source: "single_upload",
+      idempotencyKey: `generalized-outbox-scan-${randomUUID()}`,
+    });
+    await cancelScan(database.db, { userId, scanId: canceledScan.record.id });
+
+    const genericTopic = "core.library_export.v1";
+    const scanAggregateKey = `generalized-outbox-scan-aggregate-${randomUUID()}`;
+    const orphanAggregateId = randomUUID();
+    const orphanAggregateKey = `generalized-outbox-orphan-aggregate-${randomUUID()}`;
+
+    // No FK on aggregate_id: this second row's aggregate_id matches no row
+    // in any table at all, which the old scans(id) foreign key would have
+    // rejected outright.
+    await database.db.insert(outboxMessages).values([
+      {
+        topic: genericTopic,
+        aggregateType: "library_export",
+        aggregateId: canceledScan.record.id,
+        idempotencyKey: scanAggregateKey,
+        payload: { message: "canceled scan is not this topic's concern" },
+      },
+      {
+        topic: genericTopic,
+        aggregateType: "library_export",
+        aggregateId: orphanAggregateId,
+        idempotencyKey: orphanAggregateKey,
+        payload: { message: "no owning row of any kind" },
+      },
+    ]);
+    // Neither row was given an attempt_number, proving it is now optional.
+    const stored = await database.db
+      .select({ attemptNumber: outboxMessages.attemptNumber })
+      .from(outboxMessages)
+      .where(eq(outboxMessages.idempotencyKey, scanAggregateKey));
+    expect(stored[0]?.attemptNumber).toBeNull();
+
+    const publishedPayloads: Record<string, unknown> = {};
+    async function drainUntilBothDispatched() {
+      for (let attempts = 0; attempts < 50; attempts += 1) {
+        if (
+          scanAggregateKey in publishedPayloads &&
+          orphanAggregateKey in publishedPayloads
+        ) {
+          return;
+        }
+        const result = await dispatchNextOutboxMessage(
+          database.db,
+          {
+            // Drains any other test's unrelated, still-pending scan.analyze.v1
+            // rows (schema.integration.ts's shared-table convention), same as
+            // dispatchUntil above.
+            [ANALYZE_SCAN_JOB]: async () => {},
+            [genericTopic]: async (payload, idempotencyKey) => {
+              publishedPayloads[idempotencyKey] = payload;
+            },
+          },
+          new Date(Date.now() + 1_000),
+        );
+        if (result.status === "idle") {
+          throw new Error("Both generalized-outbox rows were never reached.");
+        }
+      }
+      throw new Error("Both generalized-outbox rows were not reached in time.");
+    }
+    await drainUntilBothDispatched();
+
+    expect(publishedPayloads[scanAggregateKey]).toEqual({
+      message: "canceled scan is not this topic's concern",
+    });
+    expect(publishedPayloads[orphanAggregateKey]).toEqual({
+      message: "no owning row of any kind",
+    });
   });
 
   it("dismisses a reviewable scan result idempotently", async () => {

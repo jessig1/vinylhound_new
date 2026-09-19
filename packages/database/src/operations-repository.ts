@@ -1,6 +1,7 @@
 import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 
 import {
+  ANALYZE_SCAN_JOB,
   ANALYZE_SCAN_JOB_CONTRACT,
   type AnalyzeScanJob,
 } from "@vinylhound/contracts";
@@ -38,6 +39,7 @@ export async function listRepublishableAnalysisJobs(
     .innerJoin(scans, eq(scans.id, outboxMessages.aggregateId))
     .where(
       and(
+        eq(outboxMessages.topic, ANALYZE_SCAN_JOB),
         isNotNull(outboxMessages.publishedAt),
         or(eq(scans.status, "queued"), eq(scans.status, "processing")),
       ),

@@ -3,6 +3,7 @@ import {
   createOpenAIAlbumIdentifier,
 } from "@vinylhound/ai";
 import { loadQueueWorkerConfig } from "@vinylhound/config";
+import { ANALYZE_SCAN_JOB, type AnalyzeScanJob } from "@vinylhound/contracts";
 import {
   createDatabase,
   databaseOptionsFromConfig,
@@ -65,12 +66,14 @@ const analyzeScan = createScanAnalysisHandler({
 async function dispatchOutbox() {
   let published = 0;
   while (published < 100) {
-    const result = await dispatchNextOutboxMessage(
-      database.db,
-      async (job, idempotencyKey) => {
-        await queue.enqueueAnalyzeScan(job, idempotencyKey);
+    const result = await dispatchNextOutboxMessage(database.db, {
+      [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
+        await queue.enqueueAnalyzeScan(
+          payload as AnalyzeScanJob,
+          idempotencyKey,
+        );
       },
-    );
+    });
     if (result.status !== "published") break;
     published += 1;
   }
