@@ -64,6 +64,11 @@ tests require the local Compose services.
 - Branch from `main` and use a short descriptive name such as
   `fix/upload-timeout` or `docs/restore-runbook`.
 - Keep a pull request focused on one issue.
+- For numbered tasks, use the exact commit subject
+  `p-<phase>.<milestone>.<task>` (for example `p-4.2.3`) and put the description
+  and validation in the body. Preserve that subject when squash merging.
+  Agents follow the full [task-delivery procedure](docs/AGENT_DELIVERY.md),
+  including manual-task issues, pushing each task, and monitoring Actions.
 - Use a conventional-style pull-request title, for example
   `feat: add queue age alarm` or `fix: preserve signed upload headers`.
 - Link the issue or Discussion that established the scope.

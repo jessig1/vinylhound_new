@@ -30,6 +30,15 @@ accounts and therefore remain release gates.
 - [ ] **Task 8.** Rehearse an untrusted fork pull request: confirm a read-only token, no
       AWS OIDC role, no GitHub environment/provider secret exposure, required
       checks still run on fork code, and no `pull_request_target` execution.
+- [x] **Task 9.** Define mandatory agent delivery rules: track outstanding manual
+      work in GitHub issues, commit and push every task with a
+      `p-<phase>.<milestone>.<task>` subject, monitor Actions for the pushed
+      revision, and create/update failure issues. Added at the maintainer's
+      direction on 2026-09-19; implemented in `AGENTS.md` and
+      [the delivery procedure](../AGENT_DELIVERY.md), shared with Claude and
+      the contributor guide. This is task `p-2.1.9`; post-push verification is
+      recorded in the delivery PR linked from
+      [issue #21](https://github.com/jessig1/vinylhound_new/issues/21).
 
 ## P2.2 — Production runtime and container readiness
 
