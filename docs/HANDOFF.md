@@ -15,11 +15,45 @@ the log.
 
 ## Current state — verified 2026-09-18
 
+- **P4.1 Task 3 (keep canonical `albums`, `releases`, and `catalog_references`
+  with core/library and its transaction; discovery owns no canonical records;
+  cache data is disposable) is complete and committed — Tasks 1-3 of P4.1 are
+  done.** This task needed no code change: the invariant already held before
+  it started (the Task 2 session below had already noted this), and this
+  session's job was to verify that claim structurally rather than take it on
+  faith, then formally close the task. Verified `apps/discovery/package.json`
+  depends on `@vinylhound/catalog`, `@vinylhound/config`,
+  `@vinylhound/contracts`, and `@vinylhound/service-auth` only — no
+  `@vinylhound/database` dependency at all, so it cannot reach the canonical
+  tables even by mistake; this is a build-time guarantee, not just a
+  reviewed convention. Traced both write paths — `confirmScan`
+  (`packages/database/src/confirmation-repository.ts`) and
+  `placeLibraryRelease` (`packages/database/src/placement-repository.ts`) —
+  and confirmed each opens exactly one `db.transaction` and calls the shared
+  `resolveReviewedRelease` (`packages/database/src/release-resolution.ts`)
+  inside it, which takes an already-resolved `CatalogReference` as plain
+  input data rather than calling `CatalogProvider`/`DiscoveryProvider` live;
+  neither repository file imports either port interface. `catalog_references`
+  rows are looked up and reused rather than duplicated on replay
+  (`release-resolution.ts:83-96`, `:147-151`), matching existing integration
+  coverage in `packages/database/src/schema.integration.ts`. Both provider
+  caches (`musicbrainz-catalog.ts`, `spotify-discovery.ts`) are plain
+  in-process `Map`s with TTL expiry — never persisted — so "cache data is
+  disposable" holds trivially. No new ADR: the invariant was already the
+  explicit subject of ADR-0025 and already recorded in
+  `docs/ARCHITECTURE.md`'s "Discovery service" section and `AGENTS.md`'s
+  architectural-boundaries list, both added during Task 2; this task only
+  re-verified and formally closed it. Full detail is in `docs/ROADMAP.md`'s
+  Task 3 completion note under P4.1. Only `docs/ROADMAP.md` and this file
+  changed — no application, contract, or test file did, so no check/build/
+  test command applies; confirmed via `git status` that the tree was clean
+  before this session started.
+
 - **P4.1 Task 2 (move provider adapters, bounded cache, and rate coordination
   behind an authenticated internal discovery API; browser traffic stays
   behind web; require service identity and user authorization, not just a
-  user-ID header) is complete and uncommitted in the working tree for
-  maintainer review.** A new standalone app, `apps/discovery`, now hosts the
+  user-ID header) is complete and committed (`d316cb7`, "p4.1.2").** A new
+  standalone app, `apps/discovery`, now hosts the
   unchanged `packages/catalog` MusicBrainz/Spotify adapters behind five
   routes (`GET /internal/v1/catalog/releases` and its `/{releaseId}` detail
   route, `GET /internal/v1/discovery/search`, `/discovery/artists/{id}`,
@@ -80,8 +114,9 @@ the log.
   containerizing `apps/discovery` and its ECR/IAM/staging delivery (Task 5),
   and the coordination-substrate ADR (Task 4, PostgreSQL lease vs. single
   replica) — this service does not run anywhere outside a developer's own
-  `npm run dev:discovery` yet. Left uncommitted for the maintainer's review
-  per this repository's convention.
+  `npm run dev:discovery` yet. Committed as `d316cb7` ("p4.1.2"); the prior
+  note that this was left uncommitted for maintainer review is superseded —
+  the maintainer reviewed and committed it before the Task 3 session began.
 
 - **P4.1 Task 1 (record discovery extraction's reason, expected benefit,
   cost, and rollback path, using P3.5 evidence and ADR-0009's shared-catalog-
@@ -2158,40 +2193,32 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-18: P4.1 Task 2 is complete, uncommitted — Tasks 1-2 of
-P4.1 are done.** See "Current state" above for the full account. In short: a
-new standalone `apps/discovery` app now hosts the unchanged
-`packages/catalog` MusicBrainz/Spotify adapters behind five internal routes
-plus `/healthz`; `apps/web`'s `CatalogProvider`/`DiscoveryProvider`
-construction (`context.ts`) picks the in-process adapters (development,
-default, unchanged) or a new signed HTTP client
-(`createRemoteCatalogClient`/`createRemoteDiscoveryClient`, when
-`DISCOVERY_SERVICE_URL` is set) — both implement the identical port
-interfaces, so `apps/web`'s routes and HTTP error mapping needed no changes.
-Every internal call carries a short-lived token (new
-`packages/service-auth`, HMAC-SHA256, no new dependency) binding the
-authenticated `userId` to a shared secret, satisfying "service identity and
-user authorization, not just a user-ID header." 90 new unit tests plus a
-real manual smoke test (a live `apps/discovery` process, real MusicBrainz
-call, 401 on missing/tampered/wrong-secret tokens) back this; full
-`lint`/`typecheck`/`test`/`build` are clean.
+**Current, 2026-09-18: P4.1 Task 3 is complete and committed (docs-only) —
+Tasks 1-3 of P4.1 are done.** See "Current state" above for the full
+account. In short: Task 3's invariant (canonical `albums`/`releases`/
+`catalog_references` stay with core/library's transaction; discovery owns
+none) already held before this session started, both structurally
+(`apps/discovery` has no `@vinylhound/database` dependency at all) and in
+the two write paths (`confirmScan`, `placeLibraryRelease`, both in
+`packages/database/src/`), which take pre-resolved `CatalogReference` data
+rather than calling a live provider inside their transaction. This session
+verified that claim rather than assuming it, then checked the box and wrote
+a completion note in `docs/ROADMAP.md`. No application, contract, or test
+file changed. Task 2 (`d316cb7`, "p4.1.2") is confirmed committed — the
+previous "left uncommitted" note is stale and has been corrected above.
 
-**Next is P4.1 Task 3** (keep canonical `albums`, `releases`, and
-`catalog_references` with core/library and its transaction; discovery owns
-no canonical records) — this is already true in the code today (`confirmScan`
-in `packages/database/src/confirmation-repository.ts` never called a live
-catalog/discovery provider even before this session, and Task 2 did not
-change that), so Task 3 is likely a documentation/verification pass
-confirming and formally recording that invariant rather than a code change —
-verify this assumption before assuming there is nothing to do. **Task 4**
-(decide the coordination substrate in its own ADR: PostgreSQL-backed
-cache/rate lease for replicas, or a single discovery replica with explicit
-availability/rollout constraints — ADR-0025 deliberately left this open,
-only ruling out ElastiCache by default) is the more substantial remaining
-decision before Task 5 (service image/ECR/IAM/staging delivery; bounded
-retries, timeouts, failure and contract-compatibility tests). Read
-`docs/ROADMAP.md`'s P4.1 section, ADR-0025, and this session's Task 2 note
-in full before starting either. Nothing in Phase 2's still-open issues
+**Next is P4.1 Task 4**: decide the coordination substrate in its own ADR —
+PostgreSQL-backed cache/rate lease for replicas, or a single discovery
+replica with explicit availability/rollout constraints preventing
+overlapping independent limiters. ADR-0025 deliberately left this open,
+only ruling out ElastiCache by default (no Redis/ElastiCache exists in
+`infra/terraform` today). This is a real decision, not a formality: the
+current in-process `Map`-based caches and MusicBrainz's one-second limiter
+are still per-process, so anything beyond a single `apps/discovery` replica
+needs this settled before Task 5 (service image/ECR/IAM/staging delivery;
+bounded retries, timeouts, failure and contract-compatibility tests) can
+assume more than one replica. Read `docs/ROADMAP.md`'s P4.1 section and
+ADR-0025 in full before starting. Nothing in Phase 2's still-open issues
 (#8-#10) blocks P4.1 itself, only later EKS/production-rehearsal-adjacent
 work.
 
@@ -4838,3 +4865,52 @@ auto` on every changed/new file (plain `npm run check`'s `format:check`
   the new variables, and updated this file's "Current state" and "Resume
   point" to point at P4.1 Task 3/4 next. Left uncommitted for the
   maintainer's review per this repository's convention.
+
+- **2026-09-18 - Claude (new session).** Opened with `git status` clean and
+  `git log` showing `d316cb7` ("p4.1.2") on `main` — confirmed this was the
+  prior Task 2 session's work, committed by the maintainer after review, so
+  the "left uncommitted" note at the end of that entry above (and in
+  "Current state") was stale; corrected both in place rather than leaving
+  the false picture for the next session.
+  Picked up P4.1 Task 3: keep canonical `albums`/`releases`/
+  `catalog_references` with core/library and its transaction; discovery owns
+  no canonical records, cache data is disposable. The Task 2 session had
+  already flagged (in its own log entry above) that this invariant looked
+  true structurally, and the Task 3 resume-point note explicitly warned not
+  to assume there was nothing to do without verifying — so this session
+  verified rather than took the claim on faith. Read `apps/discovery/
+package.json` (dependencies: `@vinylhound/catalog`, `@vinylhound/config`,
+  `@vinylhound/contracts`, `@vinylhound/service-auth` — no
+  `@vinylhound/database`, confirmed by search across the file, so this is a
+  build-time guarantee rather than a reviewed convention). Traced
+  `confirmScan` (`packages/database/src/confirmation-repository.ts`) and
+  `placeLibraryRelease` (`packages/database/src/placement-repository.ts`):
+  both call the shared `resolveReviewedRelease`
+  (`packages/database/src/release-resolution.ts`) inside exactly one
+  `db.transaction`, and that function takes an already-resolved
+  `CatalogReference` as plain data — the confirmed scan's stored candidate,
+  or the client's `/discover` request body — never a live
+  `CatalogProvider`/`DiscoveryProvider` call; confirmed neither repository
+  file imports either port interface. Confirmed `catalog_references` rows
+  are looked up and reused on a matching provider/entity/external-id rather
+  than duplicated (`release-resolution.ts:83-96`, `:147-151`), backed by
+  existing integration coverage already in `packages/database/src/
+schema.integration.ts` (not new — this session added no tests). Confirmed
+  both provider caches (`musicbrainz-catalog.ts`, `spotify-discovery.ts`)
+  are plain in-process `Map`s with TTL expiry and no persistence, so "cache
+  data is disposable" holds without further work. Found the invariant
+  already formally recorded in three places from Task 1/2's own work —
+  ADR-0025, `docs/ARCHITECTURE.md`'s "Discovery service" section, and
+  `AGENTS.md`'s architectural-boundaries list — so wrote no new ADR; a new
+  one would have restated an existing decision rather than made one.
+  Checked P4.1 Task 3 in `docs/ROADMAP.md` with a full completion note
+  recording the verification, and updated this file's "Current state" and
+  "Resume point" to point at P4.1 Task 4 next: deciding the coordination
+  substrate (PostgreSQL-backed cache/rate lease vs. a single discovery
+  replica) in its own ADR, which ADR-0025 deliberately left open and which
+  is a substantive decision, not a formality — it gates whether
+  `apps/discovery` can ever run more than one replica. This task changed no
+  application, contract, or test code, only `docs/ROADMAP.md` and this
+  file, so no check/build/test command applies; verified via `git status`
+  that the tree was clean before starting and only these two docs files
+  changed after.

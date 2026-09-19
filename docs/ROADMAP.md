@@ -980,7 +980,7 @@ remain authoritative until the corresponding cutover.
 - [x] **Task 2.** Move provider adapters, bounded cache, and rate coordination behind an
       authenticated internal discovery API. Browser traffic stays behind web;
       require service identity and user authorization, not just a user-ID header.
-- [ ] **Task 3.** Keep canonical `albums`, `releases`, and `catalog_references` with the
+- [x] **Task 3.** Keep canonical `albums`, `releases`, and `catalog_references` with the
       core/library and its transaction. Discovery owns no canonical records;
       cache data is disposable.
 - [ ] **Task 4.** Decide the coordination substrate in an ADR: PostgreSQL-backed cache/rate
@@ -1057,6 +1057,41 @@ here, per the roadmap's own task split: containerizing `apps/discovery`,
 ECR/IAM/staging delivery (Task 5), and the coordination substrate ADR
 (Task 4) — this service does not yet run anywhere outside a developer's own
 `npm run dev:discovery`.
+
+Task 3 completed 2026-09-18: verified, not implemented — the invariant
+already held before this task and needed no code change. Checked structural
+enforcement, not just prose: `apps/discovery/package.json` depends on
+`@vinylhound/catalog`, `@vinylhound/config`, `@vinylhound/contracts`, and
+`@vinylhound/service-auth` only, with no dependency on `@vinylhound/database`
+at all, so it cannot reach `albums`, `releases`, or `catalog_references` even
+by mistake — this is stronger than a documented convention because it fails
+at install/build time, not at review time. Traced both call sites that write
+those tables — `confirmScan` (`packages/database/src/
+confirmation-repository.ts`) and `placeLibraryRelease` (`packages/database/
+src/placement-repository.ts`) — and confirmed each opens exactly one
+`db.transaction` and calls the shared `resolveReviewedRelease`
+(`packages/database/src/release-resolution.ts`) inside it, which takes an
+already-resolved `CatalogReference` as plain input data (from the confirmed
+scan's stored candidate or the client's `/discover` request body) rather than
+calling `CatalogProvider`/`DiscoveryProvider` live; neither port interface is
+imported by either repository file. `catalog_references` rows are looked up
+by provider/entity/external-id and reused (`ON CONFLICT`/existing-row check
+at `release-resolution.ts:83-96` and `:147-151`) rather than duplicated on
+replay, confirmed against the existing integration coverage in
+`packages/database/src/schema.integration.ts` (`confirmScan`/
+`placeLibraryRelease` idempotency and catalog-reference-reuse assertions
+already present, e.g. around line 904's `catalogReferences` query). Cache
+disposability holds trivially: both provider caches
+(`musicbrainz-catalog.ts`, `spotify-discovery.ts`) are plain in-process
+`Map`s with TTL expiry, never written to disk, S3, or a database from
+`apps/discovery`. This confirms the Task 2 session's own note that "Task 3's
+invariant already holds structurally" (see this file's session log). No new
+ADR was written: the invariant was already the explicit subject of ADR-0025
+and is already recorded in `docs/ARCHITECTURE.md`'s "Discovery service"
+section and `AGENTS.md`'s architectural-boundaries list, both added during
+Task 2 — this task only re-verified and formally closed it rather than
+deciding anything new. No code, contract, test, or doc file changed other
+than this roadmap entry and `docs/HANDOFF.md`.
 
 Exit: deploy and roll back a discovery-only change in staging without rebuilding
 web/worker. Demonstrate bounded cache and provider-wide rate coordination under
