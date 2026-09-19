@@ -203,4 +203,32 @@ describe("MusicBrainz catalog", () => {
     ).rejects.toMatchObject({ category: "not_found" });
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("evicts the oldest cached search once maxCacheEntries is exceeded", async () => {
+    const request = vi.fn(async () => response());
+    const catalog = createMusicBrainzCatalog({
+      userAgent: "VinylHound/0.1.0 (https://vinylhound.test)",
+      fetch: request as typeof fetch,
+      now: () => Date.parse("2026-08-31T12:00:00.000Z"),
+      maxCacheEntries: 1,
+    });
+
+    await catalog.searchReleases({
+      artist: "Miles Davis",
+      title: "Kind of Blue",
+      userId,
+    });
+    await catalog.searchReleases({
+      artist: "Miles Davis",
+      title: "Sketches of Spain",
+      userId,
+    });
+    await catalog.searchReleases({
+      artist: "Miles Davis",
+      title: "Kind of Blue",
+      userId,
+    });
+
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 });

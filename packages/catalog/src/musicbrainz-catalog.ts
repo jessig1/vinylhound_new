@@ -7,6 +7,7 @@ import {
   type CatalogReleaseDetail,
 } from "@vinylhound/contracts";
 
+import { createBoundedCache } from "./bounded-cache.ts";
 import {
   CatalogProviderError,
   type CatalogProvider,
@@ -112,6 +113,7 @@ export interface MusicBrainzCatalogOptions {
   fetch?: typeof fetch;
   minimumRequestIntervalMs?: number;
   cacheTtlMs?: number;
+  maxCacheEntries?: number;
   timeoutMs?: number;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -132,22 +134,25 @@ export function createMusicBrainzCatalog(
     now,
     sleep,
   );
-  const searchCache = new Map<
-    string,
-    { expiresAt: number; value: CatalogReleaseCandidate[] }
-  >();
-  const detailsCache = new Map<
-    string,
-    { expiresAt: number; value: CatalogReleaseDetail }
-  >();
   const cacheTtlMs = options.cacheTtlMs ?? 24 * 60 * 60 * 1_000;
+  const maxCacheEntries = options.maxCacheEntries ?? 500;
+  const searchCache = createBoundedCache<CatalogReleaseCandidate[]>({
+    maxEntries: maxCacheEntries,
+    ttlMs: cacheTtlMs,
+    now,
+  });
+  const detailsCache = createBoundedCache<CatalogReleaseDetail>({
+    maxEntries: maxCacheEntries,
+    ttlMs: cacheTtlMs,
+    now,
+  });
 
   return {
     async searchReleases(input) {
       const normalizedInput = normalizeInput(input);
       const cacheKey = JSON.stringify(normalizedInput);
       const cached = searchCache.get(cacheKey);
-      if (cached && cached.expiresAt > now()) return cached.value;
+      if (cached) return cached;
 
       const query = [
         `artist:${quoteLucene(normalizedInput.artist)}`,
@@ -181,10 +186,7 @@ export function createMusicBrainzCatalog(
         const candidate = toCandidate(release, fetchedAt);
         return candidate ? [candidate] : [];
       });
-      searchCache.set(cacheKey, {
-        expiresAt: now() + cacheTtlMs,
-        value: results,
-      });
+      searchCache.set(cacheKey, results);
       return results;
     },
 
@@ -198,7 +200,7 @@ export function createMusicBrainzCatalog(
         );
       }
       const cached = detailsCache.get(parsedId.data);
-      if (cached && cached.expiresAt > now()) return cached.value;
+      if (cached) return cached;
 
       const url = new URL(
         `${baseUrl.replace(/\/$/, "")}/release/${parsedId.data}`,
@@ -235,10 +237,7 @@ export function createMusicBrainzCatalog(
           "The catalog response did not match the expected schema.",
         );
       }
-      detailsCache.set(parsedId.data, {
-        expiresAt: now() + cacheTtlMs,
-        value: detail,
-      });
+      detailsCache.set(parsedId.data, detail);
       return detail;
     },
   };

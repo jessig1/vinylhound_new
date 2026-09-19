@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { DiscoveryProviderError } from "./discovery-provider.ts";
-import { createSpotifyDiscovery } from "./spotify-discovery.ts";
+import {
+  createSpotifyDiscovery,
+  type SpotifyDiscoveryOptions,
+} from "./spotify-discovery.ts";
 
 const TOKEN_URL = "https://accounts.test/token";
 const BASE_URL = "https://api.test/v1";
@@ -42,6 +45,7 @@ const kindOfBlueAlbum = {
 
 function createProvider(
   handler: (url: string, init?: RequestInit) => Response | Promise<Response>,
+  overrides: Partial<SpotifyDiscoveryOptions> = {},
 ) {
   const calls: string[] = [];
   const provider = createSpotifyDiscovery({
@@ -54,6 +58,7 @@ function createProvider(
       calls.push(url);
       return handler(url, init);
     }) as typeof fetch,
+    ...overrides,
   });
   return { provider, calls };
 }
@@ -69,6 +74,22 @@ describe("createSpotifyDiscovery", () => {
     await provider.search({ query: "coltrane", type: "artist", userId });
 
     expect(calls.filter((url) => url === TOKEN_URL)).toHaveLength(1);
+  });
+
+  it("evicts the oldest cached search once maxCacheEntries is exceeded", async () => {
+    const { provider, calls } = createProvider(
+      (url) => {
+        if (url === TOKEN_URL) return jsonResponse(tokenBody);
+        return jsonResponse({ artists: { items: [milesArtist] } });
+      },
+      { maxCacheEntries: 1 },
+    );
+
+    await provider.search({ query: "miles davis", type: "artist", userId });
+    await provider.search({ query: "coltrane", type: "artist", userId });
+    await provider.search({ query: "miles davis", type: "artist", userId });
+
+    expect(calls.filter((url) => url !== TOKEN_URL)).toHaveLength(3);
   });
 
   it("maps artists, albums and tracks out of one unified search", async () => {

@@ -15,6 +15,84 @@ the log.
 
 ## Current state — verified 2026-09-18
 
+- **The provider-cache known gap ADR-0026 recorded (no count bound, only TTL
+  expiry) is closed, uncommitted in the working tree for maintainer review.**
+  New shared `packages/catalog/src/bounded-cache.ts`
+  (`createBoundedCache<T>({ maxEntries, ttlMs, now })`): a `Map`-backed
+  cache with lazy TTL expiry (unchanged behavior) plus least-recently-used
+  eviction once `maxEntries` is exceeded, tracked purely through `Map`
+  insertion order (a hit deletes-then-reinserts its key to mark it
+  most-recently-used; a `set` past capacity drops the first/oldest key) — no
+  new dependency, matching this repo's established preference for small
+  in-house mechanisms over an LRU package. `musicbrainz-catalog.ts`'s
+  `searchCache`/`detailsCache` and `spotify-discovery.ts`'s `cache` now all
+  use it, each with a new `maxCacheEntries` option on their provider
+  constructors (default `500`, both unaffected callers keep every current
+  default since none pass it). Behavior is otherwise identical: same TTLs
+  (24h/1h), same cache-key shapes, same lazy-expiry-on-access semantics; the
+  only change is a size ceiling that did not exist before. 7 new unit tests:
+  a dedicated `bounded-cache.test.ts` (TTL hit/expiry, LRU eviction order, a
+  `get` protecting an entry from eviction by refreshing its recency, a
+  re-`set` doing the same without growing the cache) plus one eviction test
+  added to each provider's existing test file (`maxCacheEntries: 1`, three
+  calls where the third repeats the first, asserting all three reach the
+  network — proof the first entry was actually evicted, not merely that the
+  API still works). Full `lint`, `typecheck`, `test` (397/397, +7 net new),
+  and `build` (all five workspaces, including `apps/discovery` and
+  `apps/web`'s Next build) are clean; verified with `--end-of-line auto`
+  formatting on every changed/new file. Reverted the generated
+  `apps/web/next-env.d.ts` artifact once after the full build, per the
+  established convention. This was ad hoc follow-up work requested directly
+  (not a roadmap task): P4.1's own task list is unaffected, still at "Tasks
+  1-4 done, only Task 5 remains" per the entry below. The "Known gaps and
+  risks" bullet ADR-0026's session recorded for this has been removed rather
+  than left stale, and `docs/ROADMAP.md`'s Task 4 completion note is amended
+  in place to say the gap it mentioned was closed same-day rather than left
+  to rot as a dangling forward reference.
+
+- **P4.1 Task 4 (decide the coordination substrate in an ADR: PostgreSQL-
+  backed cache/rate lease for replicas, or a single discovery replica with
+  explicit availability and rollout constraints preventing overlapping
+  independent limiters) is complete and committed — Tasks 1-4 of P4.1 are
+  done, only Task 5 remains.** New `docs/decisions/
+0026-discovery-coordination-substrate.md` (ADR-0026). Decision: keep
+  discovery's rate limiter/cache in-process, pinned to exactly one replica
+  per environment (staging, production — development is unaffected, per
+  ADR-0025's tier scope), with a non-overlapping rollout strategy required
+  at Task 5's cutover (ECS `deployment_minimum_healthy_percent = 0`/
+  `maximum_percent = 100`, or Kubernetes `strategy: { type: Recreate }`; no
+  autoscaling target, no `PodDisruptionBudget`) — not a PostgreSQL-backed
+  lease. The database option was rejected as a bigger reversal than it
+  looks: it would give the still database-free `apps/discovery` (verified
+  in Task 3) a real Aurora credential and migration-owned schema to avoid
+  re-fetching data it can simply re-fetch, with no measured traffic to size
+  it against (P3.5 recorded zero discovery traffic — unchanged since
+  ADR-0025). Confirmed the single-replica cost by reading the actual
+  deployment configs rather than assuming: `infra/kubernetes/production/
+web.yaml` runs `replicas: 2` with an HPA to 6 and a `PodDisruptionBudget`,
+  `worker.yaml` an HPA to 5, and staging's `infra/terraform/environment/
+ecs.tf` autoscales `web` to 3 and `worker` to 5 — so a single discovery
+  replica is a real, visible exception to how every other production
+  workload runs, not a hidden default. Also confirmed neither ECS's nor
+  Kubernetes' default rolling-deploy behavior avoids briefly running two
+  discovery processes at once even at a fixed replica count of one (neither
+  config sets a non-default strategy today), which is exactly the
+  "overlapping independent limiters" failure the roadmap's task text names
+  — so the ADR states the non-overlapping rollout requirement explicitly
+  for Task 5 to implement, rather than leaving it to default to the
+  web/worker pattern. A revisit trigger is recorded: reopen once Task 5
+  actually runs discovery somewhere and measured load or a real
+  availability complaint shows single-replica capacity is insufficient,
+  naming the PostgreSQL-backed lease as the upgrade path (not ElastiCache,
+  still ruled out by ADR-0025's budget reasoning). Full detail is in
+  `docs/ROADMAP.md`'s Task 4 completion note under P4.1. Also found and
+  recorded, as a separate smaller known gap not fixed by this task: neither
+  provider cache (`musicbrainz-catalog.ts`, `spotify-discovery.ts`) has a
+  count bound, only TTL expiry — see "Known gaps and risks" below. No
+  application, contract, or test file changed — this is a decision record
+  only, like Task 1; confirmed via `git status` that only the three docs
+  files above changed.
+
 - **P4.1 Task 3 (keep canonical `albums`, `releases`, and `catalog_references`
   with core/library and its transaction; discovery owns no canonical records;
   cache data is disposable) is complete and committed — Tasks 1-3 of P4.1 are
@@ -2193,34 +2271,44 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-18: P4.1 Task 3 is complete and committed (docs-only) —
-Tasks 1-3 of P4.1 are done.** See "Current state" above for the full
-account. In short: Task 3's invariant (canonical `albums`/`releases`/
-`catalog_references` stay with core/library's transaction; discovery owns
-none) already held before this session started, both structurally
-(`apps/discovery` has no `@vinylhound/database` dependency at all) and in
-the two write paths (`confirmScan`, `placeLibraryRelease`, both in
-`packages/database/src/`), which take pre-resolved `CatalogReference` data
-rather than calling a live provider inside their transaction. This session
-verified that claim rather than assuming it, then checked the box and wrote
-a completion note in `docs/ROADMAP.md`. No application, contract, or test
-file changed. Task 2 (`d316cb7`, "p4.1.2") is confirmed committed — the
-previous "left uncommitted" note is stale and has been corrected above.
+**Current, 2026-09-18: P4.1 Task 4 is complete and committed (docs-only) —
+Tasks 1-4 of P4.1 are done, only Task 5 remains.** See "Current state" above
+for the full account. In short: new ADR-0026 decides discovery keeps its
+rate limiter/cache in-process, pinned to exactly one replica per environment
+(staging, production), with a non-overlapping rollout strategy required at
+Task 5's cutover — not a PostgreSQL-backed lease, which was rejected as a
+bigger reversal than it looks (a real database dependency for
+`apps/discovery`, still database-free per Task 3, with no measured traffic
+to justify it). Confirmed the single-replica tradeoff against the real
+deployment configs: every other production workload already runs multiple
+replicas (`web.yaml`: 2-6 with an HPA and PDB; `worker.yaml`: HPA to 5;
+staging autoscales both), and neither ECS's nor Kubernetes' default rolling
+deploy avoids briefly overlapping two discovery processes even at replica
+count 1 — so the ADR states the non-overlapping rollout requirement
+explicitly (ECS `deployment_minimum_healthy_percent = 0`, or Kubernetes
+`Recreate`) rather than leaving Task 5 to copy the web/worker default. A
+revisit trigger is recorded for once real discovery load exists. No
+application, contract, or test file changed.
 
-**Next is P4.1 Task 4**: decide the coordination substrate in its own ADR —
-PostgreSQL-backed cache/rate lease for replicas, or a single discovery
-replica with explicit availability/rollout constraints preventing
-overlapping independent limiters. ADR-0025 deliberately left this open,
-only ruling out ElastiCache by default (no Redis/ElastiCache exists in
-`infra/terraform` today). This is a real decision, not a formality: the
-current in-process `Map`-based caches and MusicBrainz's one-second limiter
-are still per-process, so anything beyond a single `apps/discovery` replica
-needs this settled before Task 5 (service image/ECR/IAM/staging delivery;
-bounded retries, timeouts, failure and contract-compatibility tests) can
-assume more than one replica. Read `docs/ROADMAP.md`'s P4.1 section and
-ADR-0025 in full before starting. Nothing in Phase 2's still-open issues
-(#8-#10) blocks P4.1 itself, only later EKS/production-rehearsal-adjacent
-work.
+**Next is P4.1 Task 5**: add service image/ECR/IAM/configuration and staging
+ECS delivery; prepare gated production EKS definitions retaining
+development's in-process port; test bounded retries, timeouts, failures, and
+contract compatibility. This is the substantial remaining piece of P4.1 —
+unlike Tasks 3-4, it is real implementation work, not verification or a
+decision record. It must implement ADR-0026's binding requirement: discovery
+pinned to exactly one replica in both `infra/terraform/environment/ecs.tf`
+(a new `aws_ecs_service`/task definition, `deployment_minimum_healthy_percent
+= 0`/`maximum_percent = 100`, no `aws_appautoscaling_target`) and
+`infra/kubernetes/production/` (a new `discovery.yaml`, `strategy: { type:
+Recreate }`, no HPA, no PodDisruptionBudget), plus a fourth ECR repository
+and its own Pod Identity/IAM role (`infra/terraform/bootstrap/main.tf`
+currently provisions exactly three: `web`, `worker`, `worker-lambda`) and
+wiring `DISCOVERY_SERVICE_URL`/`DISCOVERY_SERVICE_SHARED_SECRET` into
+`apps/web`'s staging/production runtime config so it actually calls the
+extracted service instead of the in-process adapter there. Read
+`docs/ROADMAP.md`'s P4.1 section, ADR-0025, and ADR-0026 in full before
+starting. Nothing in Phase 2's still-open issues (#8-#10) blocks P4.1
+itself, only later EKS/production-rehearsal-adjacent work.
 
 Prior context, superseded but still relevant: P3.5 Task 5 (commit `9ad4c14`)
 added `scripts/affected/` (`npm run test:affected` / `npm run build:affected`)
@@ -4914,3 +5002,127 @@ schema.integration.ts` (not new — this session added no tests). Confirmed
   file, so no check/build/test command applies; verified via `git status`
   that the tree was clean before starting and only these two docs files
   changed after.
+
+- **2026-09-18 - Claude (new session).** Opened with `git status` clean.
+  Picked up P4.1 Task 4: decide the coordination substrate in its own ADR —
+  PostgreSQL-backed cache/rate lease for replicas, or a single discovery
+  replica with explicit availability/rollout constraints preventing
+  overlapping independent limiters. Read ADR-0025 and ADR-0016 (tiered AWS
+  runtimes) in full before deciding anything, then went looking for facts
+  rather than reasoning from first principles alone: re-read
+  `musicbrainz-catalog.ts`/`spotify-discovery.ts` to confirm the caches are
+  still TTL-only with no count bound (found this was true and not
+  previously called out anywhere as a gap — recorded it separately, see
+  below); read every production/staging deployment config that exists
+  today (`infra/kubernetes/production/web.yaml`, `worker.yaml`,
+  `infra/terraform/environment/ecs.tf`) to check, rather than assume,
+  whether "single replica" would actually be consistent with how this
+  repository runs production services — found the opposite: `web` runs 2-6
+  replicas with an HPA and a `PodDisruptionBudget`, `worker` an HPA to 5,
+  staging autoscales both, so a single-replica discovery service is a real,
+  visible exception, not a quiet default. Also checked whether a normal
+  rolling deploy at a fixed replica count of one would actually avoid
+  running two discovery processes at once — confirmed it would not, in
+  either ECS (default `deployment_minimum_healthy_percent = 100`/
+  `maximum_percent = 200`) or Kubernetes (default `RollingUpdate`, `maxSurge`
+  rounds up to at least one extra pod even at `replicas: 1`) — which turned
+  "prevent overlapping independent limiters" from a phrase in the roadmap
+  task text into a concrete, checkable requirement this ADR could state
+  precisely (ECS `deployment_minimum_healthy_percent = 0`, or Kubernetes
+  `strategy: { type: Recreate }`). Found this repository's own precedent for
+  cross-process coordination (`packages/database/src/scan-repository.ts`'s
+  outbox `FOR UPDATE SKIP LOCKED` claiming, `release-resolution.ts`'s
+  `pg_advisory_xact_lock`) and weighed it seriously as the case for the
+  PostgreSQL-lease option, but concluded it does not transfer: that
+  precedent solves "two processes must both act concurrently and safely,"
+  while discovery's actual requirement is the simpler "only one process
+  should ever act," which a fixed replica count plus a non-overlapping
+  rollout already guarantees without a database dependency. Weighed the
+  real cost of the database option honestly rather than dismissing it: it
+  would give the still-database-free `apps/discovery` (Task 3 had just
+  verified `apps/discovery/package.json` has no `@vinylhound/database`
+  dependency) a real Aurora credential, connection pool, and migration-owned
+  schema, coupling its readiness to Aurora Serverless v2's `MinCapacity: 0`
+  cold start (`docs/OPERATIONS.md`'s budget reconciliation) — for a cache
+  that only exists to avoid re-fetching data discovery can simply re-fetch,
+  with zero measured traffic (still true since ADR-0025 — P3.5 recorded
+  none) to size a shared lease against.
+  Decided: single discovery replica per environment (staging, production —
+  development unaffected per ADR-0025's tier scope), in-process cache/rate
+  limiter unchanged, with the non-overlapping rollout strategy stated as a
+  binding requirement on Task 5's implementation rather than left implicit,
+  and an explicit revisit trigger (real load or a real availability
+  complaint once Task 5 actually deploys discovery somewhere) naming the
+  PostgreSQL-backed lease as the upgrade path, not ElastiCache (still ruled
+  out by ADR-0025's own budget reasoning). Wrote
+  `docs/decisions/0026-discovery-coordination-substrate.md`, added it to
+  `docs/decisions/README.md`'s index, checked P4.1 Task 4 in
+  `docs/ROADMAP.md` with a full completion note, and recorded the unbounded-
+  cache finding as a new bullet in this file's "Known gaps and risks" (real,
+  but a separate concern from the coordination-substrate choice — TTL
+  already bounds staleness even without a count bound). Updated this file's
+  "Current state" and "Resume point" to point at P4.1 Task 5 next, naming
+  concretely what it needs to implement per ADR-0026 (replica pinning in
+  both `ecs.tf` and a new `infra/kubernetes/production/discovery.yaml`, the
+  fourth ECR repository/IAM role, and wiring `DISCOVERY_SERVICE_URL`/
+  `DISCOVERY_SERVICE_SHARED_SECRET` into staging/production `apps/web`
+  config) so the next session does not have to re-derive it from the ADR
+  alone. This task produced a decision record only — no application,
+  contract, or test file changed, so no check/build/test command applies;
+  verified via `git status` that the tree was clean before starting and only
+  the docs files above changed after. Ran `npx prettier --check
+--end-of-line auto` on every changed/new file (clean) per this checkout's
+  known CRLF quirk.
+
+- **2026-09-18 - Claude (continuing, same day).** The maintainer asked
+  directly to close the provider-cache known gap the Task 4 session above
+  had just recorded (no count bound, only TTL expiry, in
+  `musicbrainz-catalog.ts`/`spotify-discovery.ts`) rather than leave it for
+  a future session — ad hoc follow-up work, not a roadmap task. Read both
+  files' current cache sites in full before changing anything (same
+  `Map<string, { expiresAt, value }>` shape, get-then-check-TTL-then-set
+  pattern, repeated three times across two files) and chose a shared helper
+  over three separate fixes, matching this repo's "small custom mechanism
+  over a new dependency" pattern already used for `packages/service-auth`
+  and `scripts/affected/`: no LRU package was added.
+  Wrote `packages/catalog/src/bounded-cache.ts`
+  (`createBoundedCache<T>({ maxEntries, ttlMs, now })`) — same lazy
+  TTL-expiry-on-access behavior as before, plus LRU eviction implemented
+  purely through `Map` insertion order (delete-then-reinsert on a hit to
+  mark recency; drop the first key once `size > maxEntries`), left
+  unexported from `packages/catalog/src/index.ts` since it is an
+  implementation detail, mirroring how `remote-client-support.ts` is
+  already handled. Wired it into `musicbrainz-catalog.ts`'s `searchCache`/
+  `detailsCache` and `spotify-discovery.ts`'s `cache`, added a
+  `maxCacheEntries` option (default `500`) to both provider constructors,
+  and simplified every call site now that the wrapper object and its
+  `expiresAt` check live inside the cache instead of at each call site.
+  Added `packages/catalog/src/bounded-cache.test.ts` (5 cases: TTL hit,
+  TTL expiry, LRU eviction order, a `get` protecting an entry from eviction,
+  a re-`set` doing the same without growing past capacity) and one eviction
+  test in each provider's existing test file (`maxCacheEntries: 1`, three
+  calls where the third repeats the first — asserting all three reach the
+  network, which only holds if the first entry was actually evicted, not
+  merely that caching still functions). Extended `spotify-discovery.test.ts`'s
+  `createProvider` helper to accept an options override so the new test
+  could set `maxCacheEntries` without touching every other call site.
+  Verified `lint`, `typecheck`, `test` (397/397, +7 net new, no contract or
+  wire-format change), the full `npm run build` (all five workspaces,
+  confirming `apps/discovery` and `apps/web` both still compile against the
+  changed `packages/catalog` shape), and `prettier --check --end-of-line
+auto` on every changed/new file. Reverted the generated
+  `apps/web/next-env.d.ts` artifact once after the build, per the
+  established convention.
+  Removed the now-resolved bullet from this file's "Known gaps and risks"
+  rather than leaving a stale reference, added a new "Current state" entry
+  above recording the fix, and amended (not rewrote) `docs/ROADMAP.md`'s
+  Task 4 completion note in place so it says the gap it flagged was closed
+  same-day instead of dangling as an unresolved forward reference — left
+  ADR-0026 itself untouched, since it accurately records what that
+  decision's own scope did and did not cover, per this repository's ADR
+  convention of marking records superseded rather than rewriting them.
+  Behavior is otherwise identical to before this session for every existing
+  caller: same TTLs, same cache-key shapes, same default-unset options: this
+  is a strict narrowing of unbounded growth to a large explicit ceiling, not
+  a semantic change. Left uncommitted for the maintainer's review per this
+  repository's convention.

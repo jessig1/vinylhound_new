@@ -983,7 +983,7 @@ remain authoritative until the corresponding cutover.
 - [x] **Task 3.** Keep canonical `albums`, `releases`, and `catalog_references` with the
       core/library and its transaction. Discovery owns no canonical records;
       cache data is disposable.
-- [ ] **Task 4.** Decide the coordination substrate in an ADR: PostgreSQL-backed cache/rate
+- [x] **Task 4.** Decide the coordination substrate in an ADR: PostgreSQL-backed cache/rate
       lease for replicas, or a single discovery replica with explicit availability
       and rollout constraints preventing overlapping independent limiters.
       Per-process Maps cannot enforce a global provider limit. AWS Redis does not
@@ -1092,6 +1092,47 @@ section and `AGENTS.md`'s architectural-boundaries list, both added during
 Task 2 — this task only re-verified and formally closed it rather than
 deciding anything new. No code, contract, test, or doc file changed other
 than this roadmap entry and `docs/HANDOFF.md`.
+
+Task 4 completed 2026-09-18 (ADR-0026): keep discovery's rate limiter and
+cache in-process, pinned to exactly one replica per environment (staging and
+production), with a non-overlapping rollout strategy required at cutover
+(ECS `deployment_minimum_healthy_percent = 0`/`maximum_percent = 100`, or
+Kubernetes `strategy: { type: Recreate }`; no autoscaling target, no
+`PodDisruptionBudget`) — not a PostgreSQL-backed cache/rate lease. Chosen
+over the database-backed option because that option is a bigger reversal
+than it looks: it would give the still database-free `apps/discovery`
+(verified in Task 3) a real Aurora credential, connection pool, and
+migration-owned schema just to avoid re-fetching data it can simply
+re-fetch, coupling its readiness to Aurora Serverless v2's cold start for no
+measured benefit — P3.5 recorded zero discovery traffic, so there is nothing
+to size a shared lease against yet. The single-replica cost is real but
+bounded to the same boundary ADR-0025 already drew: a deploy-window or
+pod-eviction outage lands only on catalog/discovery-only routes through the
+existing `CatalogProviderError`/`DiscoveryProviderError` mapping, never on
+the core scan/confirm/library path (Task 3). Noted as a real, visible
+exception rather than a hidden default: every other production workload
+already runs multiple replicas (`infra/kubernetes/production/web.yaml`:
+`replicas: 2`, HPA to 6, a `PodDisruptionBudget`; `worker.yaml`: HPA to 5;
+staging's `ecs.tf` autoscales `web` to 3 and `worker` to 5), and neither
+ECS's nor Kubernetes' default rolling-deploy behavior avoids briefly running
+two discovery processes at once even at a fixed replica count of one, which
+is exactly the "overlapping independent limiters" failure the roadmap's task
+text names — confirmed by reading both deployment configs, neither of which
+sets a non-default strategy today, so this ADR states the requirement
+explicitly for Task 5 to implement rather than leaving it to be copied from
+web/worker by default. A revisit trigger is recorded in the ADR: reopen once
+Task 5 actually runs discovery somewhere and measured load or a real
+availability complaint shows single-replica capacity is insufficient: a
+PostgreSQL-backed lease in discovery's own schema is the named upgrade path,
+not ElastiCache (still ruled out by ADR-0025's budget reasoning). Also
+found, while researching this decision, a separate smaller gap that did not
+bear on the coordination-substrate choice itself: neither provider cache had
+a count bound, only TTL expiry. No code changed in this task — it is a
+decision record only, like Task 1 — but that gap was closed same-day in a
+follow-up (new `packages/catalog/src/bounded-cache.ts`, a shared
+capacity-and-TTL-bounded cache with LRU eviction, wired into both
+`musicbrainz-catalog.ts` and `spotify-discovery.ts`; see this file's session
+log). Task 5's implementation has not started.
 
 Exit: deploy and roll back a discovery-only change in staging without rebuilding
 web/worker. Demonstrate bounded cache and provider-wide rate coordination under

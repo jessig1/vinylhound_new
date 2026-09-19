@@ -13,6 +13,7 @@ import {
   type DiscoveryTrack,
 } from "@vinylhound/contracts";
 
+import { createBoundedCache } from "./bounded-cache.ts";
 import {
   DiscoveryProviderError,
   type DiscoveryProvider,
@@ -127,6 +128,7 @@ export interface SpotifyDiscoveryOptions {
   accountsUrl?: string;
   fetch?: typeof fetch;
   cacheTtlMs?: number;
+  maxCacheEntries?: number;
   timeoutMs?: number;
   now?: () => number;
 }
@@ -144,7 +146,11 @@ export function createSpotifyDiscovery(
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? 10_000;
   const cacheTtlMs = options.cacheTtlMs ?? 60 * 60 * 1_000;
-  const cache = new Map<string, { expiresAt: number; value: unknown }>();
+  const cache = createBoundedCache<unknown>({
+    maxEntries: options.maxCacheEntries ?? 500,
+    ttlMs: cacheTtlMs,
+    now,
+  });
 
   let token: { value: string; expiresAt: number } | null = null;
   // Concurrent requests that all find the token expired must not each mint a
@@ -296,9 +302,9 @@ export function createSpotifyDiscovery(
     params: URLSearchParams,
   ) {
     const cached = cache.get(cacheKey);
-    if (cached && cached.expiresAt > now()) return cached.value;
+    if (cached !== undefined) return cached;
     const value = await callApi(path, params);
-    cache.set(cacheKey, { expiresAt: now() + cacheTtlMs, value });
+    cache.set(cacheKey, value);
     return value;
   }
 
