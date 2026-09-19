@@ -13,7 +13,49 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-18
+## Current state — verified 2026-09-19
+
+- **Continuous-capture reliability research is complete; implementation was
+  explicitly out of scope.** See
+  `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` for the code review, primary-source
+  research, proposed browser detector/crop/tracking pipeline, phased work, and
+  measurable acceptance gates. The current sampler captures whole-scene
+  stillness without checking for an album, saves the full video frame, and adds
+  idle records that still require session submission. This explains the reported
+  person-only captures and missed presentations; no physical-camera reproduction
+  or deployed-revision comparison was performed. The proposal covers phone and
+  webcam use and preserves audited originals while analyzing a cover derivative.
+  Source/derivative persistence needs an ADR and compatible contracts before
+  implementation. No application code, dependencies, schemas, or tests changed.
+  Baseline `npm run check` stopped at 75 pre-existing formatting warnings before
+  reaching lint/typecheck/tests. Existing P4.2/roadmap edits remain in place.
+
+- **P4.2 Task 1 (define scan/core schema ownership) is done (ADR-0027),
+  started at the maintainer's explicit direction rather than waiting on
+  issue #19's still-open P4.1 live rehearsal — recorded here per the
+  resume point's own instruction not to silently skip that decision.**
+  `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 1 entry has full
+  detail; short version: `scan` owns `scans`, `batches`, `image_assets`,
+  `scan_attempts`, `scan_candidates`, `scan_confirmations`, and
+  `outbox_messages`; `core` owns `users`, `albums`, `releases`,
+  `catalog_references`, `library_items`, `library_copies`, `playlists`, and
+  `playlist_entries`. `users`' assignment to `core` isn't named by the
+  roadmap's own task text and is argued explicitly in the ADR. One physical
+  PostgreSQL deployment stays as-is; the decision is two Postgres schemas
+  and two least-privilege roles with no cross-schema `GRANT`, replacing
+  today's single undivided schema/credential. Eight existing foreign keys
+  that will cross the new line are named exactly (the ADR's "FKs that will
+  cross the new boundary" list) and are a documented, temporary exception —
+  removing them is Task 3's and Task 6's job, not this one's. The shared
+  failure boundary is documented: one Postgres instance and one migration
+  history stay shared, and nothing at the engine level stops a single
+  transaction from crossing both schemas until Task 7's physical writer
+  cutover — today's `confirmScan` (ADR-0005) and `deleteAccount` (ADR-0014)
+  are cited as the exact transactions that still do this. No code, schema,
+  role, or migration changed — a pure decision record, the same shape as
+  P4.1 Task 1. `docs/ARCHITECTURE.md` gained a matching "Scan and core
+  services" section; `docs/decisions/README.md` and `docs/ROADMAP.md`'s
+  P4.2 status row were updated to match.
 
 - **P4.1 Task 5 (service image/ECR/IAM/configuration, staging ECS delivery,
   gated production EKS definitions, bounded retries/timeouts/contract
@@ -22,8 +64,10 @@ the log.
   [issue #19](https://github.com/jessig1/vinylhound_new/issues/19), and
   [issue #20](https://github.com/jessig1/vinylhound_new/issues/20) tracks the
   other outstanding manual task found while closing this out (P3.4 Task 4's
-  usability test).** Full detail is in `docs/ROADMAP.md`'s P4.1 Task 5 entry
-  — this is the summary. `Dockerfile.discovery` builds and, verified locally by
+  usability test).** Full detail is in
+  `docs/roadmap/p4.1-extract-discovery.md`'s Task 5 entry (`docs/ROADMAP.md`
+  was split into per-phase/milestone files under `docs/roadmap/` later this
+  same day; see the session log) — this is the summary. `Dockerfile.discovery` builds and, verified locally by
   actually running the container, serves `GET /healthz`. Staging gets a real
   `discovery` ECS task/service (ADR-0026's binding single-replica,
   stop-then-start rollout: `deployment_minimum_healthy_percent = 0`, no
@@ -2320,9 +2364,36 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-18: P4.1 is closed out — all five tasks are checked in
-`docs/ROADMAP.md`.** See "Current state" above and `docs/ROADMAP.md`'s P4.1
-Task 5 entry for full implementation detail. Everything code/config-side is
+**Latest task, 2026-09-19: continuous-capture research and planning only.** Read
+`docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` before changing capture behavior.
+The maintainer explicitly requested no code changes in that session. If a later
+task starts this work, begin with Phase 1's album/no-album baseline and Phase 2's
+browser-detector feasibility gate; confirm target-device priority through the
+task context. The proposal is not an implemented fix or an accepted replacement
+for the P4.2 roadmap. P4.2's next task remains as documented below.
+
+**Current, 2026-09-19: P4.2 Task 1 is done (ADR-0027) — see "Current state"
+above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 1 entry for
+full detail.** This was started at the maintainer's explicit direction
+("work on p4.2 task 1"), which is the proceed-without-#19 decision the prior
+resume point asked to have recorded rather than silently skipped — issue
+[#19](https://github.com/jessig1/vinylhound_new/issues/19) (P4.1's live
+staging rehearsal) is still open and unchanged by this session. **Next
+session: P4.2 Task 2** — generalize the outbox in its own migration/refactor
+(aggregate type/ID, topic/version, dedupe key, correlation, topic-aware
+dispatch; remove the scan-only FK/topic CHECK and mandatory attempt-number
+assumption named in ADR-0027 and `docs/PHASE_3_4_PLAN_REVIEW.md`'s G8;
+preserve skip-locked claiming, backoff, and replay safety; scope
+cancellation checks to analysis messages only). Read ADR-0027 first — it
+names the exact tables/FKs Task 2 onward operate against — and
+`packages/database/src/scan-repository.ts`'s existing outbox claim/dispatch
+code (topic CHECK and `aggregate_id` FK are in `schema.ts:175-230`) before
+changing it.
+
+Prior context, superseded but still relevant: P4.1 is closed out — all five
+tasks are checked in `docs/roadmap/p4.1-extract-discovery.md`. (`docs/ROADMAP.md`
+itself is now a short index; see the session log for the split.) See that
+file's Task 5 entry for full implementation detail. Everything code/config-side is
 done and locally verified: the Dockerfile, the staging ECS task/service
 (ADR-0026's single-replica, stop-then-start rollout, Service Connect
 networking), the gated production Kubernetes Deployment/Service, the
@@ -2354,7 +2425,7 @@ before now.
 completion of P4.1), or — if the maintainer decides to proceed without
 it — start P4.2 Task 1 (define scan/core ownership boundaries) with that
 decision explicitly recorded rather than silently skipped. Read
-`docs/ROADMAP.md`'s P4.1 section, ADR-0025, and ADR-0026 in full before
+`docs/roadmap/p4.1-extract-discovery.md`, ADR-0025, and ADR-0026 in full before
 touching any of Task 5's infrastructure further — the single-replica/
 Service-Connect/Recreate choices are load-bearing, not incidental, and
 reverting any of them without re-reading the ADRs' reasoning would reopen a
@@ -5277,3 +5348,111 @@ outputs}.tf` gained the matching shared secret and image variable;
   #19) and this file's "Current state" and "Resume point" to match. Committed
   everything from this session as `p4.1.5`, tagged `phase-4-p4.1` (all five
   P4.1 tasks now checked), and pushed both to `origin/main`.
+
+- **2026-09-19 - Claude.** Split `docs/ROADMAP.md` into per-phase/milestone
+  files under `docs/roadmap/`, at the maintainer's request, for easier
+  parsing by both humans and future agent sessions — the monolithic file had
+  grown to 1372 lines and this session had already hit its own read-truncation
+  warning against it earlier. `docs/ROADMAP.md` is now a short index (status
+  table, the shared "Phases 3 and 4" intro and "Sequence and gates" section,
+  the "Deferred beyond Phase 4" note) linking to twelve new files: `docs/
+roadmap/phase-1-mvp.md`, `phase-2-platform-engineering.md` (Phase 1 and
+  Phase 2 kept as one file each — short, stable, unlikely to grow further
+  since Phase 2's remainder is externally gated), and one file per P3.x/P4.x
+  milestone (`p3.1-continuous-capture.md` through `p4.5-private-data-ai-
+baseline.md`), since that is where the large, still-growing dated
+  completion-note prose actually lives. Every extraction was a verified
+  byte-for-byte content match against the pre-split file (diffed each new
+  file's body, after undoing only the intended heading-level and back-link
+  edits, against the corresponding original line range — all twelve matched
+  exactly) plus a heading-level promotion (H2/H3 section headers become each
+  standalone file's H1/H2) and a one-line back-link to the index. Confirmed
+  `scripts/affected/select-affected.ts`'s existing `"docs/"` prefix rule
+  already treats every new file as a documentation-only change needing no
+  code change there. Updated this file's own "Current state" and "Resume
+  point" live references (not the historical session log, which stays as
+  written) to cite the new file paths. Did not touch
+  `docs/PHASE_3_4_PLAN_REVIEW.md`'s exact `docs/ROADMAP.md:NNN` line-number
+  citations: that document is itself a dated historical review whose
+  citations describe what the roadmap looked like at review time, not a live
+  index — rewriting them would misrepresent what was actually reviewed.
+  `README.md`'s `[Delivery roadmap](docs/ROADMAP.md)` link needed no change,
+  since the path it points to still exists (now as the index). Verified
+  `npx prettier --check --end-of-line auto` on every new/changed file.
+  Left uncommitted for the maintainer's review, since this session was not
+  asked to commit it.
+
+- **2026-09-19 - Claude.** Completed P4.2 Task 1 (ADR-0027): defined scan
+  ownership (`scans`, `batches`, `image_assets`, `scan_attempts`,
+  `scan_candidates`, `scan_confirmations`, `outbox_messages`) and core
+  ownership (`users`, `albums`, `releases`, `catalog_references`,
+  `library_items`, `library_copies`, `playlists`, `playlist_entries`) of
+  today's fifteen tables, all currently in one undivided schema
+  (`packages/database/src/schema.ts`). Started at the maintainer's explicit
+  direction ("work on p4.2 task 1") rather than waiting on
+  [issue #19](https://github.com/jessig1/vinylhound_new/issues/19)'s still-open
+  P4.1 live rehearsal; recorded as the proceed decision the prior resume
+  point asked not to leave implicit. `users`' assignment to `core` is not
+  named by the roadmap's own task text, so the ADR argues it explicitly:
+  account lifecycle (ADR-0013/0014) already reads as core-centric, and scan
+  only needs to know which user a row belongs to. Evidence gathered before
+  deciding: read `packages/database/src/schema.ts` in full (all fifteen
+  tables and their FKs), `confirmation-repository.ts`'s `confirmScan`
+  (one transaction across scan attempt/candidate reads, catalog upsert via
+  `release-resolution.ts`'s `resolveReviewedRelease`, `library_items`/
+  `library_copies` inserts, and the `scan_confirmations` insert — ADR-0005),
+  `placement-repository.ts`'s `placeLibraryRelease` (the same catalog+library
+  transaction with zero scan tables, proving catalog+library already cohere
+  as "core" independent of scan), and `account-repository.ts`'s
+  `deleteAccount` (one transaction spanning both candidate schemas, deleting
+  `scan_confirmations` directly to satisfy ADR-0011's `restrict` FK before
+  cascading `users` into everything else) — plus
+  `docs/PHASE_3_4_PLAN_REVIEW.md`'s G9/G10 and its "Not recommended for
+  change" section, which had already endorsed this exact shape (one physical
+  PostgreSQL deployment, per-service schemas, separate credentials,
+  documented shared failure boundary) without assigning tables. Decision:
+  one physical PostgreSQL deployment stays as-is; two Postgres schemas
+  (`scan`, `core`) and two least-privilege roles
+  (`vinylhound_scan_app`/`vinylhound_core_app`) with no cross-schema `GRANT`
+  replace today's single undivided schema/credential. Named exactly eight
+  existing FKs that will cross the new boundary once it takes effect
+  (`scans`/`batches`/`scan_confirmations` → `users`; `library_items`/
+  `library_copies` → `scans`; `scan_confirmations` → `releases` (ADR-0011's
+  `restrict` FK) / `library_items` / `library_copies`) as a documented,
+  temporary exception that Task 3 (supersedes ADR-0005) and Task 6 (replaces
+  the `restrict` FK, makes account deletion a retryable cross-schema
+  workflow) resolve, not this task. Documented the shared failure boundary:
+  one Postgres instance and one migration history stay shared, and nothing
+  at the engine level stops a single transaction from crossing both schemas
+  until Task 7's physical writer cutover — `confirmScan` and `deleteAccount`
+  are the exact transactions cited as still doing this today. No code,
+  schema, role, or migration changed — a pure decision record, matching P4.1
+  Task 1's shape. New `docs/decisions/0027-scan-core-schema-ownership.md`;
+  updated `docs/decisions/README.md` (index entry), `docs/ARCHITECTURE.md`
+  (new "Scan and core services (P4.2, ADR-0027)" section), `docs/ROADMAP.md`
+  (P4.2 status row: "Not started" → "In progress (Task 1 of 7 done)"), and
+  `docs/roadmap/p4.2-scans-async-confirmation.md` (Task 1 checkbox and
+  completion note). Updated this file's "Current state" and "Resume point"
+  to match, leaving the prior P4.1 resume content in place below as
+  superseded context rather than deleting it. Left uncommitted alongside the
+  prior session's roadmap-split changes, for the maintainer's review
+  together, since this session was not asked to commit.
+
+- **2026-09-19 - Codex.** Reviewed continuous capture and researched browser
+  processing and ManaBox at the maintainer's request; no code changes were
+  authorized or made. Added `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` with
+  source-linked findings, a phased implementation proposal, and acceptance gates.
+  Verified that the current camera uses full-frame pixel stillness, lacks an
+  album-presence check/crop, and stores captures as idle records before explicit
+  session submission. The proposal starts with private video evaluation and an
+  OpenCV.js feasibility experiment, adds an album-specific model if required by
+  measured failures, and covers crop provenance, compatible contracts, continuous
+  enqueue, bounded memory, and real-device testing. ManaBox's documented border
+  detection/artwork matching is distinguished from its undisclosed internals.
+  Read the historical live-camera test failure but did not rerun browser tests
+  or test a physical camera. Baseline `npm run check` failed at formatting with
+  75 existing file warnings; no unrelated formatting was changed. Updated current
+  state and resume context without replacing P4.2's pending task or altering the
+  existing roadmap/ADR changes. No build was needed for this documentation-only
+  session. Targeted Prettier checks for the plan and handoff and
+  `git diff --check` passed; application/package diffs remained empty.

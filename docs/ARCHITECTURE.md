@@ -84,6 +84,27 @@ in P4.1 Task 5 alongside its own ECR repository and IAM/Pod execution role.
 Development is unaffected: it keeps the in-process adapter under ADR-0025's
 tier scope.
 
+## Scan and core services (P4.2, ADR-0027)
+
+Roadmap P4.2 extracts a second boundary: `scan` (scans, batches, images,
+attempts, and reviewed confirmations) and `core` (users, catalog, library,
+copies, favorites, and playlists). ADR-0027 assigns each of the fifteen
+existing tables to one of the two and keeps a single physical PostgreSQL
+deployment for now — two Postgres schemas and two least-privilege
+credentials, no cross-schema `GRANT`, replacing today's single undivided
+schema and single `DATABASE_URL`. `confirmScan`'s one transaction across
+`scan_attempts`/`scan_candidates`, catalog (`albums`/`releases`/
+`catalog_references`), `library_items`/`library_copies`, and
+`scan_confirmations` (ADR-0005) and `deleteAccount`'s one transaction across
+both schemas (ADR-0014) are today's clearest examples of the coupling this
+boundary targets; eight existing foreign keys will cross the new schema line
+once it takes effect, named exactly in ADR-0027, and stay in place
+unchanged until Task 3 (supersedes ADR-0005) and Task 6 (replaces the
+`restrict` FK and makes account deletion a retryable cross-schema workflow)
+remove the need for them. No schema, role, or code changes exist yet: this
+is a decision record ahead of the extraction, the same shape ADR-0025 was
+for discovery.
+
 ## Deployment evolution
 
 For personal use, web and worker can run on one host with one PostgreSQL/Redis deployment. Scale in this order only when measurements justify it:
