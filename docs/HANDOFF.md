@@ -15,6 +15,47 @@ the log.
 
 ## Current state — verified 2026-09-18
 
+- **P4.1 Task 1 (record discovery extraction's reason, expected benefit,
+  cost, and rollback path, using P3.5 evidence and ADR-0009's shared-catalog-
+  coordination requirement) is complete and committed — Phase 4 has started.**
+  New `docs/decisions/0025-extract-discovery-first.md` (ADR-0025). The
+  proceed decision rests on ADR-0009's still-unmet requirement — MusicBrainz's
+  one-request-per-second limiter (`packages/catalog/src/
+musicbrainz-catalog.ts:130-131`) and its 24-hour search/details caches
+  (`:135-143`), plus Spotify's per-process one-hour cache
+  (`packages/catalog/src/spotify-discovery.ts:144-145`) and cached OAuth
+  token (`:238`) — all closure-scoped to the single `apps/web` process that
+  constructs them today (`apps/web/src/server/context.ts:43-54`), not on
+  measured load: P3.5's benchmark and concurrency-comparison tools both drive
+  the scan pipeline, and the live CloudWatch sample (P3.5 Task 3, 111 real
+  `http_request` events) recorded no `catalog.*`/`discovery.*` route at all,
+  so there is no discovery baseline to extract "toward." Scope is narrowed
+  per `docs/PHASE_3_4_PLAN_REVIEW.md`'s G6/G9 suggestions and made explicit
+  in the ADR rather than left implicit: discovery stays stateless (adapters,
+  cache, rate/token coordination only; canonical `albums`/`releases`/
+  `catalog_references` stay with core — Task 3 restates this formally so
+  `confirmScan` keeps one transaction), and only staging/production receive
+  the extracted service — development keeps the in-process adapter behind
+  the same `CatalogProvider`/`DiscoveryProvider` ports, which doubles as the
+  rollback path (redeploy the previous `apps/web` image; discovery owns no
+  canonical rows to reconcile on the way back). Cost is named rather than
+  estimated away: a fourth ECR repository (`infra/terraform/bootstrap/
+main.tf` has exactly three today: `web`, `worker`, `worker-lambda`) and its
+  own IAM/Pod Identity role, a new authenticated internal API (service
+  identity and user authorization, not a forwarded user-ID header), and the
+  coordination substrate itself is explicitly left to Task 4's own ADR — this
+  decision only rules out adding ElastiCache by default (zero Redis/
+  ElastiCache resources exist anywhere in `infra/terraform` today; confirmed
+  by search) rather than choosing between a single discovery replica and a
+  PostgreSQL-backed cache/rate lease. Checked Task 1 in `docs/ROADMAP.md`
+  with a completion note under P4.1 and added ADR-0025 to `docs/decisions/
+README.md`'s index. No code changed — this task is a decision record only;
+  Task 2's extraction work has not started. Verification: this session made
+  no code, contract, test, or infra changes, so no check/build/test command
+  applies; confirmed via `git status`/`git log` that the working tree was
+  clean and the P3.5 Task 1-5 commits (`1f5602c`..`9ad4c14`) were already on
+  `main` before writing the ADR.
+
 - **P3.5 Task 5 (affected-workspace build/test selection with dependency
   closure and a conservative full-check fallback; record the tooling decision
   before adoption; measure clean/cached builds before and after) is complete
@@ -2049,37 +2090,38 @@ DELETE` intended only to inspect response headers while manually verifying
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
 
-**Current, 2026-09-18: P3.5 Task 5 is complete, uncommitted — P3.5 is now
-fully checked (Tasks 1-5).** See "Current state" above for the full account.
-In short: new `scripts/affected/` (`npm run test:affected` / `npm run
-build:affected`) scopes `vitest`/the workspace build to a change's affected
-workspaces (changed workspaces closed over their transitive dependents, via a
-dependency graph read fresh from every `package.json`), conservatively
-falling back to the existing full `npm test`/`npm run build` for any
-unrecognized path or unresolvable base commit. Tooling decision recorded
-before adoption: a small custom script, not Nx/Turborepo (rationale in
-`docs/OPERATIONS.md`). Adopted into CI (confirmed with the maintainer first,
-since it changes the shared merge gate) — `.github/workflows/ci.yml` now
-runs full `format:check`/`lint`/`typecheck`, an affected-scoped test step,
-the existing contract-compatibility step, then an affected-scoped build
-step. Local `npm run check`/`npm run build` are unchanged. Measured before
-adoption: full `npm test` 3.3-3.8s vs 0.85-0.94s scoped to two affected
-workspaces (~4x); full `npm run build` 20-27s vs 5.2-5.7s when the affected
-set skips `apps/web`'s `next build` entirely. A `packages/contracts` change
-(or anything else near the graph's root) gets no benefit — its affected set
-is every workspace.
+**Current, 2026-09-18: P4.1 Task 1 is complete and committed — Phase 4 has
+started (ADR-0025).** See "Current state" above for the full account. In
+short: the proceed decision to extract discovery is recorded because of
+ADR-0009's still-unmet shared-limiter/cache requirement (both providers'
+caches and MusicBrainz's rate limiter are closure-scoped to the single
+`apps/web` process today), not measured load — P3.5 recorded no
+catalog/discovery traffic to point at. Scope: discovery stays stateless
+(adapters/cache/rate coordination only; canonical catalog tables stay with
+core, per Task 3), only staging/production get the extracted service
+(development keeps the in-process adapter, which is also the rollback path),
+and the coordination substrate itself (PostgreSQL lease vs. single replica)
+is left to Task 4's own ADR — this one only rules out adding ElastiCache by
+default. **Next is P4.1 Task 2**: move the MusicBrainz/Spotify adapters,
+their bounded caches, and rate/token coordination behind a new authenticated
+internal discovery API (service identity and user authorization, not a
+forwarded user-ID header); `apps/web`'s `CatalogProvider`/`DiscoveryProvider`
+construction in `context.ts:43-54` becomes an HTTP client instead of the
+in-process adapters for staging/production, while development keeps
+constructing the in-process adapters directly (per this ADR's tier scope).
+Read `docs/ROADMAP.md`'s P4.1 section and ADR-0025 in full before starting;
+Task 3 (confirm catalog-table ownership stays with core — already stated in
+the ADR but the roadmap tracks it as its own checkbox) and Task 4 (the
+coordination-substrate ADR) are natural companions to sequence alongside
+Task 2's actual code. Nothing in Phase 2's still-open issues (#8-#10) blocks
+P4.1 itself, only later EKS/production-rehearsal-adjacent work.
 
-**Per `docs/ROADMAP.md`, Phase 3's "reproducible performance, delivery, and
-cost baseline" milestone (P3.5) is now complete, and the roadmap's stated
-sequence moves to Phase 4 (measured service extraction) — start with P4.1
-Task 1** (use P3.5's evidence and ADR-0009's shared-catalog-coordination
-requirement to record discovery extraction's reason, expected benefit, cost,
-and rollback path, before Task 2's actual extraction work). Read
-`docs/ROADMAP.md`'s Phase 4 section and its "Sequence and gates" note in
-full before starting — P4.1 is explicitly the first extraction, gated only
-on recording that reasoning first; nothing in Phase 2's still-open issues
-(#8-#10) blocks P4.1 itself, only later EKS/production-rehearsal-adjacent
-work. **P3.4 Task 4 (the five-participant usability test) is still open and
+Prior context, superseded but still relevant: P3.5 Task 5 (commit `9ad4c14`)
+added `scripts/affected/` (`npm run test:affected` / `npm run build:affected`)
+to scope `vitest`/the workspace build to a change's affected workspaces,
+adopted into CI's `validate` job with a conservative full-command fallback;
+full detail is in `docs/OPERATIONS.md`'s "Affected-workspace build/test
+selection (P3.5 Task 5)" section. **P3.4 Task 4 (the five-participant usability test) is still open and
 not being treated as a blocker for Phase 4** — it is a real-user protocol to
 design and run, not a code change, and nothing in the codebase depends on it;
 it should still get picked up when there's a maintainer available to run it.
@@ -4608,3 +4650,36 @@ ops.ts`'s `drain_check`/`queue_reconciliation` lines already use a single
   browser-reachable behavior, only new tooling under `scripts/` and CI
   workflow config. Left uncommitted for the maintainer's review per this
   repository's convention.
+
+- **2026-09-18 - Claude.** Session opened with a clean tree; `git log`
+  confirmed P3.5 Tasks 1-5 (commits `1f5602c`..`9ad4c14`) were already
+  committed to `main`, superseding the prior entry's "left uncommitted"
+  note. Picked up the roadmap's stated next step, P4.1 Task 1: record
+  discovery extraction's reason, expected benefit, cost, and rollback path,
+  using P3.5 evidence and ADR-0009's shared-catalog-coordination
+  requirement. Read `docs/ROADMAP.md`'s Phase 4 section, `docs/PHASE_3_4_
+PLAN_REVIEW.md`'s G5/G6/G9 findings (the plan review this roadmap section was
+  built from), ADR-0009, and the current `packages/catalog` source
+  (`musicbrainz-catalog.ts`, `spotify-discovery.ts`) and its `context.ts`
+  wiring before writing anything, to cite real, current line numbers rather
+  than the plan review's now-stale ones. Confirmed by search that no
+  Redis/ElastiCache resource exists anywhere in `infra/terraform` and that
+  `bootstrap/main.tf` provisions exactly three ECR repositories today.
+  Wrote `docs/decisions/0025-extract-discovery-first.md`: the proceed
+  decision rests on ADR-0009's still-unmet requirement (both providers'
+  caches and MusicBrainz's rate limiter are closure-scoped to a single
+  process), explicitly not on measured load, since P3.5's benchmark,
+  concurrency comparison, and live CloudWatch sample all drove or observed
+  the scan pipeline and recorded zero catalog/discovery traffic. Adopted the
+  plan review's G6/G9 suggestions as explicit decision content rather than
+  leaving them implicit: discovery stays stateless (canonical catalog tables
+  stay with core), only staging/production receive the extracted service,
+  and ElastiCache is ruled out by default while the actual substrate choice
+  is deferred to Task 4's own ADR. Added ADR-0025 to `docs/decisions/
+README.md`'s index, checked P4.1 Task 1 in `docs/ROADMAP.md` with a
+  completion note, and updated this file's "Current state" and "Resume
+  point" to point at P4.1 Task 2 next. This task produced a decision record
+  only — no application code, contract, or infra file changed — so no
+  check/build/test command applies; verified via `git status` that only the
+  three docs files above changed. Left uncommitted for the maintainer's
+  review per this repository's convention.

@@ -975,7 +975,7 @@ remain authoritative until the corresponding cutover.
 
 ### P4.1 — Extract discovery first
 
-- [ ] **Task 1.** Use P3.5 evidence and ADR-0009's shared catalog coordination requirement to
+- [x] **Task 1.** Use P3.5 evidence and ADR-0009's shared catalog coordination requirement to
       record the reason to extract, expected benefit, cost, and rollback path.
 - [ ] **Task 2.** Move provider adapters, bounded cache, and rate coordination behind an
       authenticated internal discovery API. Browser traffic stays behind web;
@@ -991,6 +991,25 @@ remain authoritative until the corresponding cutover.
 - [ ] **Task 5.** Add service image/ECR/IAM/configuration and staging ECS delivery; prepare
       gated production EKS definitions and retain development's in-process port.
       Test bounded retries, timeouts, failures, and contract compatibility.
+
+Task 1 completed 2026-09-18 (ADR-0025). The proceed decision rests on
+ADR-0009's unmet shared-limiter/cache requirement (both MusicBrainz's
+one-second limiter and Spotify's per-process token/cache are still
+closure-scoped to a single process) rather than on measured load: P3.5's
+benchmark, concurrency comparison, and live CloudWatch sample all drove or
+observed the scan pipeline, and recorded no `catalog.*`/`discovery.*` route
+at all. Scope is narrowed per the plan review's G6/G9 suggestions: discovery
+stays stateless (adapters, cache, rate/token coordination only; canonical
+`albums`/`releases`/`catalog_references` stay with core, restated formally by
+Task 3), and only staging/production receive the extracted service —
+development keeps the in-process adapter behind the same port, which is also
+the rollback path (redeploy the previous `apps/web` image; discovery owns no
+canonical rows to reconcile). Cost is named, not estimated away: a fourth ECR
+repository and IAM role, a new authenticated internal API, and the
+coordination substrate itself is left to Task 4's own ADR — this decision
+rules out adding ElastiCache by default (no Redis/ElastiCache exists in
+`infra/terraform` today) but does not choose between a single replica and a
+PostgreSQL-backed lease.
 
 Exit: deploy and roll back a discovery-only change in staging without rebuilding
 web/worker. Demonstrate bounded cache and provider-wide rate coordination under

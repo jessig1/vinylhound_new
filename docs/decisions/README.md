@@ -26,3 +26,4 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0022: Contract versions travel on the wire; compatibility is proved by frozen fixtures](0022-contract-versioning-and-compatibility.md)
 - [ADR-0023: Library reads search, sort and page in SQL over the effective release, continued by keyset cursors](0023-full-library-search-and-keyset-pagination.md)
 - [ADR-0024: Copies are inventory, the list is intent; removing the last copy keeps the record owned, and copies can be added by key](0024-last-copy-rules-and-copy-additions.md)
+- [ADR-0025: Extract discovery as the first service boundary](0025-extract-discovery-first.md)
