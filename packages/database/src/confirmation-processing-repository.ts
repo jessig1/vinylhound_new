@@ -36,6 +36,19 @@ export async function processScanConfirmation(
   );
 
   await db.transaction(async (transaction) => {
+    // P4.2 Task 4: reconciliation (`confirmation-reconciliation-repository.ts`)
+    // can call this function directly, outside the queue, so two callers can
+    // now race on the same event -- the normal queue consumer and a retry/
+    // reconciliation sweep both missing the receipt at the same time. Without
+    // this lock both would proceed to insert a `confirmation_receipts` row
+    // and one would hit the unique-violation raw rather than the handled
+    // no-op below. `confirmScan` guards its own check-then-act the same way.
+    await transaction.execute(
+      sql`select pg_advisory_xact_lock(
+        hashtext('confirmation_receipt'),
+        hashtext(${receiptKey})
+      )`,
+    );
     const existing = await transaction.query.confirmationReceipts.findFirst({
       where: eq(confirmationReceipts.idempotencyKey, receiptKey),
     });

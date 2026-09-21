@@ -63,6 +63,11 @@ const emptyDraft: Draft = {
   acquiredAt: "",
 };
 
+// P4.2 Task 4: how long a confirmation may sit `pending` before the UI
+// offers a manual retry. A UX choice, not a formal SLA -- Task 5 owns
+// setting the pipeline's actual confirmation-to-library latency target.
+const CONFIRMATION_STALE_AFTER_MS = 20_000;
+
 export default function ScanResultPage() {
   const { scanId } = useParams<{ scanId: string }>();
   const startManually = useSearchParams().get("manual") === "1";
@@ -394,6 +399,57 @@ export default function ScanResultPage() {
     }
   }
 
+  // P4.2 Task 4 (ADR-0028 amendment): a confirmation stuck `pending` past a
+  // UX threshold gets a manual retry, safe to click any number of times --
+  // `reconcileScanConfirmation` (the endpoint this calls) is fully
+  // idempotent, so retrying while the background pipeline is still quietly
+  // working never duplicates anything.
+  async function retryConfirmation() {
+    if (!scan || actionPending) return;
+    setActionError(null);
+    setActionPending(true);
+    try {
+      const response = await fetch(
+        `/api/v1/scans/${scan.scanId}/confirm/retry`,
+        {
+          method: "POST",
+          headers: {
+            "idempotency-key": `confirm-retry-${crypto.randomUUID()}`,
+          },
+        },
+      );
+      const body = (await response.json()) as {
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        throw new Error(
+          body.error?.message ?? "The confirmation could not be retried.",
+        );
+      }
+      const saved = parseResponse(ConfirmScanResponseSchema, body);
+      setScan({
+        ...scan,
+        confirmation: {
+          selectedCandidateId: saved.selectedCandidateId,
+          release: saved.release,
+          libraryItem: saved.libraryItem,
+          status: saved.status,
+          confirmedAt: saved.confirmedAt,
+          completedAt: saved.completedAt,
+        },
+      });
+      setPollVersion((current) => current + 1);
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error
+          ? caught.message
+          : "The confirmation could not be retried.",
+      );
+    } finally {
+      setActionPending(false);
+    }
+  }
+
   if (!scan && !loadingError) return <LoadingState title="Loading scan…" />;
   if (!scan && loadingError) {
     return (
@@ -407,16 +463,39 @@ export default function ScanResultPage() {
   if (!scan) return null;
 
   if (scan.confirmation?.status === "pending") {
-    // P4.2 Task 3: the reviewed confirmation was recorded, but the async
-    // pipeline hasn't projected a completed library reference yet -- the
-    // poll loop above keeps checking. Deliberately reuses the existing
-    // loading treatment rather than a dedicated "Saving…" design; that
-    // polish is Task 4's job.
+    // P4.2 Task 4 (ADR-0028 amendment): the reviewed confirmation was
+    // recorded, but the async pipeline hasn't projected a completed library
+    // reference yet -- the poll loop above keeps checking, re-rendering
+    // (and so re-evaluating staleness) every 2 seconds while pending. Past
+    // a UX threshold (not a formal latency target -- Task 5 owns that),
+    // offer a manual retry: `reconcileScanConfirmation` is idempotent, so
+    // clicking it while the pipeline is still quietly working is harmless.
+    const pendingForMs =
+      Date.now() - new Date(scan.confirmation.confirmedAt).getTime();
+    const isStale = pendingForMs > CONFIRMATION_STALE_AFTER_MS;
     return (
       <LoadingState
-        title="Saving your confirmation…"
-        message="This finishes in the background. You can leave this page and return from the same link."
+        kicker="Saving your confirmation"
+        title={
+          isStale
+            ? "This is taking longer than usual."
+            : "Saving your confirmation…"
+        }
+        message={
+          isStale
+            ? "You can wait, or retry now -- it's safe to retry even if the save is still finishing on its own."
+            : "This finishes in the background. You can leave this page and return from the same link."
+        }
         error={actionError ?? loadingError}
+        secondaryAction={
+          isStale
+            ? {
+                label: actionPending ? "Retrying…" : "Retry now",
+                onClick: retryConfirmation,
+                disabled: actionPending,
+              }
+            : undefined
+        }
         batchId={scan.batchId}
       />
     );
@@ -1003,12 +1082,14 @@ type SecondaryAction = {
 };
 
 function LoadingState({
+  kicker = "Scan in progress",
   title,
   message = "Fetching the latest status…",
   error,
   secondaryAction,
   batchId,
 }: {
+  kicker?: string;
   title: string;
   message?: string;
   error?: string | null;
@@ -1019,7 +1100,7 @@ function LoadingState({
     <main className="content-page scan-result-page">
       <section className="scan-state-card" aria-live="polite">
         <span className="scan-spinner" />
-        <p className="section-kicker">Scan in progress</p>
+        <p className="section-kicker">{kicker}</p>
         <h1>{title}</h1>
         <p>{message}</p>
         {error ? (

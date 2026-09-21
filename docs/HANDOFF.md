@@ -13,7 +13,7 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-19
+## Current state — verified 2026-09-21
 
 - **Continuous-capture reliability research is complete; implementation was
   explicitly out of scope.** See
@@ -162,6 +162,68 @@ build` (all workspaces), `npm run check:contracts` (passes; reports, as
   `confirmation_receipts`/`scan_confirmations` restrict FKs and a
   documented account-deletion race this pipeline inherits), Task 7
   (physical schema/role/process cutover).
+
+- **P4.2 Task 4 (replay/conflict spec, delay/failure exposure, safe retry,
+  reconciliation) is done, amending ADR-0028 rather than adding a new ADR.**
+  `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 4 entry and the
+  ADR-0028 amendment have full detail; short version: the replay/same-key-
+  conflict/duplicate-delivery-no-duplicate-copy semantics the roadmap text
+  asks to "specify" were already fully implemented and tested by Task 3
+  (`confirmScan`'s idempotency-key/fingerprint compare;
+  `processScanConfirmation`'s receipt dedupe) — this task's ADR amendment
+  formalizes that with pointers to the exact existing tests, unchanged. The
+  genuinely new work: a `pending` confirmation whose queue delivery
+  permanently fails (a BullMQ job exhausting its 5 attempts, an SQS message
+  dead-lettering) previously had no visible failure state and polled
+  forever. New `packages/database/src/confirmation-reconciliation-
+repository.ts`'s `reconcileScanConfirmation` re-drives it by calling
+  `processScanConfirmation`/`applyConfirmationCompletion` directly off
+  durably stored data (the `scan.confirmed.v1` outbox row, the receipt's own
+  stored payload) rather than reaching into BullMQ/SQS — rejected explicitly
+  in the ADR amendment because BullMQ will not re-run a job by re-adding its
+  existing `jobId`, and SQS has no per-message redrive, both of which would
+  also mean maintaining driver-specific retry code in `packages/queue`. No
+  new event topic, schema enum value, or contract change was needed. Found
+  and fixed a real new concurrency gap while building this: reconciliation
+  calling `processScanConfirmation` alongside the normal queue consumer can
+  now race on the same event's receipt insert; fixed with the same
+  `pg_advisory_xact_lock` pattern `confirmScan` already uses, added as the
+  first statement inside `processScanConfirmation`'s own transaction, and
+  proven under real concurrent calls by a new integration test. Two entry
+  points call it: `POST /api/v1/scans/:scanId/confirm/retry` (user-facing,
+  surfaced in `apps/web/src/app/scans/[scanId]/page.tsx` once a pending
+  confirmation has waited past a 20-second UX threshold — not Task 5's own
+  formal latency target) and a new worker sweep (`apps/worker/src/index.ts`,
+  config `CONFIRMATION_RECONCILIATION_POLL_INTERVAL_MS`/`_STALE_AFTER_MS`/
+  `_BATCH_SIZE`, defaulting to a 60-second poll and 5-minute staleness
+  threshold — deliberately longer than the UI's own retry affordance, so a
+  user's click is the first line of recovery and the sweep is the safety
+  net for an unattended scan). Also fixed a small pre-existing UI bug found
+  while touching this page: the shared `LoadingState` component hardcoded
+  the kicker text "Scan in progress" even while rendering the confirmation-
+  pending state; it now takes a `kicker` prop. The known Task-6 account-
+  deletion-race gap ADR-0028 already documented is unchanged: reconciliation
+  will retry that case too, hit the same FK violation, and it stays a real,
+  visible failure — root-causing it is still Task 6's job. Verified:
+  `lint`, `typecheck`, `test` (417/417, +2 net new config-default tests),
+  `format:check --end-of-line auto` (clean apart from the same pre-existing,
+  unrelated `apps/web/e2e/env.ts` warning this repository already carries),
+  `docker compose up -d` + `npm run db:migrate` (confirmed no schema change
+  was needed — no new migration file), `test:integration` for
+  `@vinylhound/database` (68/68, +5 net new: reconcile from a stuck-before-
+  hop-2 state, from a stuck-after-hop-2 state, a no-op on an already-
+  completed confirmation, the new advisory-lock concurrency test, and
+  `listStalePendingConfirmations`' `olderThan`/`limit` filtering), `npm run
+build` (all workspaces, reverted the regenerated `next-env.d.ts`), and the
+  existing `apps/web/e2e/scan-flow.e2e.ts` suite against `mobile-chromium`
+  (6/6, confirming the confirm-and-save happy path and the kicker fix still
+  render correctly end to end). A stuck/retry scenario was deliberately not
+  added to the e2e suite — reliably simulating a dead-lettered queue job in
+  Playwright would be flaky; the new integration tests cover that logic
+  directly instead. Left uncommitted, since this session was not asked to
+  commit; the working tree was clean at session start (last commit
+  `be23d76 p-4.2.3`), so every changed/new file listed above belongs to this
+  session alone.
 
 - **P4.1 Task 5 (service image/ECR/IAM/configuration, staging ECS delivery,
   gated production EKS definitions, bounded retries/timeouts/contract
@@ -2474,30 +2536,32 @@ DELETE` intended only to inspect response headers while manually verifying
 context, kept below). Read `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` before
 changing capture behavior; that work is unrelated to and does not block P4.2.
 
-**Current, 2026-09-19: P4.2 Task 3 is done (ADR-0028, supersedes ADR-0005) —
-see "Current state" above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s
-Task 3 entry for full detail.** Continued directly from Task 2 in the same
-session; issue [#19](https://github.com/jessig1/vinylhound_new/issues/19)
+**Current, 2026-09-21: P4.2 Task 4 is done (ADR-0028 amendment) — see
+"Current state" above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s
+Task 4 entry for full detail.** Continued directly from Task 3 (a separate
+session); issue [#19](https://github.com/jessig1/vinylhound_new/issues/19)
 (P4.1's live staging rehearsal) is still open and unchanged. **Next session:
-P4.2 Task 4** — specify same-key/same-payload replay and same-key/different-payload
-conflict precisely (Task 3's `confirmScan` only carried forward ADR-0005's
-original idempotency-key/fingerprint compare, adapted for a `pending` state,
-not a full spec); duplicate delivery must not create another physical copy
-(Task 3's `processScanConfirmation` inbox-dedupe check already gives this,
-but confirm it holds under the fuller spec); show `Saving` until completion,
-then the stable library reference (Task 3 reused the existing loading
-treatment for `apps/web/src/app/scans/[scanId]/page.tsx`'s pending state —
-deliberately not a dedicated design); expose delay/failure with safe retry
-and reconciliation (nothing exists yet for a confirmation stuck pending —
-e.g. after Task 3's noted Task-6-owned account-deletion race, or any other
-hop-2/3 failure with no automatic retry surfaced to the user). Read
-ADR-0028 in full (the exact pipeline: `confirmScan` →
-`scan.confirmed.v1` → `processScanConfirmation` → `confirmation_receipts` →
-`confirmation.completed.v1` → `applyConfirmationCompletion`), and
-`packages/database/src/confirmation-repository.ts`,
-`confirmation-processing-repository.ts`, and
-`confirmation-receipt-repository.ts` (the three functions/tables Task 4
-extends, not replaces) before starting.
+P4.2 Task 5** — isolate or fairly schedule confirmation dispatch so
+analysis cannot starve it, and set a confirmation-to-library latency target
+before implementation (including the existing outbox poller's own delay in
+the measurement). Today there are four independent, unscheduled poll loops
+in `apps/worker/src/index.ts` sharing no fairness or priority: the outbox
+dispatch loop (analysis jobs and `scan.confirmed.v1`, both drained from the
+same `dispatchNextOutboxMessage` call in one `while` loop, so a burst of
+analysis jobs can starve confirmation dispatch), the confirmation-receipt
+dispatch loop, the abandoned-upload cleanup loop, and Task 4's new
+reconciliation sweep — read all four before changing any scheduling, since
+Task 5 needs to reason about them together. Task 4 deliberately used a
+20-second UI staleness threshold and a 5-minute reconciliation staleness
+threshold as UX choices, explicitly not the formal latency target Task 5
+owns; Task 5 should decide whether those thresholds still make sense once a
+real target exists. Read ADR-0028 and its 2026-09-20 amendment in full (the
+exact pipeline plus the reconciliation mechanism layered on top:
+`confirmScan` → `scan.confirmed.v1` → `processScanConfirmation` →
+`confirmation_receipts` → `confirmation.completed.v1` →
+`applyConfirmationCompletion`, with `reconcileScanConfirmation`
+(`packages/database/src/confirmation-reconciliation-repository.ts`) able to
+drive the middle two steps directly, outside the queue), before starting.
 
 Prior context, superseded but still relevant: P4.1 is closed out — all five
 tasks are checked in `docs/roadmap/p4.1-extract-discovery.md`. (`docs/ROADMAP.md`
@@ -5738,3 +5802,101 @@ check:contracts` (passes; reports, as expected and documented by ADR-0022's
   to match. Left uncommitted, since this session was not asked to commit;
   the working tree was clean at session start (last commit `a6462e7 p 4.2.2`),
   so every changed/new file belongs to this session alone.
+
+- **2026-09-21 - Claude.** Completed P4.2 Task 4 at the maintainer's
+  explicit direction ("work on 4.2 task 4"), continuing directly from Task
+  3 (last commit `be23d76 p-4.2.3`, a separate prior session — working tree
+  was clean at this session's start). Given the size, used plan mode:
+  reviewed the roadmap, ADR-0028, all three confirmation-pipeline files
+  Task 4 extends, the HTTP route/config/worker conventions those files
+  established, and the existing Task 3 integration test coverage, before
+  writing a plan and getting maintainer approval for the design ahead of
+  any code. That review found the roadmap's replay/same-key-conflict/
+  duplicate-delivery-no-duplicate-copy semantics were already fully
+  implemented and tested by Task 3; this task's real, new work was the
+  delay/failure/retry/reconciliation half, which had nothing built for it.
+  **Design decision, recorded as a 2026-09-20 ADR-0028 amendment
+  (`docs/decisions/0028-async-scan-confirmation.md`)**: rather than
+  reaching into the queue to retry a permanently-failed job (rejected —
+  BullMQ will not re-run a job by re-adding its existing `jobId`, only
+  `job.retry()` against that exact job does; SQS has no per-message
+  redrive, only a whole-DLQ `StartMessageMoveTask`; both would also mean
+  maintaining driver-specific retry code in `packages/queue`), new
+  `packages/database/src/confirmation-reconciliation-repository.ts`'s
+  `reconcileScanConfirmation(db, { userId, scanId })` re-drives a stuck
+  `pending` confirmation by calling `processScanConfirmation`/
+  `applyConfirmationCompletion` directly, off data already durably stored
+  (the `scan.confirmed.v1` outbox row `confirmScan` wrote, and
+  `confirmation_receipts`' own stored completion payload) — no new event
+  topic, schema enum value, or contract change. Also added
+  `listStalePendingConfirmations` (same shape as `scan-repository.ts`'s
+  `cleanupAbandonedScans` candidate query) for the background sweep.
+  **A real concurrency gap was found and fixed while designing this, not
+  just assumed safe**: giving `processScanConfirmation` a second caller
+  (reconciliation, alongside the normal queue consumer) means two callers
+  can now race on the same event, both missing the not-yet-inserted
+  receipt and both trying to insert one — without a fix, one would hit a
+  raw `23505` instead of the handled no-op. Fixed with the same
+  `pg_advisory_xact_lock` pattern `confirmScan` already uses for its own
+  check-then-act, added as `processScanConfirmation`'s first statement
+  (`packages/database/src/confirmation-processing-repository.ts`), and
+  proven under genuinely concurrent `Promise.all` calls by a new
+  integration test, not just reasoned about. Two entry points wired to
+  `reconcileScanConfirmation`: new `POST /api/v1/scans/:scanId/confirm/
+retry` (`apps/web/src/app/api/v1/scans/[scanId]/confirm/retry/route.ts`,
+  mirroring the existing `retry`/`cancel` routes' shape — reuses
+  `ConfirmScanResponseSchema` with no new contract, since its `status`/
+  `release`/`libraryItem` fields were already optional/nullable for
+  exactly this per ADR-0022) and a new worker poll loop
+  (`apps/worker/src/index.ts`, three new `packages/config/src/index.ts`
+  vars — `CONFIRMATION_RECONCILIATION_POLL_INTERVAL_MS`/`_STALE_AFTER_MS`/
+  `_BATCH_SIZE`, defaults 60s/5min/50 — mirroring the existing
+  `ABANDONED_UPLOAD_CLEANUP_*` vars' pattern). `apps/web/src/app/scans/
+[scanId]/page.tsx`: while a confirmation is `pending`, computes elapsed
+  time client-side against `confirmedAt` (the existing 2-second poll loop
+  already re-renders enough to catch the threshold promptly) and, past 20
+  seconds, shows "This is taking longer than usual" plus a "Retry now"
+  button wired to the new endpoint, reusing the page's existing
+  `actionPending`/`actionError` state exactly as `retry()`/`cancel()`
+  already do. **Found and fixed a small pre-existing UI bug while reading
+  this page**: the shared `LoadingState` component hardcoded the kicker
+  text "Scan in progress" even while rendering the confirmation-pending
+  state (which is not scan analysis, but confirmation saving); it now
+  takes a `kicker` prop, and the pending-confirmation branch passes
+  "Saving your confirmation". Did not touch `e2e-worker.ts` or
+  `lambda.ts`: the former deliberately omits worker loops e2e doesn't
+  exercise (it already omits the abandoned-upload cleanup loop for the
+  same reason), and the latter is a reactive per-invocation SQS handler
+  with no polling loops of any kind to extend. **Verification, in order:**
+  `typecheck`/`lint`/`test` (417/417, +2 net new — the two new
+  `CONFIRMATION_RECONCILIATION_*` config-default tests) after each
+  structural change; `docker compose up -d`, `npm run db:migrate`
+  (confirmed no migration was needed — this task added no schema change,
+  as designed); `npm run test:integration --workspace @vinylhound/database`
+  (68/68, +5 net new: reconcile from a stuck-before-hop-2 state, from a
+  stuck-after-hop-2 state, a safe no-op on an already-completed
+  confirmation, the concurrent-`processScanConfirmation`-callers test
+  proving the advisory-lock fix, and `listStalePendingConfirmations`'
+  `olderThan`/`limit`/completed-exclusion filtering, the last of which
+  backdates `confirmedAt` via a direct update rather than relying on
+  timing to separate "stale" from "fresh" rows); `npm run build` (all
+  workspaces — confirmed the new `/api/v1/scans/[scanId]/confirm/retry`
+  route registers correctly — reverted the regenerated `next-env.d.ts`
+  afterward per the established convention); `format:check --end-of-line
+auto` (clean apart from the same pre-existing, unrelated `apps/web/e2e/
+env.ts` warning this repository already carries — confirmed untouched by
+  this session via `git status`); and the existing `apps/web/e2e/
+scan-flow.e2e.ts` suite against `mobile-chromium` (6/6 passing,
+  including the confirm-and-save test, proving the kicker-prop change and
+  the new pending-state branch didn't regress the real pipeline running
+  end to end). A stuck/retry scenario was deliberately not added to the
+  e2e suite — reliably simulating a dead-lettered queue job in Playwright
+  would be flaky; the new integration tests cover that logic directly and
+  more reliably. Updated `docs/decisions/0028-async-scan-confirmation.md`
+  (new amendment), `docs/roadmap/p4.2-scans-async-confirmation.md` (Task 4
+  checkbox and completion note), `docs/ROADMAP.md` (both P4.2 status rows —
+  the phase-4 summary table and the per-phase table), `.env.example` (three
+  new vars), and this file's "Current state" and "Resume point" to match.
+  Left uncommitted, since this session was not asked to commit; the
+  working tree was clean at session start, so every changed/new file
+  belongs to this session alone.

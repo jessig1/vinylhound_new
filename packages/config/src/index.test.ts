@@ -287,4 +287,25 @@ describe("QueueWorkerConfigSchema", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("defaults confirmation reconciliation to a 1-minute poll and 5-minute staleness threshold", () => {
+    const config = QueueWorkerConfigSchema.parse({
+      ...baseEnv,
+      REDIS_URL: "redis://localhost:6379",
+    });
+
+    expect(config.CONFIRMATION_RECONCILIATION_POLL_INTERVAL_MS).toBe(60_000);
+    expect(config.CONFIRMATION_RECONCILIATION_STALE_AFTER_MS).toBe(300_000);
+    expect(config.CONFIRMATION_RECONCILIATION_BATCH_SIZE).toBe(50);
+  });
+
+  it("rejects a confirmation reconciliation staleness threshold below ten seconds", () => {
+    expect(
+      QueueWorkerConfigSchema.safeParse({
+        ...baseEnv,
+        REDIS_URL: "redis://localhost:6379",
+        CONFIRMATION_RECONCILIATION_STALE_AFTER_MS: "1000",
+      }).success,
+    ).toBe(false);
+  });
 });

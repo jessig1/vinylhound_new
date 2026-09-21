@@ -3,6 +3,7 @@ export * from "./account-repository.ts";
 export * from "./analysis-repository.ts";
 export * from "./confirmation-processing-repository.ts";
 export * from "./confirmation-receipt-repository.ts";
+export * from "./confirmation-reconciliation-repository.ts";
 export * from "./confirmation-repository.ts";
 export * from "./library-repository.ts";
 export * from "./operations-repository.ts";

@@ -155,3 +155,93 @@ external signatures.
 - **Left to Task 7**: no Postgres schema/role split, no separate credentials,
   no physical writer cutover. `confirmation_receipts` and the widened
   `scan_confirmations` stay in the same schema as every other table.
+
+## Amendment (2026-09-20)
+
+Roadmap P4.2 Task 4: specify replay/conflict precisely, and add the
+delay/failure/retry/reconciliation this ADR's own "Left to Task 4" note
+above named as open.
+
+**Replay/conflict spec (no behavior change -- this formalizes what Task 3
+already built and tested).** For a given `(userId, idempotencyKey)`, at any
+confirmation status except the ADR-0018 "removed" case (`completed` with a
+null `libraryItemId`):
+
+- Same idempotency key, same request fingerprint (`confirmScan`'s
+  `hashJson` over every submitted field): idempotent replay. Returns the
+  existing row unchanged; no new `outbox_messages` row, no new
+  `scan_confirmations` row. Proven by
+  `schema.integration.ts`'s "replays a pending confirmation idempotently…"
+  test, which also confirms this holds while still `pending`, not only once
+  `completed`.
+- Same idempotency key, different fingerprint: `409 conflict`. The existing
+  row is untouched -- specifically, a still-`pending` row is never mistaken
+  for an ADR-0018 "removed" row and deleted, which the same test also
+  proves.
+- A genuinely new reviewed scan carries its own idempotency key and is
+  unaffected by any other confirmation's state.
+
+Duplicate delivery of `scan.confirmed.v1` (redelivery of the same event, at
+any hop-2 failure/retry) cannot produce a second physical copy:
+`processScanConfirmation`'s `confirmation_receipts_idempotency_key_unique`
+constraint guarantees at most one `library_items`/`library_copies` write per
+confirmation, proven by the "…writes the library row exactly once, even if
+the event is delivered twice" test. This is unchanged by the reconciliation
+mechanism below, which is itself just another caller of the same idempotent
+function.
+
+**Delay/failure exposure, safe retry, reconciliation (new).** A `pending`
+confirmation whose queue delivery permanently fails -- a BullMQ job that
+exhausts its 5 default attempts, or an SQS message that dead-letters -- had
+no visible failure state and no recovery path before this change; it polled
+forever. Two queue-native fixes were considered and rejected: BullMQ does
+not re-run a job by re-adding its existing `jobId` (our `idempotencyKey`)
+once it already exists in a failed state, only `job.retry()` against that
+exact job does; and SQS has no per-message redrive (`StartMessageMoveTask`
+moves an entire DLQ, not one message), which does not fit a per-confirmation
+user-triggered retry. Both would also mean writing and maintaining separate
+BullMQ- and SQS-specific retry code in `packages/queue`.
+
+Instead, `packages/database/src/confirmation-reconciliation-repository.ts`'s
+`reconcileScanConfirmation(db, { userId, scanId })` re-drives a stuck
+confirmation by calling `processScanConfirmation`/
+`applyConfirmationCompletion` directly, off data already durably stored (the
+`scan.confirmed.v1` outbox row `confirmScan` wrote, and
+`confirmation_receipts`' own stored completion payload) -- the same "queue
+is a dumb delivery mechanism, the database is authoritative" position
+ADR-0004 and this ADR's own hop design already take. No new event topic
+(the "possible `confirmation.failed.v1`" this ADR floated was not needed),
+no new schema enum value, no new contract. Idempotent and safe to call any
+number of times, including while the normal pipeline is still quietly
+working on the same confirmation.
+
+This introduced one real new race the original hop design didn't have:
+reconciliation and the normal queue consumer can now both call
+`processScanConfirmation` for the same event concurrently, both missing the
+not-yet-inserted receipt. Fixed the same way `confirmScan` already guards
+its own check-then-act: `processScanConfirmation` takes
+`pg_advisory_xact_lock(hashtext('confirmation_receipt'), hashtext(receiptKey))`
+as the first statement in its transaction, so two concurrent callers
+serialize instead of racing on the unique-constraint insert.
+`applyConfirmationCompletion` needed no equivalent -- it is already a single
+idempotent `UPDATE ... WHERE status = 'pending'`.
+
+Two entry points call `reconcileScanConfirmation`:
+
+- `POST /api/v1/scans/:scanId/confirm/retry` -- a user-facing manual retry,
+  surfaced in `apps/web/src/app/scans/[scanId]/page.tsx` once a pending
+  confirmation has been waiting past a 20-second UX threshold (a UI choice,
+  not the formal latency target Task 5 owns).
+- A new worker poll loop (`apps/worker/src/index.ts`, config
+  `CONFIRMATION_RECONCILIATION_POLL_INTERVAL_MS`/`_STALE_AFTER_MS`/
+  `_BATCH_SIZE`, defaults 60s / 5 minutes / 50) sweeps confirmations
+  `pending` longer than the staleness threshold and reconciles each. Five
+  minutes is deliberately longer than the UI's 20-second retry affordance,
+  so a user's own click is the first line of recovery and the sweep is the
+  safety net for a scan nobody is watching.
+
+The known Task-6 gap this ADR already documented above (a pending
+confirmation whose user was deleted mid-flight fails hop 2 with a real
+foreign-key violation) is unchanged by this amendment: reconciliation will
+retry it too, get the same FK error, and it stays a real, visible failure --
+root-causing it is still Task 6's job, not this one's.

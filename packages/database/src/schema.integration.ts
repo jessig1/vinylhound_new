@@ -37,6 +37,10 @@ import {
 import { dispatchNextConfirmationReceipt } from "./confirmation-receipt-repository.ts";
 import { processScanConfirmation } from "./confirmation-processing-repository.ts";
 import {
+  listStalePendingConfirmations,
+  reconcileScanConfirmation,
+} from "./confirmation-reconciliation-repository.ts";
+import {
   createLibraryCopy,
   deleteLibraryCopy,
   deleteLibraryItem,
@@ -3817,5 +3821,193 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     ]);
 
     await deleteAccount(database.db, { userId: accountId });
+  });
+
+  it("reconcileScanConfirmation completes a confirmation stuck before hop 2 (no receipt yet)", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+    await confirmScan(database.db, input);
+
+    const result = await reconcileScanConfirmation(database.db, {
+      userId,
+      scanId,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      release: { artist: input.confirmation.artist },
+      libraryItem: { list: "collection" },
+    });
+    const { eventKey } = await readOutboxEvent(scanId, input.idempotencyKey);
+    const receipts = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.idempotencyKey, eventKey));
+    expect(receipts).toHaveLength(1);
+    const libraryRows = await database.db
+      .select()
+      .from(libraryItems)
+      .where(eq(libraryItems.confirmedFromScanId, scanId));
+    expect(libraryRows).toHaveLength(1);
+    const copyRows = await database.db
+      .select()
+      .from(libraryCopies)
+      .where(eq(libraryCopies.confirmedFromScanId, scanId));
+    expect(copyRows).toHaveLength(1);
+  });
+
+  it("reconcileScanConfirmation completes a confirmation stuck after hop 2 (receipt exists, unpublished)", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+    await confirmScan(database.db, input);
+    const { event, eventKey } = await readOutboxEvent(
+      scanId,
+      input.idempotencyKey,
+    );
+    // Hop 2 already ran (e.g. the queue delivered the event once), but the
+    // completion receipt was never published -- exactly the state a
+    // dead-lettered `confirmation.completed.v1` delivery would leave behind.
+    await processScanConfirmation(database.db, event);
+
+    const result = await reconcileScanConfirmation(database.db, {
+      userId,
+      scanId,
+    });
+
+    expect(result).toMatchObject({ status: "completed" });
+    const receipts = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.idempotencyKey, eventKey));
+    expect(receipts).toHaveLength(1);
+    const libraryRows = await database.db
+      .select()
+      .from(libraryItems)
+      .where(eq(libraryItems.confirmedFromScanId, scanId));
+    expect(libraryRows).toHaveLength(1);
+  });
+
+  it("reconcileScanConfirmation on an already-completed confirmation is a safe no-op", async () => {
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+    await confirmScan(database.db, input);
+    const { event, eventKey } = await readOutboxEvent(
+      scanId,
+      input.idempotencyKey,
+    );
+    await processScanConfirmation(database.db, event);
+    await dispatchConfirmationReceiptUntil(eventKey, async (payload) => {
+      await applyConfirmationCompletion(
+        database.db,
+        payload as Parameters<typeof applyConfirmationCompletion>[1],
+      );
+    });
+
+    const before = await getScanConfirmationForUser(database.db, {
+      userId,
+      scanId,
+    });
+    const result = await reconcileScanConfirmation(database.db, {
+      userId,
+      scanId,
+    });
+
+    expect(result).toEqual(before);
+    const libraryRows = await database.db
+      .select()
+      .from(libraryItems)
+      .where(eq(libraryItems.confirmedFromScanId, scanId));
+    expect(libraryRows).toHaveLength(1);
+  });
+
+  it("processScanConfirmation is safe under two concurrent callers for the same event", async () => {
+    // Simulates the race P4.2 Task 4 introduced: reconciliation and the
+    // normal queue consumer both calling processScanConfirmation for the
+    // same event at the same time, both missing the not-yet-inserted
+    // receipt. Without the advisory lock this added, one caller would hit a
+    // raw 23505 on the receipt insert instead of the two converging safely.
+    const scanId = await insertReviewableScan();
+    const input = collectionConfirmationInput(scanId);
+    await confirmScan(database.db, input);
+    const { event, eventKey } = await readOutboxEvent(
+      scanId,
+      input.idempotencyKey,
+    );
+
+    await Promise.all([
+      processScanConfirmation(database.db, event),
+      processScanConfirmation(database.db, event),
+    ]);
+
+    const receipts = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.idempotencyKey, eventKey));
+    expect(receipts).toHaveLength(1);
+    const libraryRows = await database.db
+      .select()
+      .from(libraryItems)
+      .where(eq(libraryItems.confirmedFromScanId, scanId));
+    expect(libraryRows).toHaveLength(1);
+    const copyRows = await database.db
+      .select()
+      .from(libraryCopies)
+      .where(eq(libraryCopies.confirmedFromScanId, scanId));
+    expect(copyRows).toHaveLength(1);
+  });
+
+  it("listStalePendingConfirmations respects olderThan/limit and ignores completed rows", async () => {
+    async function insertBackdatedPendingConfirmation(confirmedAt: Date) {
+      const scanId = await insertReviewableScan();
+      await confirmScan(database.db, collectionConfirmationInput(scanId));
+      await database.db
+        .update(scanConfirmations)
+        .set({ confirmedAt })
+        .where(eq(scanConfirmations.scanId, scanId));
+      return scanId;
+    }
+
+    const olderStaleScanId = await insertBackdatedPendingConfirmation(
+      new Date(Date.now() - 10 * 60_000),
+    );
+    const newerStaleScanId = await insertBackdatedPendingConfirmation(
+      new Date(Date.now() - 8 * 60_000),
+    );
+
+    const freshScanId = await insertReviewableScan();
+    await confirmScan(database.db, collectionConfirmationInput(freshScanId));
+
+    const completedScanId = await insertReviewableScan();
+    const completedInput = collectionConfirmationInput(completedScanId);
+    await confirmScan(database.db, completedInput);
+    const { event: completedEvent, eventKey: completedKey } =
+      await readOutboxEvent(completedScanId, completedInput.idempotencyKey);
+    await processScanConfirmation(database.db, completedEvent);
+    await dispatchConfirmationReceiptUntil(completedKey, async (payload) => {
+      await applyConfirmationCompletion(
+        database.db,
+        payload as Parameters<typeof applyConfirmationCompletion>[1],
+      );
+    });
+
+    const olderThan = new Date(Date.now() - 5 * 60_000);
+
+    const limited = await listStalePendingConfirmations(database.db, {
+      olderThan,
+      limit: 1,
+    });
+    expect(limited).toEqual([
+      expect.objectContaining({ scanId: olderStaleScanId }),
+    ]);
+
+    const all = await listStalePendingConfirmations(database.db, {
+      olderThan,
+      limit: 10,
+    });
+    const staleIds = all.map((row) => row.scanId);
+    expect(staleIds).toContain(olderStaleScanId);
+    expect(staleIds).toContain(newerStaleScanId);
+    expect(staleIds).not.toContain(freshScanId);
+    expect(staleIds).not.toContain(completedScanId);
   });
 });

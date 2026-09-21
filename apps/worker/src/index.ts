@@ -16,6 +16,8 @@ import {
   databaseOptionsFromConfig,
   dispatchNextConfirmationReceipt,
   dispatchNextOutboxMessage,
+  listStalePendingConfirmations,
+  reconcileScanConfirmation,
 } from "@vinylhound/database";
 import {
   createAnalyzeScanWorker,
@@ -369,6 +371,65 @@ function runCleanupPoll() {
   });
 }
 
+let nextReconciliationPoll: NodeJS.Timeout | undefined;
+let activeReconciliationPoll: Promise<void> | undefined;
+
+/**
+ * P4.2 Task 4 (ADR-0028 amendment): the background half of safe retry --
+ * finds confirmations that have sat `pending` past a UX-driven staleness
+ * threshold (a BullMQ job that exhausted its attempts, an SQS message that
+ * dead-lettered, a slow deploy window) and re-drives each one directly via
+ * `reconcileScanConfirmation`, the same idempotent function the user-facing
+ * retry endpoint calls. One candidate's failure (e.g. the Task-6-documented
+ * FK violation when its user was deleted mid-flight) is logged and does not
+ * stop the sweep from reconciling the rest.
+ */
+async function reconcileStaleConfirmations() {
+  const olderThan = new Date(
+    Date.now() - config.CONFIRMATION_RECONCILIATION_STALE_AFTER_MS,
+  );
+  const stale = await listStalePendingConfirmations(database.db, {
+    olderThan,
+    limit: config.CONFIRMATION_RECONCILIATION_BATCH_SIZE,
+  });
+  for (const candidate of stale) {
+    try {
+      await reconcileScanConfirmation(database.db, candidate);
+      console.info("[worker] confirmation_reconciled", {
+        scanId: candidate.scanId,
+      });
+    } catch (error) {
+      console.error("[worker] confirmation reconciliation failed", {
+        scanId: candidate.scanId,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+}
+
+async function reconciliationPoll() {
+  try {
+    await reconcileStaleConfirmations();
+  } catch (error) {
+    console.error("[worker] confirmation reconciliation sweep failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+  } finally {
+    if (!stopping) {
+      nextReconciliationPoll = setTimeout(
+        runReconciliationPoll,
+        config.CONFIRMATION_RECONCILIATION_POLL_INTERVAL_MS,
+      );
+    }
+  }
+}
+
+function runReconciliationPoll() {
+  activeReconciliationPoll = reconciliationPoll().finally(() => {
+    activeReconciliationPoll = undefined;
+  });
+}
+
 async function shutdown(signal: (typeof shutdownSignals)[number]) {
   if (stopping) {
     return;
@@ -383,6 +444,9 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
   if (nextConfirmationReceiptPoll) {
     clearTimeout(nextConfirmationReceiptPoll);
   }
+  if (nextReconciliationPoll) {
+    clearTimeout(nextReconciliationPoll);
+  }
   console.info(`[worker] received ${signal}; shutting down cleanly`);
   await Promise.allSettled([
     analysisWorker.close(),
@@ -391,6 +455,7 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
     activePoll,
     activeCleanupPoll,
     activeConfirmationReceiptPoll,
+    activeReconciliationPoll,
   ]);
   await metricsPublisher.close();
   await queue.close();
@@ -412,8 +477,13 @@ console.info("[worker] started", {
   cloudWatchMetricsEnabled: config.CLOUDWATCH_METRICS_ENABLED,
   abandonedUploadTtlHours: config.ABANDONED_UPLOAD_TTL_HOURS,
   abandonedUploadCleanupIntervalMs: config.ABANDONED_UPLOAD_CLEANUP_INTERVAL_MS,
+  confirmationReconciliationPollIntervalMs:
+    config.CONFIRMATION_RECONCILIATION_POLL_INTERVAL_MS,
+  confirmationReconciliationStaleAfterMs:
+    config.CONFIRMATION_RECONCILIATION_STALE_AFTER_MS,
 });
 void recordHeartbeat();
 runPoll();
 runCleanupPoll();
 runConfirmationReceiptPoll();
+runReconciliationPoll();

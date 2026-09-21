@@ -285,6 +285,29 @@ export const QueueWorkerConfigSchema = z
       .min(1)
       .max(500)
       .default(50),
+    // P4.2 Task 4 (ADR-0028 amendment): a confirmation left `pending` this
+    // long (a BullMQ job that exhausted its attempts, an SQS message that
+    // dead-lettered, a slow deploy window) is re-driven by
+    // `reconcileScanConfirmation` directly, off durably stored data -- a
+    // UX-driven default, not the formal latency target Task 5 owns.
+    CONFIRMATION_RECONCILIATION_POLL_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(86_400_000)
+      .default(60_000),
+    CONFIRMATION_RECONCILIATION_STALE_AFTER_MS: z.coerce
+      .number()
+      .int()
+      .min(10_000)
+      .max(86_400_000)
+      .default(300_000),
+    CONFIRMATION_RECONCILIATION_BATCH_SIZE: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .default(50),
     CLOUDWATCH_METRICS_ENABLED: BooleanStringSchema.default(false),
     CLOUDWATCH_METRIC_NAMESPACE: z.string().min(1).default("VinylHound"),
     CLOUDWATCH_METRICS_INTERVAL_MS: z.coerce
