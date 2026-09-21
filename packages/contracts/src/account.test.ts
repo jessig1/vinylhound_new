@@ -131,7 +131,23 @@ describe("DeleteAccountResponseSchema", () => {
     expect(
       DeleteAccountResponseSchema.parse({
         id: "00000000-0000-4000-8000-000000000001",
+        status: "deleted",
       }),
-    ).toEqual({ id: "00000000-0000-4000-8000-000000000001" });
+    ).toEqual({
+      id: "00000000-0000-4000-8000-000000000001",
+      status: "deleted",
+    });
+  });
+
+  it("accepts a deletion accepted but not yet finalized (P4.2 Task 6)", () => {
+    expect(
+      DeleteAccountResponseSchema.parse({
+        id: "00000000-0000-4000-8000-000000000001",
+        status: "pending",
+      }),
+    ).toEqual({
+      id: "00000000-0000-4000-8000-000000000001",
+      status: "pending",
+    });
   });
 });

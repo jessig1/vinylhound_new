@@ -1,8 +1,9 @@
-import { eq } from "drizzle-orm";
+import { and, count, eq, isNotNull, sql } from "drizzle-orm";
 
 import type { AccountExportResponse } from "@vinylhound/contracts";
 
 import type { Database } from "./database.ts";
+import type { DatabaseTransaction } from "./release-resolution.ts";
 import {
   DatabaseCommandError,
   deriveImageObjectKey,
@@ -210,13 +211,103 @@ export async function getAccountExportForUser(
   };
 }
 
+export type DeleteAccountResult = {
+  id: string;
+  status: "deleted" | "pending";
+  objectKeys: string[];
+};
+
+async function countPendingConfirmations(
+  transaction: DatabaseTransaction,
+  userId: string,
+): Promise<number> {
+  const [row] = await transaction
+    .select({ pending: count() })
+    .from(scanConfirmations)
+    .where(
+      and(
+        eq(scanConfirmations.userId, userId),
+        eq(scanConfirmations.status, "pending"),
+      ),
+    );
+  return row?.pending ?? 0;
+}
+
+/**
+ * The actual cascading hard delete (ADR-0014's original mechanism,
+ * unchanged): shared by `deleteAccount`'s immediate path and
+ * `finalizeAccountDeletion`'s background one. Callers are responsible for
+ * having already confirmed zero `pending` scan_confirmations remain -- this
+ * function does not check.
+ */
+async function hardDeleteAccount(
+  transaction: DatabaseTransaction,
+  userId: string,
+): Promise<string[]> {
+  const imageRows = await transaction
+    .select({ id: imageAssets.id, scanId: imageAssets.scanId })
+    .from(imageAssets)
+    .innerJoin(scans, eq(scans.id, imageAssets.scanId))
+    .where(eq(scans.userId, userId));
+  // image_assets.objectKey only stores the "original" variant; the
+  // analysis/thumbnail copies (ADR-0007) live at deterministically
+  // derived keys with no separate row, so every variant must be
+  // computed here rather than read from a column.
+  const objectKeys = imageRows.flatMap((image) => {
+    const lookup = { userId, scanId: image.scanId, imageId: image.id };
+    return [
+      deriveImageObjectKey(lookup, "original"),
+      deriveImageObjectKey(lookup, "analysis"),
+      deriveImageObjectKey(lookup, "thumbnail"),
+    ];
+  });
+
+  // Every remaining scan_confirmations row for this user is `completed` (no
+  // `pending` rows survive to this point, per the callers' contract), so
+  // release_id is set and the status-consistency check does not block this
+  // delete. Deleted directly (not left to the users cascade alone) so the
+  // ordering relative to library_items below stays explicit and obvious.
+  await transaction
+    .delete(scanConfirmations)
+    .where(eq(scanConfirmations.userId, userId));
+
+  // playlists and playlist_entries cascade from users (and from
+  // library_items), so the account delete needs no extra ordering for them.
+  await transaction.delete(users).where(eq(users.id, userId));
+
+  return objectKeys;
+}
+
+/**
+ * P4.2 Task 6 (new ADR, superseding ADR-0014's deletion mechanism and
+ * amending ADR-0028): account deletion is now a durable, drain-then-delete
+ * workflow rather than always one synchronous transaction. A `pending`
+ * scan_confirmations row means a `scan.confirmed.v1` event may already be
+ * in flight (dispatched to the queue before this call); hard-deleting the
+ * account underneath it would let hop 2 (`processScanConfirmation`) fail
+ * with a foreign-key violation against a since-deleted `users` row instead
+ * of a clean, recoverable outcome -- exactly the gap ADR-0028 documented and
+ * left open for this task.
+ *
+ * This always durably records the request first (`deletionRequestedAt`,
+ * which also makes `confirmScan` refuse any new confirmation for the
+ * account -- see its own row-lock check), then hard-deletes immediately if
+ * nothing is in flight: the common case, behaviorally unchanged from the
+ * previous always-synchronous version. Otherwise the hard delete is left to
+ * the background sweep (`finalizeAccountDeletion`, driven by
+ * `listAccountsReadyForDeletion` from `apps/worker/src/index.ts`) once every
+ * pending confirmation settles via the existing reconciliation mechanism
+ * (P4.2 Task 4). Safe to call more than once: a retried request against an
+ * account already marked for deletion re-checks readiness and finalizes
+ * immediately if it now can, rather than erroring.
+ */
 export async function deleteAccount(
   db: Database,
   input: { userId: string },
-): Promise<{ id: string; objectKeys: string[] }> {
+): Promise<DeleteAccountResult> {
   return db.transaction(async (transaction) => {
     const [account] = await transaction
-      .select({ id: users.id })
+      .select({ id: users.id, deletionRequestedAt: users.deletionRequestedAt })
       .from(users)
       .where(eq(users.id, input.userId))
       .for("update");
@@ -224,44 +315,84 @@ export async function deleteAccount(
       throw new DatabaseCommandError("not_found", "Account not found.");
     }
 
-    const imageRows = await transaction
-      .select({ id: imageAssets.id, scanId: imageAssets.scanId })
-      .from(imageAssets)
-      .innerJoin(scans, eq(scans.id, imageAssets.scanId))
-      .where(eq(scans.userId, input.userId));
-    // image_assets.objectKey only stores the "original" variant; the
-    // analysis/thumbnail copies (ADR-0007) live at deterministically
-    // derived keys with no separate row, so every variant must be
-    // computed here rather than read from a column.
-    const objectKeys = imageRows.flatMap((image) => {
-      const lookup = {
-        userId: input.userId,
-        scanId: image.scanId,
-        imageId: image.id,
-      };
-      return [
-        deriveImageObjectKey(lookup, "original"),
-        deriveImageObjectKey(lookup, "analysis"),
-        deriveImageObjectKey(lookup, "thumbnail"),
-      ];
-    });
+    if (!account.deletionRequestedAt) {
+      await transaction
+        .update(users)
+        .set({ deletionRequestedAt: new Date() })
+        .where(eq(users.id, input.userId));
+    }
 
-    // scan_confirmations.release_id is a deliberate `restrict` FK protecting
-    // shared catalog rows, so a whole-account delete removes confirmations
-    // directly first rather than relying on the users cascade alone.
-    // (library_item_id clears itself since ADR-0018, but the explicit delete
-    // keeps this ordering obvious.)
-    await transaction
-      .delete(scanConfirmations)
-      .where(eq(scanConfirmations.userId, input.userId));
+    const pending = await countPendingConfirmations(transaction, account.id);
+    if (pending > 0) {
+      return { id: account.id, status: "pending", objectKeys: [] };
+    }
 
-    // playlists and playlist_entries cascade from users (and from
-    // library_items), so the account delete needs no extra ordering for them.
-    await transaction.delete(users).where(eq(users.id, input.userId));
-
-    return {
-      id: account.id,
-      objectKeys,
-    };
+    const objectKeys = await hardDeleteAccount(transaction, account.id);
+    return { id: account.id, status: "deleted", objectKeys };
   });
+}
+
+/**
+ * The background half of the durable deletion workflow
+ * (`apps/worker/src/index.ts`'s sweep): finalizes one account whose deletion
+ * was requested and which now has no `pending` scan_confirmations left,
+ * off durable state directly -- the same "queue is a dumb delivery
+ * mechanism, the database is authoritative" position ADR-0028's own
+ * confirmation-reconciliation sweep already takes. Idempotent: a missing
+ * user row (already finalized by a racing caller, e.g. a retried
+ * `deleteAccount` call) or one still not ready returns `null` rather than
+ * throwing, so a sweep candidate list slightly stale by the time it is
+ * processed is harmless.
+ */
+export async function finalizeAccountDeletion(
+  db: Database,
+  input: { userId: string },
+): Promise<{ id: string; objectKeys: string[] } | null> {
+  return db.transaction(async (transaction) => {
+    const [account] = await transaction
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, input.userId))
+      .for("update");
+    if (!account) {
+      return null;
+    }
+
+    const pending = await countPendingConfirmations(transaction, account.id);
+    if (pending > 0) {
+      return null;
+    }
+
+    const objectKeys = await hardDeleteAccount(transaction, account.id);
+    return { id: account.id, objectKeys };
+  });
+}
+
+/**
+ * Candidates for `finalizeAccountDeletion`'s background sweep: accounts
+ * whose deletion was requested and which have drained to zero `pending`
+ * scan_confirmations. Same shape as
+ * `confirmation-reconciliation-repository.ts`'s `listStalePendingConfirmations`
+ * -- no row locking here, since `finalizeAccountDeletion` itself is
+ * idempotent and re-checks readiness under its own lock.
+ */
+export async function listAccountsReadyForDeletion(
+  db: Database,
+  input: { limit: number },
+): Promise<string[]> {
+  const rows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        isNotNull(users.deletionRequestedAt),
+        sql`not exists (
+          select 1 from ${scanConfirmations}
+          where ${scanConfirmations.userId} = ${users.id}
+            and ${scanConfirmations.status} = 'pending'
+        )`,
+      ),
+    )
+    .limit(input.limit);
+  return rows.map((row) => row.id);
 }

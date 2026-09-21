@@ -15,25 +15,16 @@ the log.
 
 ## Current state — verified 2026-09-21
 
-- **CI reliability repair is implemented on `fix/ci-reliability` in the
-  isolated `../vinylhound-ci-fix` worktree and published as
-  [draft PR #24](https://github.com/jessig1/vinylhound_new/pull/24).** The two latest main CI failures
-  (runs `35452335413` and `35621549131`) were the same Prettier error in
-  `apps/web/e2e/env.ts`; older run `35269365186` failed formatting in this
-  handoff. The TypeScript 7 Dependabot branch also repeatedly failed CI and
-  Platform at `npm ci` because typescript-eslint 8.68.0 requires TypeScript
-  `<6.1.0`. Fixed the formatting, added Git LF checkout policy matching the
-  editor/formatter, added Windows formatting and pinned actionlint validation,
-  kept the required `CI / validate` name as an aggregate gate, and made Linux
-  checks report independent failures after installation. Development deployment
-  now calls that same CI workflow before its AWS/image-publishing job; the
-  original deployment ran successfully despite failing CI. Dependabot now groups
-  compiler/lint tooling and leaves compiler major migrations to a coordinated
-  peer-compatible upgrade. No dependency versions or lockfile changed. Local
-  `npm ci`, `npm run check` (417 tests), `npm run build`, contract compatibility
-  against `c32d61d`, and actionlint workflow validation passed. Original-worktree
-  application edits were preserved; they are not part of this fix. See
-  `docs/TESTING.md`'s CI reliability section for policy and maintenance commands.
+- **CI reliability repair is merged.** [PR #24](https://github.com/jessig1/vinylhound_new/pull/24)
+  (`fix/ci-reliability`) merged to `main` at `d555988`; the first post-merge
+  `main` CI/Security/Platform runs and the development deployment were green
+  (checked 2026-09-21, this session). This session merged `origin/main` into
+  the then-diverged local branch (previously at `afa410c`) to pick this up —
+  the sole conflict was two independent session-log appends in this file,
+  resolved by keeping both in commit-timestamp order. See
+  `docs/TESTING.md`'s CI reliability section for the policy and maintenance
+  commands this PR established (LF checkout, Windows formatting/actionlint
+  validation, Dependabot compiler-major exclusion).
 
 - **Continuous-capture reliability research is complete; implementation was
   explicitly out of scope.** See
@@ -326,6 +317,70 @@ repository.ts`) now returns `{ latencyMs } | null` (null on its existing
   Left uncommitted, since this session was not asked to commit; the working
   tree was clean at session start (last commit `c32d61d p4.2.4`), so every
   changed/new file listed above belongs to this session alone.
+
+- **P4.2 Task 6 (replace the release_id `restrict` FKs with `set null` +
+  audit projections; make account deletion durable/retryable) is done,
+  recorded in a new [ADR-0029](decisions/0029-durable-account-deletion-and-release-id-policy.md)
+  rather than a further ADR-0028 amendment, since the roadmap task itself
+  asked for a new ADR.** `docs/roadmap/p4.2-scans-async-confirmation.md`'s
+  Task 6 entry and ADR-0029 have full detail; short version:
+  `scan_confirmations.release_id` and `confirmation_receipts.release_id`
+  changed from `restrict` to `set null` (migration `020_account_deletion_
+workflow_and_release_id_policy.sql`), ahead of Task 7 since a cross-schema
+  `restrict` FK cannot survive the physical split. No new runtime guard code
+  was needed: no code path deletes a `releases` row today, and a completed
+  confirmation's `release_id` still cannot go null in practice because
+  `scan_confirmations_status_consistency_check` already rejects it —
+  protected-history behavior is unchanged, proven by a new integration test
+  asserting the rejection is now a `23514` check violation, not the old
+  `23503` FK violation. `confirmation_receipts.release_id` now nulls instead
+  of blocking, matching its own already-`set null` `library_item_id`/`copy_id`
+  siblings, with `payload` preserving the resolved id regardless — also
+  proven directly. **The real bug this closes**: `deleteAccount`
+  (`packages/database/src/account-repository.ts`) is now a durable,
+  drain-then-delete workflow, not always one synchronous transaction. `users`
+  gained `deletion_requested_at`; a delete hard-deletes immediately when zero
+  `scan_confirmations` rows are `pending` (the common case, byte-for-byte
+  unchanged), otherwise it durably marks the account and defers to a new
+  background sweep (`listAccountsReadyForDeletion`/`finalizeAccountDeletion`,
+  `ACCOUNT_DELETION_POLL_INTERVAL_MS`/`_BATCH_SIZE`, default 60s/50,
+  `apps/worker/src/index.ts`) that finalizes once every pending confirmation
+  drains via the existing Task 4 reconciliation mechanism. `confirmScan` now
+  refuses a new confirmation once deletion has been requested
+  (`account_deleting`, a new `DatabaseCommandErrorCode`, `409`); both checks
+  lock the same `users` row (`deleteAccount` `for("update")`, `confirmScan`'s
+  check `for("share")`) so the two transactions serialize correctly with no
+  new locking primitives. This makes the ADR-0028-documented foreign-key
+  violation (a `pending` confirmation whose user is deleted mid-flight)
+  provably unreachable, not just retried more gracefully — proven by a new
+  integration test that drives a real pending confirmation through both
+  remaining pipeline hops _after_ `deleteAccount` has already returned
+  `status: "pending"`, against a `users` row the test confirms is still
+  present. `DeleteAccountResponseSchema` gained a required
+  `status: "deleted" | "pending"` field; the route and account-settings UI
+  need no other change (any `2xx` still signs the user out). Verified:
+  `lint`, `typecheck`, `format:check`, `test` (422/422, +3 net new: two
+  config-default tests, one contract round-trip test), `docker compose up -d`
+  - `npm run db:migrate`, `test:integration` for `@vinylhound/database`
+    (74/74, +5 net new, described above, confirmed stable against a freshly
+    reset dev database after an unrelated flake against locally-accumulated
+    outbox rows from repeated manual runs) and
+    `@vinylhound/storage`/`@vinylhound/queue`/`@vinylhound/worker` (unchanged,
+    all passing), `npm run build` (all workspaces, reverted the regenerated
+    `next-env.d.ts`), `npm run check:contracts` (passes), and the existing
+    `apps/web/e2e/scan-flow.e2e.ts` suite against `mobile-chromium` (6/6,
+    including the confirm-and-save test — `confirmationToLibraryLatencyMs: 283`,
+    comfortably inside Task 5's p95 ≤ 2000ms budget, confirming the new
+    `confirmScan` row-lock check didn't regress the real pipeline). Updated
+    `docs/decisions/0028-async-scan-confirmation.md` (new amendment pointing to
+    ADR-0029), `docs/decisions/0029-...md` (new), `docs/ARCHITECTURE.md`
+    ("Scan and core services" section), `docs/SECURITY.md` ("Retention and
+    deletion"), `docs/ROADMAP.md` (both P4.2 status rows), `.env.example` (two
+    new vars), and this file. Left uncommitted, since this session was not
+    asked to commit — except the `origin/main` merge itself (above), which
+    this session had to conclude (it was already mid-merge at session start)
+    before any further work, including Task 6, was possible; that merge commit
+    contains no Task 6 changes.
 
 - **P4.1 Task 5 (service image/ECR/IAM/configuration, staging ECS delivery,
   gated production EKS definitions, bounded retries/timeouts/contract
@@ -2631,14 +2686,15 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-CI repair: check the latest hosted results on
-[draft PR #24](https://github.com/jessig1/vinylhound_new/pull/24), review and land
-`fix/ci-reliability` from the isolated `../vinylhound-ci-fix` worktree, then verify
-the first main CI/development run.
-The existing TypeScript 7 PR #6 needs to remain unmerged until a compatible
-compiler/lint migration is prepared; the new Dependabot policy does not modify
-that existing branch. Keep the original workspace's concurrent P4.2 edits
-separate. The feature-roadmap resume point below is unchanged.
+CI repair is done: [PR #24](https://github.com/jessig1/vinylhound_new/pull/24)
+merged to `main` at `d555988`; the first post-merge `main` CI/Security/Platform
+runs and the development deployment are green (checked 2026-09-21). This
+session merged `origin/main` (`d555988`) into the local branch (previously at
+`afa410c`, diverged after `c32d61d`), resolving the sole conflict — two
+independent session-log appends in `docs/HANDOFF.md` — by keeping both in
+commit-timestamp order; no other file conflicted. The existing TypeScript 7 PR
+#6 remains unmerged until a compatible compiler/lint migration is prepared;
+the new Dependabot policy does not modify that branch.
 
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
@@ -2647,37 +2703,33 @@ separate. The feature-roadmap resume point below is unchanged.
 context, kept below). Read `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` before
 changing capture behavior; that work is unrelated to and does not block P4.2.
 
-**Current, 2026-09-21: P4.2 Task 5 is done (ADR-0028 amendment) — see
-"Current state" above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s
-Task 5 entry for full detail.** Continued directly from Task 4 (a separate
-session, committed as `c32d61d p4.2.4`); issue
+**Current, 2026-09-21: P4.2 Task 6 is done (new ADR-0029) — see "Current
+state" above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 6
+entry for full detail.** Continued directly from Task 5 (a separate session,
+committed as `afa410c p4.2.5`); issue
 [#19](https://github.com/jessig1/vinylhound_new/issues/19) (P4.1's live
-staging rehearsal) is still open and unchanged. **Next session: P4.2 Task 6**
-— replace the cross-boundary `confirmation_receipts`/`scan_confirmations`
-`restrict` FK into `releases` with explicit application invariants and
-durable audit references/projections, record the policy in an ADR, and make
-account export/deletion a durable, authenticated, retryable workflow so a
-late-arriving confirmation event cannot recreate or corrupt deleted account
-data. This is the account-deletion race ADR-0028 has documented as a known
-gap since Task 3 and left unchanged through Tasks 4 and 5: a `pending`
-confirmation whose user is deleted mid-flight fails hop 2
-(`processScanConfirmation`) with a real foreign-key violation against the
-since-deleted `users` row, producing a stuck, retrying job rather than a
-clean failure — Task 5's reconciliation-sweep interaction with this is
-unchanged (it will retry the same failure and surface it the same way). Read
-`packages/database/src/account-repository.ts`'s `deleteAccount` (ADR-0014)
-and ADR-0027's "eight foreign keys that will cross the new boundary" list
-before starting; Task 6 is explicitly where most of those get resolved, not
-just the confirmation-specific one. Read ADR-0028 in full, including its
-2026-09-20 (Task 4) and 2026-09-21 (Task 5) amendments — the full pipeline
-plus the isolated-dispatch and reconciliation mechanisms layered on top:
-`confirmScan` → `scan.confirmed.v1` → `processScanConfirmation` →
-`confirmation_receipts` → `confirmation.completed.v1` →
-`applyConfirmationCompletion`, dispatched through two independent,
-topic-scoped `apps/worker` loops (Task 5) with `reconcileScanConfirmation`
-(`packages/database/src/confirmation-reconciliation-repository.ts`, Task 4)
-able to drive the middle two steps directly, outside the queue — before
-starting.
+staging rehearsal) is still open and unchanged. **Next session: P4.2 Task 7**
+— the final task in this roadmap file: use additive migrations, backfill,
+verification, then a single writer switch to actually cut `scan` and `core`
+into the two physical Postgres schemas/roles ADR-0027 designed (Task 1) and
+every prior task in this file prepared the logical/transactional boundary
+for. Test rollback with in-flight events and reconciliation; never enable two
+authoritative writers. Deploy staging first, with gated EKS definitions and
+no extra development Lambdas — read `docs/ROADMAP.md`'s "Sequence and gates"
+note and P4.1's own staging-first precedent before planning the rollout
+shape. Read ADR-0027 in full (the table assignment, the two roles, the
+documented shared-failure-boundary this task is meant to close) and
+ADR-0028/ADR-0029 (what the transactional/FK boundary already looks like
+today, so Task 7 knows exactly which cross-schema dependencies remain: per
+ADR-0027's own list, three same-schema-safe ones —
+`scans`/`batches`/`scan_confirmations` → `users` cascade, and
+`library_items`/`library_copies` → `scans` set null — are the only FKs left
+to actually cut; `release_id`'s restrict FKs are already gone, per Task 6).
+Read `packages/database/src/account-repository.ts`'s `deleteAccount`/
+`confirmScan`'s new `users`-row-lock check (Task 6) before touching either
+transaction further — the row-lock ordering they now share is what makes the
+whole-account-delete-vs-new-confirmation race safe, and a physical writer
+split changes how that lock is taken.
 
 Prior context, superseded but still relevant: P4.1 is closed out — all five
 tasks are checked in `docs/roadmap/p4.1-extract-discovery.md`. (`docs/ROADMAP.md`

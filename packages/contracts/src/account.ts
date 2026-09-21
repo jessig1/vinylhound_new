@@ -148,6 +148,14 @@ export const AccountExportResponseSchema = z
 export const DeleteAccountResponseSchema = z
   .object({
     id: z.string().uuid(),
+    // P4.2 Task 6 (new ADR): "deleted" if the account had no pending scan
+    // confirmations and was hard-deleted immediately, the same synchronous
+    // behavior this endpoint always had. "pending" means deletion was
+    // durably accepted (no new confirmation can start) but deferred until
+    // an in-flight confirmation settles -- the caller's account is not yet
+    // gone, and no further action is required; the background sweep
+    // finishes it.
+    status: z.enum(["deleted", "pending"]),
   })
   .strict();
 

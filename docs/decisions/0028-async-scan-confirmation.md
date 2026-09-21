@@ -370,3 +370,15 @@ of invocation cadence.
 **Left to Task 6/7, unchanged by this task**: the `confirmation_receipts`/
 `scan_confirmations` FK policy, the account-deletion race, and the physical
 schema/role/process cutover.
+
+## Amendment (2026-09-21): Task 6 closes the account-deletion race and the release_id FK policy
+
+[ADR-0029](0029-durable-account-deletion-and-release-id-policy.md) resolves
+both items this ADR's "Left to Task 6" notes (above, and in the 2026-09-20
+amendment) named as open: `scan_confirmations.release_id` and
+`confirmation_receipts.release_id` change from `restrict` to `set null`, and
+`deleteAccount` becomes a durable drain-then-delete workflow that makes the
+foreign-key violation this ADR documented -- a `pending` confirmation whose
+user is deleted mid-flight -- no longer reachable, rather than merely
+retried more gracefully. See ADR-0029 for the full design. Left to Task 7,
+unchanged: the physical schema/role/process cutover.

@@ -27,6 +27,7 @@ import {
 } from "./schema.ts";
 
 export type DatabaseCommandErrorCode =
+  | "account_deleting"
   | "batch_scan_limit"
   | "conflict"
   | "invalid_cursor"

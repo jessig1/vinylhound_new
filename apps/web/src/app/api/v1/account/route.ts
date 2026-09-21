@@ -29,7 +29,10 @@ export const DELETE = withRoute(
     );
 
     const response = jsonResponse(
-      DeleteAccountResponseSchema.parse({ id: result.id }),
+      DeleteAccountResponseSchema.parse({
+        id: result.id,
+        status: result.status,
+      }),
       200,
       requestId,
     );

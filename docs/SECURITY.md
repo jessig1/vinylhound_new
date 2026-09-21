@@ -34,11 +34,14 @@ Account data (scans, images, attempts, confirmations, library items/copies)
 is retained until the user deletes their account; there is no automatic
 time-based expiry in this slice (ADR-0014) — VinylHound is a personal
 collection record, not an ephemeral service, so indefinite retention while
-an account exists is the expected behavior. `DELETE /account` (ADR-0014)
-performs an ordered hard delete of every user-owned database row and best-
-effort deletes the corresponding S3 objects (original, analysis, thumbnail);
-shared catalog rows (`albums`, `releases`) are never deleted, since other
-users' library items may reference them. A future backup/lifecycle policy
+an account exists is the expected behavior. `DELETE /account` (ADR-0014,
+mechanism updated by ADR-0029) performs an ordered hard delete of every
+user-owned database row and best-effort deletes the corresponding S3 objects
+(original, analysis, thumbnail); it defers the hard delete briefly if a scan
+confirmation is still mid-flight (ADR-0029), but every user-owned row is
+still deleted once that settles, with no user action required. Shared
+catalog rows (`albums`, `releases`) are never deleted, since other users'
+library items may reference them. A future backup/lifecycle policy
 should also cover backups and any orphaned S3 objects a failed best-effort
 delete leaves behind (`docs/HANDOFF.md`'s known gaps). `store: false` is set
 for OpenAI responses, but provider account data controls must also be

@@ -16,6 +16,8 @@ import {
   databaseOptionsFromConfig,
   dispatchNextConfirmationReceipt,
   dispatchNextOutboxMessage,
+  finalizeAccountDeletion,
+  listAccountsReadyForDeletion,
   listStalePendingConfirmations,
   reconcileScanConfirmation,
 } from "@vinylhound/database";
@@ -492,6 +494,79 @@ function runReconciliationPoll() {
   });
 }
 
+let nextAccountDeletionPoll: NodeJS.Timeout | undefined;
+let activeAccountDeletionPoll: Promise<void> | undefined;
+
+/**
+ * P4.2 Task 6 (new ADR): the background half of the durable account-deletion
+ * workflow -- finalizes every account whose deletion was requested
+ * (`deleteAccount`) and which has since drained to zero `pending`
+ * scan_confirmations (via the confirmation-reconciliation sweep above, or
+ * the normal pipeline). One candidate's failure is logged and does not stop
+ * the sweep from finalizing the rest. Storage cleanup mirrors the route's
+ * own best-effort posture (ADR-0014): a failed object delete is logged, not
+ * retried inline, and does not undo the already-committed database delete.
+ */
+async function finalizeReadyAccountDeletions() {
+  const ready = await listAccountsReadyForDeletion(database.db, {
+    limit: config.ACCOUNT_DELETION_BATCH_SIZE,
+  });
+  for (const userId of ready) {
+    try {
+      const result = await finalizeAccountDeletion(database.db, { userId });
+      if (!result) {
+        continue;
+      }
+      console.info("[worker] account_deletion_finalized", {
+        userId: result.id,
+      });
+      await Promise.all(
+        result.objectKeys.map(async (objectKey) => {
+          try {
+            await storage.deleteObject(objectKey);
+          } catch (error) {
+            console.error(
+              "[worker] failed to delete an object during account deletion finalization",
+              {
+                objectKey,
+                errorName: error instanceof Error ? error.name : "UnknownError",
+              },
+            );
+          }
+        }),
+      );
+    } catch (error) {
+      console.error("[worker] account deletion finalization failed", {
+        userId,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+}
+
+async function accountDeletionPoll() {
+  try {
+    await finalizeReadyAccountDeletions();
+  } catch (error) {
+    console.error("[worker] account deletion sweep failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+  } finally {
+    if (!stopping) {
+      nextAccountDeletionPoll = setTimeout(
+        runAccountDeletionPoll,
+        config.ACCOUNT_DELETION_POLL_INTERVAL_MS,
+      );
+    }
+  }
+}
+
+function runAccountDeletionPoll() {
+  activeAccountDeletionPoll = accountDeletionPoll().finally(() => {
+    activeAccountDeletionPoll = undefined;
+  });
+}
+
 async function shutdown(signal: (typeof shutdownSignals)[number]) {
   if (stopping) {
     return;
@@ -512,6 +587,9 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
   if (nextReconciliationPoll) {
     clearTimeout(nextReconciliationPoll);
   }
+  if (nextAccountDeletionPoll) {
+    clearTimeout(nextAccountDeletionPoll);
+  }
   console.info(`[worker] received ${signal}; shutting down cleanly`);
   await Promise.allSettled([
     analysisWorker.close(),
@@ -522,6 +600,7 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
     activeConfirmedEventPoll,
     activeConfirmationReceiptPoll,
     activeReconciliationPoll,
+    activeAccountDeletionPoll,
   ]);
   await metricsPublisher.close();
   await queue.close();
@@ -549,6 +628,7 @@ console.info("[worker] started", {
     config.CONFIRMATION_RECONCILIATION_POLL_INTERVAL_MS,
   confirmationReconciliationStaleAfterMs:
     config.CONFIRMATION_RECONCILIATION_STALE_AFTER_MS,
+  accountDeletionPollIntervalMs: config.ACCOUNT_DELETION_POLL_INTERVAL_MS,
 });
 void recordHeartbeat();
 runPoll();
@@ -556,3 +636,4 @@ runConfirmedEventPoll();
 runCleanupPoll();
 runConfirmationReceiptPoll();
 runReconciliationPoll();
+runAccountDeletionPoll();

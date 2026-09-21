@@ -319,6 +319,23 @@ export const QueueWorkerConfigSchema = z
       .min(1)
       .max(500)
       .default(50),
+    // P4.2 Task 6 (new ADR): an account whose deletion was requested but had
+    // a `pending` scan_confirmations row at request time is finalized once
+    // nothing is left pending -- this sweep's own poll cadence and batch
+    // size, independent of the confirmation-reconciliation knobs above
+    // (readiness, not staleness, is what gates a candidate here).
+    ACCOUNT_DELETION_POLL_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(86_400_000)
+      .default(60_000),
+    ACCOUNT_DELETION_BATCH_SIZE: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .default(50),
     CLOUDWATCH_METRICS_ENABLED: BooleanStringSchema.default(false),
     CLOUDWATCH_METRIC_NAMESPACE: z.string().min(1).default("VinylHound"),
     CLOUDWATCH_METRICS_INTERVAL_MS: z.coerce

@@ -309,6 +309,26 @@ describe("QueueWorkerConfigSchema", () => {
     ).toBe(false);
   });
 
+  it("defaults the account-deletion sweep to a 1-minute poll and 50-row batch (P4.2 Task 6)", () => {
+    const config = QueueWorkerConfigSchema.parse({
+      ...baseEnv,
+      REDIS_URL: "redis://localhost:6379",
+    });
+
+    expect(config.ACCOUNT_DELETION_POLL_INTERVAL_MS).toBe(60_000);
+    expect(config.ACCOUNT_DELETION_BATCH_SIZE).toBe(50);
+  });
+
+  it("rejects an account-deletion poll interval below one second", () => {
+    expect(
+      QueueWorkerConfigSchema.safeParse({
+        ...baseEnv,
+        REDIS_URL: "redis://localhost:6379",
+        ACCOUNT_DELETION_POLL_INTERVAL_MS: "500",
+      }).success,
+    ).toBe(false);
+  });
+
   it("defaults confirmation dispatch to a faster poll than the analysis outbox (P4.2 Task 5)", () => {
     const config = QueueWorkerConfigSchema.parse({
       ...baseEnv,

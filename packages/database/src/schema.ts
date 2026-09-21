@@ -107,6 +107,17 @@ export const users = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // P4.2 Task 6 (new ADR, superseding ADR-0014's deletion mechanism): set
+    // the instant `DELETE /account` is durably accepted, before the account
+    // is necessarily hard-deleted. A non-null value means the account is
+    // scheduled for deletion -- `confirmScan` refuses new confirmations once
+    // this is set, and the account is only hard-deleted once no
+    // `scan_confirmations` row for the user is still `pending`, so an
+    // in-flight confirmation's `users.id` reference always stays valid until
+    // it settles.
+    deletionRequestedAt: timestamp("deletion_requested_at", {
+      withTimezone: true,
+    }),
   },
   (table) => [uniqueIndex("users_clerk_user_id_unique").on(table.clerkUserId)],
 );
@@ -746,9 +757,19 @@ export const scanConfirmations = pgTable(
       { onDelete: "set null" },
     ),
     // Nullable (P4.2 Task 3): unknown until the core consumer resolves a
-    // release, restrict against releases only once it is known.
+    // release. `set null`, not `restrict` (P4.2 Task 6, new ADR): the
+    // cross-schema `restrict` FK does not survive Task 7's physical
+    // schema/role split, so protection moves to the application layer --
+    // this row's own `reviewedRelease` jsonb is already a durable audit
+    // projection of everything that was confirmed, independent of
+    // `releaseId`'s value. A `completed` row's `release_id` still cannot
+    // actually go null in practice: `scan_confirmations_status_consistency_check`
+    // below requires it non-null whenever `status = 'completed'`, so it
+    // rejects the same `DELETE FROM releases` the old `restrict` FK used to
+    // reject, just via a different constraint -- protected-history behavior
+    // for a completed confirmation is unchanged.
     releaseId: uuid("release_id").references(() => releases.id, {
-      onDelete: "restrict",
+      onDelete: "set null",
     }),
     // Nullable so removing a saved record keeps this audit row (ADR-0018);
     // scan_id, release_id, reviewed_release, and confirmed_at still record
@@ -885,9 +906,15 @@ export const confirmationReceipts = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     idempotencyKey: text("idempotency_key").notNull(),
     topic: text("topic").notNull().default("confirmation.completed.v1"),
-    releaseId: uuid("release_id")
-      .notNull()
-      .references(() => releases.id, { onDelete: "restrict" }),
+    // Nullable with `set null` (not `restrict`, P4.2 Task 6, new ADR),
+    // matching this row's own `libraryItemId`/`copyId` columns below and
+    // `scanConfirmations.releaseId`'s own updated policy: this row is a
+    // dedupe/audit record, not a protected reference, so it must not block
+    // removing the release it named. `payload` keeps the original ID for
+    // history even once nulled.
+    releaseId: uuid("release_id").references(() => releases.id, {
+      onDelete: "set null",
+    }),
     // Nullable with `set null` (not `restrict`), matching
     // scan_confirmations' own pattern: this row is a dedupe/audit record, not
     // a protected reference, so removing the library item it named (a normal

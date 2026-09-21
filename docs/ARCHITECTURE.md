@@ -92,14 +92,32 @@ copies, favorites, and playlists). ADR-0027 assigns each of the fifteen
 existing tables to one of the two and keeps a single physical PostgreSQL
 deployment for now — two Postgres schemas and two least-privilege
 credentials, no cross-schema `GRANT`, replacing today's single undivided
-schema and single `DATABASE_URL`. `deleteAccount`'s one transaction across
-both schemas (ADR-0014) is today's remaining clearest example of the coupling
-this boundary targets; eight existing foreign keys will cross the new schema
-line once it takes effect, named exactly in ADR-0027, and stay in place
-unchanged until Task 6 (replaces the `restrict` FK and makes account deletion
-a retryable cross-schema workflow) removes the need for them. No schema,
+schema and single `DATABASE_URL`. Eight existing foreign keys will cross the
+new schema line once it takes effect, named exactly in ADR-0027; three
+(`scans`/`batches`/`scan_confirmations` → `users`, `cascade`, and
+`library_items`/`library_copies` → `scans`, `set null`) stay in place until
+Task 7's physical cutover, since a same-schema cascade/set-null costs nothing
+today. The other two (`scan_confirmations.release_id` and
+`confirmation_receipts.release_id`, both `restrict`) were replaced by Task 6
+(ADR-0029) with `set null` plus each row's own durable audit
+projection (`reviewedRelease`/`payload`), ahead of Task 7, since a
+cross-schema `restrict` cannot survive the physical split at all. No schema,
 role, or credential changes exist yet — the tables still live in one
 undivided schema — but Task 3's transaction split (below) is done.
+
+**Task 6 (ADR-0029) made account deletion a durable, drain-then-delete
+workflow**, closing the coupling `deleteAccount`'s single cross-schema
+transaction (ADR-0014) represented. `DELETE /api/v1/account` still
+hard-deletes immediately when the account has no `pending` `scan_confirmations`
+(the common case, unchanged from before); otherwise it durably records the
+request (`users.deletionRequestedAt`) and defers the hard delete to a
+background sweep that finalizes once every pending confirmation drains.
+`confirmScan` refuses to start a new confirmation once deletion has been
+requested. This closes the race ADR-0028 documented and left open: a
+`scan.confirmed.v1` event already dispatched before a delete request can
+still be processed by `processScanConfirmation` against a `users` row that
+is guaranteed to still exist, instead of racing account deletion into a
+foreign-key violation.
 
 **Task 3 (ADR-0028) replaced `confirmScan`'s single cross-boundary
 transaction with a three-hop async pipeline**, all still running inside
@@ -118,10 +136,10 @@ today's one `apps/worker` process:
 
 The scan page's existing queued/processing poll loop now also polls while a
 confirmation is `pending`, so the UI never reports a completed save before
-the projection lands. See ADR-0028 for the full design and its documented
-gaps (Task 4: replay/conflict polish and UI; Task 6: the FK/account-deletion
-rework this pipeline still depends on; Task 7: the physical
-schema/role/process cutover).
+the projection lands. See ADR-0028 for the full design (Task 4: replay/
+conflict polish and UI; Task 5: isolated dispatch and a latency target; Task
+6, ADR-0029: the FK policy and account-deletion rework, below) and what
+remains: Task 7's physical schema/role/process cutover.
 
 **Task 5 isolated hop 1 -> 2 dispatch from scan-analysis dispatch and set a
 latency target.** `dispatchNextOutboxMessage` now scopes its claim to the

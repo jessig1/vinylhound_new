@@ -19,7 +19,9 @@ import {
 import { createDatabase } from "./database.ts";
 import {
   deleteAccount,
+  finalizeAccountDeletion,
   getAccountExportForUser,
+  listAccountsReadyForDeletion,
 } from "./account-repository.ts";
 import {
   getBatchCostSummary,
@@ -4133,5 +4135,238 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       async () => {},
     );
     expect(dispatchedAnalysis.jobId).toBe(submitted.jobId);
+  });
+});
+
+describe("P4.2 Task 6: durable account deletion and release_id FK policy (new ADR)", () => {
+  async function createAccount() {
+    const [account] = await database.db.insert(users).values({}).returning();
+    return account!.id;
+  }
+
+  async function insertReviewableScanForAccount(accountId: string) {
+    const [scan] = await database.db
+      .insert(scans)
+      .values({
+        userId: accountId,
+        source: "single_upload",
+        status: "identified",
+        idempotencyKey: `task6-scan-${randomUUID()}`,
+        completedAt: new Date(),
+      })
+      .returning();
+    await database.db.insert(scanAttempts).values({
+      scanId: scan!.id,
+      attemptNumber: 1,
+      status: "succeeded",
+      model: "integration-test-model",
+      promptVersion: "integration-test.v1",
+      providerResponseId: `response-${randomUUID()}`,
+      durationMs: 20,
+      completedAt: new Date(),
+    });
+    return scan!.id;
+  }
+
+  function collectionConfirmationInput(accountId: string, scanId: string) {
+    return {
+      userId: accountId,
+      scanId,
+      idempotencyKey: `task6-confirm-${randomUUID()}`,
+      confirmation: {
+        selectedCandidateId: null,
+        artist: `Task 6 Test ${randomUUID()}`,
+        title: "Durable Deletion",
+        releaseYear: 2002,
+        label: null,
+        catalogNumber: null,
+        barcode: null,
+        releaseDate: null,
+        country: null,
+        format: null,
+        packaging: null,
+        releaseStatus: null,
+        catalogReference: null,
+        list: "collection" as const,
+        notes: null,
+        copy: null,
+      },
+    };
+  }
+
+  async function driveToCompletion(scanId: string, idempotencyKey: string) {
+    const eventKey = confirmationEventId(scanId, idempotencyKey);
+    const [outboxRow] = await database.db
+      .select()
+      .from(outboxMessages)
+      .where(
+        and(
+          eq(outboxMessages.topic, SCAN_CONFIRMED_EVENT),
+          eq(outboxMessages.idempotencyKey, eventKey),
+        ),
+      )
+      .limit(1);
+    const confirmedEvent = SCAN_CONFIRMED_EVENT_CONTRACT.consumerSchema.parse(
+      outboxRow!.payload,
+    );
+    await processScanConfirmation(database.db, confirmedEvent);
+
+    const [receipt] = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.idempotencyKey, eventKey))
+      .limit(1);
+    const completedEvent =
+      CONFIRMATION_COMPLETED_EVENT_CONTRACT.consumerSchema.parse(
+        receipt!.payload,
+      );
+    await applyConfirmationCompletion(database.db, completedEvent);
+  }
+
+  it("defers a whole-account delete while a confirmation is still pending, instead of racing hop 2 into a foreign-key violation", async () => {
+    const accountId = await createAccount();
+    const scanId = await insertReviewableScanForAccount(accountId);
+    const confirmInput = collectionConfirmationInput(accountId, scanId);
+    const pendingConfirmation = await confirmScan(database.db, confirmInput);
+    expect(pendingConfirmation.record.status).toBe("pending");
+
+    const deletion = await deleteAccount(database.db, { userId: accountId });
+    expect(deletion).toMatchObject({
+      id: accountId,
+      status: "pending",
+      objectKeys: [],
+    });
+
+    // The account is durably marked for deletion, but not yet gone: hop 2
+    // can still process the already-dispatched event against a users row
+    // that still exists -- exactly the race ADR-0028 documented and left
+    // open for this task, now closed by deferring instead of racing.
+    expect(
+      await database.db.select().from(users).where(eq(users.id, accountId)),
+    ).toHaveLength(1);
+
+    await expect(
+      driveToCompletion(scanId, confirmInput.idempotencyKey),
+    ).resolves.toBeUndefined();
+
+    // Nothing is pending anymore, so a retried delete finalizes immediately.
+    const finalDeletion = await deleteAccount(database.db, {
+      userId: accountId,
+    });
+    expect(finalDeletion.status).toBe("deleted");
+    expect(
+      await database.db.select().from(users).where(eq(users.id, accountId)),
+    ).toHaveLength(0);
+  });
+
+  it("refuses a new confirmation once deletion has been requested, even while an earlier confirmation still drains", async () => {
+    const accountId = await createAccount();
+    const drainingScanId = await insertReviewableScanForAccount(accountId);
+    const newScanId = await insertReviewableScanForAccount(accountId);
+
+    await confirmScan(
+      database.db,
+      collectionConfirmationInput(accountId, drainingScanId),
+    );
+    const deletion = await deleteAccount(database.db, { userId: accountId });
+    expect(deletion.status).toBe("pending");
+
+    await expect(
+      confirmScan(
+        database.db,
+        collectionConfirmationInput(accountId, newScanId),
+      ),
+    ).rejects.toMatchObject({ code: "account_deleting" });
+
+    // Cleanup: bypass the app-level guard directly, since this account's own
+    // deletion workflow is deliberately left mid-drain by this test.
+    await database.db.delete(users).where(eq(users.id, accountId));
+  });
+
+  it("finalizes a drained deletion through the background sweep helpers", async () => {
+    const accountId = await createAccount();
+    const scanId = await insertReviewableScanForAccount(accountId);
+    const confirmInput = collectionConfirmationInput(accountId, scanId);
+    await confirmScan(database.db, confirmInput);
+
+    const deletion = await deleteAccount(database.db, { userId: accountId });
+    expect(deletion.status).toBe("pending");
+
+    // Not ready yet: one confirmation is still pending.
+    expect(
+      await listAccountsReadyForDeletion(database.db, { limit: 500 }),
+    ).not.toContain(accountId);
+    expect(
+      await finalizeAccountDeletion(database.db, { userId: accountId }),
+    ).toBeNull();
+
+    await driveToCompletion(scanId, confirmInput.idempotencyKey);
+
+    expect(
+      await listAccountsReadyForDeletion(database.db, { limit: 500 }),
+    ).toContain(accountId);
+    const finalized = await finalizeAccountDeletion(database.db, {
+      userId: accountId,
+    });
+    expect(finalized).toMatchObject({ id: accountId });
+
+    // Idempotent: a racing second sweep pass (or a retried request) finds
+    // the account already gone and no-ops rather than throwing.
+    expect(
+      await finalizeAccountDeletion(database.db, { userId: accountId }),
+    ).toBeNull();
+  });
+
+  it("still protects a completed confirmation's release from deletion, via the status-consistency check rather than the old restrict FK", async () => {
+    const accountId = await createAccount();
+    const scanId = await insertReviewableScanForAccount(accountId);
+    const result = await confirmScanAndComplete(
+      collectionConfirmationInput(accountId, scanId),
+    );
+    const releaseId = result.record.release!.id;
+
+    await expect(
+      database.db.delete(releases).where(eq(releases.id, releaseId)),
+    ).rejects.toMatchObject({ cause: { code: "23514" } });
+
+    await deleteAccount(database.db, { userId: accountId });
+  });
+
+  it("nulls confirmation_receipts.release_id on release deletion instead of blocking it, preserving the audit payload", async () => {
+    const accountId = await createAccount();
+    const scanId = await insertReviewableScanForAccount(accountId);
+    const result = await confirmScanAndComplete(
+      collectionConfirmationInput(accountId, scanId),
+    );
+    const releaseId = result.record.release!.id;
+    const libraryItemId = result.record.libraryItem!.id;
+
+    // Clear every other row that still protects this release -- a synthetic
+    // setup: in every real product flow, confirmation_receipts always
+    // cascades with its owning user (it never outlives it), so this isolates
+    // this table's own release_id FK behavior at the DB level rather than
+    // simulating a reachable product flow.
+    await database.db
+      .delete(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    await database.db
+      .delete(libraryCopies)
+      .where(eq(libraryCopies.libraryItemId, libraryItemId));
+    await database.db
+      .delete(libraryItems)
+      .where(eq(libraryItems.id, libraryItemId));
+
+    await database.db.delete(releases).where(eq(releases.id, releaseId));
+
+    const [receiptRow] = await database.db
+      .select()
+      .from(confirmationReceipts)
+      .where(eq(confirmationReceipts.scanId, scanId));
+    expect(receiptRow!.releaseId).toBeNull();
+    expect((receiptRow!.payload as { releaseId: string }).releaseId).toBe(
+      releaseId,
+    );
+
+    await database.db.delete(users).where(eq(users.id, accountId));
   });
 });

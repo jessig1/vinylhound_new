@@ -19,7 +19,7 @@ are checked off.
 | Phase 1 — MVP                                           | Complete                                                                                                            | [phase-1-mvp.md](roadmap/phase-1-mvp.md)                                   |
 | Phase 2 — AWS platform engineering and public readiness | Mostly complete; remaining items are manual/maintainer-gated (issues #8-#15)                                        | [phase-2-platform-engineering.md](roadmap/phase-2-platform-engineering.md) |
 | Phase 3 — product maturity and a measured baseline      | Complete except P3.4 Task 4 (issue #20)                                                                             | see the P3.1-P3.5 table below                                              |
-| Phase 4 — measured service extraction                   | P4.1 implemented; its live rehearsal is tracked in issue #19. P4.2 in progress (Task 5 of 7); P4.3-P4.5 not started | see the P4.1-P4.5 table below                                              |
+| Phase 4 — measured service extraction                   | P4.1 implemented; its live rehearsal is tracked in issue #19. P4.2 in progress (Task 6 of 7); P4.3-P4.5 not started | see the P4.1-P4.5 table below                                              |
 
 ## Phase 1 — MVP (complete)
 
@@ -93,7 +93,7 @@ remain authoritative until the corresponding cutover.
 | Milestone                                             | Status                                                   | File                                                                         |
 | ----------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | P4.1 — Extract discovery first                        | Implemented; live staging rehearsal tracked in issue #19 | [p4.1-extract-discovery.md](roadmap/p4.1-extract-discovery.md)               |
-| P4.2 — Extract scans and asynchronous confirmation    | In progress (Task 5 of 7 done)                           | [p4.2-scans-async-confirmation.md](roadmap/p4.2-scans-async-confirmation.md) |
+| P4.2 — Extract scans and asynchronous confirmation    | In progress (Task 6 of 7 done)                           | [p4.2-scans-async-confirmation.md](roadmap/p4.2-scans-async-confirmation.md) |
 | P4.3 — Separate platform delivery and state ownership | Not started                                              | [p4.3-platform-delivery.md](roadmap/p4.3-platform-delivery.md)               |
 | P4.4 — Verify benefits and costs against the monolith | Not started                                              | [p4.4-verify-benefits.md](roadmap/p4.4-verify-benefits.md)                   |
 | P4.5 — Private data and AI baseline                   | Not started                                              | [p4.5-private-data-ai-baseline.md](roadmap/p4.5-private-data-ai-baseline.md) |

@@ -21,6 +21,7 @@ import {
   scanCandidates,
   scanConfirmations,
   scans,
+  users,
 } from "./schema.ts";
 
 const SCAN_CONFIRMATION_AGGREGATE_TYPE = "scan_confirmation";
@@ -86,6 +87,28 @@ export async function confirmScan(
         hashtext(${input.idempotencyKey})
       )`,
     );
+
+    // P4.2 Task 6 (new ADR): `for("share")`, not `for("update")` -- this only
+    // needs mutual exclusion against `deleteAccount`'s own `for("update")`
+    // lock on the same row (so the two transactions serialize and one sees
+    // the other's committed result), not against other concurrent
+    // `confirmScan` calls for this user, which must stay free to run in
+    // parallel. Once an account's deletion has been requested, no new
+    // confirmation may start -- otherwise a confirmation created after
+    // `deleteAccount` observed zero pending rows and proceeded to hard-delete
+    // could still lose its race and insert against a row about to disappear.
+    const [account] = await transaction
+      .select({ deletionRequestedAt: users.deletionRequestedAt })
+      .from(users)
+      .where(eq(users.id, input.userId))
+      .for("share");
+    if (account?.deletionRequestedAt) {
+      throw new DatabaseCommandError(
+        "account_deleting",
+        "This account is being deleted and can no longer confirm scans.",
+      );
+    }
+
     const reusedIdempotencyKey =
       await transaction.query.scanConfirmations.findFirst({
         where: and(
