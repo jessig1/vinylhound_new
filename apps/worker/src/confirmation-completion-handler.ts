@@ -30,13 +30,17 @@ export function createConfirmationCompletionHandler(
     payload: ConfirmationCompletedEvent,
     delivery: ConfirmationCompletionDelivery,
   ) => {
-    await applyConfirmationCompletion(options.database, payload);
+    const result = await applyConfirmationCompletion(options.database, payload);
     console.info(
       JSON.stringify({
         event: "confirmation_completion_applied",
         scanId: payload.scanId,
         idempotencyKey: payload.idempotencyKey,
         deliveryAttempt: delivery.deliveryAttempt,
+        // P4.2 Task 5 (ADR-0028): the confirmation-to-library latency this
+        // task's target bounds -- null on the redelivery/missing-row no-op
+        // paths `applyConfirmationCompletion` already documents.
+        confirmationToLibraryLatencyMs: result?.latencyMs ?? null,
       }),
     );
   };

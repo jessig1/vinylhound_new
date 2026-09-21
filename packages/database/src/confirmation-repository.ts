@@ -276,12 +276,21 @@ export async function confirmScan(
  * `completed` is a silent no-op, and a missing row (should not happen; see
  * ADR-0028's noted Task 6 gap) is a defensive no-op rather than a throw, since
  * this runs from a queue consumer with no request to fail back to.
+ *
+ * Returns the confirmation-to-library latency (P4.2 Task 5, ADR-0028): the
+ * gap between `confirmedAt` -- set by `confirmScan`'s own transaction, hop
+ * 1's write -- and `payload.completedAt` -- set by `processScanConfirmation`
+ * the moment `library_items`/`library_copies` became durable, hop 2's write.
+ * This is the exact latency Task 5's target bounds, and it already includes
+ * both the hop-1 outbox dispatch pickup delay and hop 2's own processing
+ * time, not just the projection step running here. Null on the no-op paths
+ * above, since there is no completion to measure.
  */
 export async function applyConfirmationCompletion(
   db: Database,
   payload: ConfirmationCompletedEvent,
-): Promise<void> {
-  await db
+): Promise<{ latencyMs: number } | null> {
+  const [updated] = await db
     .update(scanConfirmations)
     .set({
       status: "completed",
@@ -296,7 +305,16 @@ export async function applyConfirmationCompletion(
         eq(scanConfirmations.idempotencyKey, payload.idempotencyKey),
         eq(scanConfirmations.status, "pending"),
       ),
-    );
+    )
+    .returning({ confirmedAt: scanConfirmations.confirmedAt });
+
+  if (!updated) {
+    return null;
+  }
+  return {
+    latencyMs:
+      new Date(payload.completedAt).getTime() - updated.confirmedAt.getTime(),
+  };
 }
 
 export async function getScanConfirmationForUser(

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -3639,7 +3639,11 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
         receipt!.payload,
       );
 
-    await applyConfirmationCompletion(database.db, completion);
+    const applied = await applyConfirmationCompletion(database.db, completion);
+    // P4.2 Task 5 (ADR-0028): the confirmation-to-library latency this
+    // task's target bounds -- non-negative, since completedAt is always at
+    // or after confirmScan's own confirmedAt write.
+    expect(applied?.latencyMs).toBeGreaterThanOrEqual(0);
     const [afterFirst] = await database.db
       .select()
       .from(scanConfirmations)
@@ -3651,8 +3655,11 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       copyId: completion.copyId,
     });
 
-    // Redelivery after completion is a silent no-op, not a re-application.
-    await applyConfirmationCompletion(database.db, completion);
+    // Redelivery after completion is a silent no-op, not a re-application,
+    // and reports no latency to measure.
+    await expect(
+      applyConfirmationCompletion(database.db, completion),
+    ).resolves.toBeNull();
     const [afterRedelivery] = await database.db
       .select()
       .from(scanConfirmations)
@@ -3668,7 +3675,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
         scanId: randomUUID(),
         idempotencyKey: `orphan-${randomUUID()}`,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
   });
 
   it("dispatchNextConfirmationReceipt claims, backs off on a failed publish, and marks published on success", async () => {
@@ -4009,5 +4016,122 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     expect(staleIds).toContain(newerStaleScanId);
     expect(staleIds).not.toContain(freshScanId);
     expect(staleIds).not.toContain(completedScanId);
+  });
+
+  it("isolates outbox dispatch by topic: a registry scoped to one topic never claims or backs off a pending row of the other, even when the other is older (P4.2 Task 5)", async () => {
+    // A real, older scan.analyze.v1 row -- the same setup
+    // "cancels a queued scan and skips its outbox dispatch" above uses to get
+    // one, so the row parses against the real registered contract.
+    const scan = await createOrGetScan(database.db, {
+      userId,
+      source: "single_upload",
+      idempotencyKey: `isolation-scan-${randomUUID()}`,
+    });
+    const upload = await createOrGetImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `isolation-upload-${randomUUID()}`,
+      filename: "front.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 512,
+      checksumSha256: "f".repeat(64),
+      maxImages: 12,
+    });
+    await completeImageUpload(database.db, {
+      userId,
+      scanId: scan.record.id,
+      imageId: upload.record.id,
+      width: 800,
+      height: 800,
+      analysisSizeBytes: 200,
+      analysisWidth: 800,
+      analysisHeight: 800,
+      thumbnailSizeBytes: 40,
+    });
+    const submitted = await submitScan(database.db, {
+      userId,
+      scanId: scan.record.id,
+      idempotencyKey: `isolation-submit-${randomUUID()}`,
+    });
+
+    // A real, newer scan.confirmed.v1 row, created after the analysis row
+    // above so it is unambiguously the newer of the two.
+    const confirmedScanId = await insertReviewableScan();
+    const confirmationInput = collectionConfirmationInput(confirmedScanId);
+    await confirmScan(database.db, confirmationInput);
+    const { eventKey: confirmedIdempotencyKey } = await readOutboxEvent(
+      confirmedScanId,
+      confirmationInput.idempotencyKey,
+    );
+
+    // Unlike scan.analyze.v1 rows (routinely drained by dispatchUntil
+    // elsewhere in this file), most of this describe block's scan.confirmed.v1
+    // rows are consumed directly via readOutboxEvent, never through a real
+    // dispatch call, and stay sitting in outbox_messages undelivered for the
+    // rest of the suite -- a fixed small attempt budget is not enough to
+    // drain that backlog ahead of this test's own row. Count exactly how many
+    // are currently pending instead: FIFO ordering guarantees this test's row
+    // is claimed at or before that count, however large the backlog is.
+    const pendingConfirmedEvents = await database.db
+      .select({ idempotencyKey: outboxMessages.idempotencyKey })
+      .from(outboxMessages)
+      .where(
+        and(
+          eq(outboxMessages.topic, SCAN_CONFIRMED_EVENT),
+          isNull(outboxMessages.publishedAt),
+        ),
+      );
+    expect(
+      pendingConfirmedEvents.some(
+        (row) => row.idempotencyKey === confirmedIdempotencyKey,
+      ),
+    ).toBe(true);
+
+    // A confirmed-event-only dispatcher (apps/worker's own
+    // dispatchAvailableConfirmedEvents shape) reaches the newer row directly.
+    const publishedIdempotencyKeys = new Set<string>();
+    const attemptBudget = pendingConfirmedEvents.length + 5;
+    for (let attempts = 0; attempts < attemptBudget; attempts += 1) {
+      if (publishedIdempotencyKeys.has(confirmedIdempotencyKey)) break;
+      const result = await dispatchNextOutboxMessage(
+        database.db,
+        {
+          [SCAN_CONFIRMED_EVENT]: async (_payload, idempotencyKey) => {
+            publishedIdempotencyKeys.add(idempotencyKey);
+          },
+        },
+        new Date(Date.now() + 1_000),
+      );
+      if (result.status === "idle") break;
+    }
+    expect(publishedIdempotencyKeys.has(confirmedIdempotencyKey)).toBe(true);
+
+    // The older analysis row was never claimed by the confirmed-only
+    // dispatcher above: not published, not backed off, not even attempted.
+    // Before Task 5's topic-scoped query, this exact scenario would instead
+    // have claimed the analysis row first (it is the older of the two),
+    // found no publisher for it in a confirmed-only registry, and backed it
+    // off under the "no publisher registered" error path -- real cross-topic
+    // interference, not merely a missed optimization, and exactly the
+    // starvation the roadmap names in the other direction (a deep analysis
+    // backlog delaying a newer confirmation).
+    const [analysisRow] = await database.db
+      .select()
+      .from(outboxMessages)
+      .where(eq(outboxMessages.idempotencyKey, submitted.jobId));
+    expect(analysisRow).toMatchObject({
+      publishedAt: null,
+      publishAttempts: 0,
+      lastError: null,
+    });
+
+    // Symmetrically, an analysis-only dispatcher now reaches that row
+    // without needing the already-published confirmed-event row out of the
+    // way -- the two queries are fully independent in both directions.
+    const dispatchedAnalysis = await dispatchUntil(
+      submitted.jobId,
+      async () => {},
+    );
+    expect(dispatchedAnalysis.jobId).toBe(submitted.jobId);
   });
 });

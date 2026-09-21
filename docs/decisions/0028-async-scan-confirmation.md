@@ -245,3 +245,128 @@ confirmation whose user was deleted mid-flight fails hop 2 with a real
 foreign-key violation) is unchanged by this amendment: reconciliation will
 retry it too, get the same FK error, and it stays a real, visible failure --
 root-causing it is still Task 6's job, not this one's.
+
+## Amendment (2026-09-21): isolated dispatch and a latency target (Task 5)
+
+Roadmap P4.2 Task 5: "Isolate or fairly schedule confirmation dispatch so
+analysis cannot starve it. Set a confirmation-to-library latency target
+before implementation and include the existing outbox poller's delay in the
+measurement."
+
+**The starvation this fixes.** `dispatchNextOutboxMessage` (`outbox-
+repository.ts`) claimed the single oldest available `outbox_messages` row
+_across every topic registered with it_. `apps/worker`'s one dispatch loop
+registered both `scan.analyze.v1` and `scan.confirmed.v1` publishers
+together, so the two topics competed for one shared FIFO claim: a deep,
+continuously-replenished analysis backlog could keep a newer confirmation
+event waiting behind however many older analysis rows preceded it, with no
+bound on that wait. This is the "Left to Task 5" gap this ADR's original
+"Consequences" section named.
+
+**Decision: isolate, not fairly schedule.** `dispatchNextOutboxMessage` now
+scopes its claim query to `Object.keys(publishers)` (an `inArray(topic, ...)`
+filter added to the existing `WHERE`), so a call site that registers only one
+topic can never claim, lock, or back off a row of another topic. `apps/
+worker`'s single combined dispatch loop is split into two independent
+loops -- `dispatchAvailableAnalysisJobs` (scan.analyze.v1 only, unchanged
+`OUTBOX_POLL_INTERVAL_MS` cadence) and `dispatchAvailableConfirmedEvents`
+(scan.confirmed.v1 only, new `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS`
+cadence, default 200ms) -- each running its own `WHERE topic = ANY (...)`
+query against the same table. `SELECT ... FOR UPDATE SKIP LOCKED` already
+lets two such queries run concurrently against one table without contending
+for each other's rows, so no schema or migration change was needed. Isolation
+was chosen over weighted round-robin fairness because it is strictly
+stronger (a starved topic under isolation is impossible, not just less
+likely), needed no new claim-ordering logic, and matches the shape this
+codebase already established for `confirmation_receipts`
+(`dispatchNextConfirmationReceipt`, Task 3): one dispatcher per concern,
+independently schedulable.
+
+This also fixed a real, previously undetected bug, not just a missed
+optimization: a call site that registered a single-topic publisher registry
+still competed for the _globally_ oldest row of any topic under the old
+query. On claiming a row outside its own registry, it hit the "no publisher
+registered" branch, which is the same code path as a genuine delivery
+failure -- it backed the row off under exponential backoff, delaying an
+_unrelated_ caller's row for no reason. `schema.integration.ts`'s
+`dispatchUntil` helper (scoped to `scan.analyze.v1` only) had been doing
+exactly this to other tests' pending `scan.confirmed.v1` rows throughout this
+file's suite. The new topic-scoped query makes this impossible: a row outside
+a call site's registry is no longer visible to it at all.
+
+`apps/worker/src/lambda.ts`'s `dispatchOutbox` (the scheduled-invocation
+path) got the equivalent split: two topic-scoped passes instead of one
+combined pass, confirmed events drained first within each invocation.
+`apps/worker/src/e2e-worker.ts` got the same split as `index.ts`, so the
+browser e2e suite exercises the real isolated shape, not a combined one.
+
+**Confirmation-to-library latency target: p95 ≤ 2000ms, set before this
+task's implementation.** "Confirmation-to-library" is measured precisely as
+`scan_confirmations.confirmedAt` (hop 1's write, `confirmScan`'s own
+transaction) to `confirmation.completed.v1`'s `completedAt` (hop 2's write,
+the instant `library_items`/`library_copies` became durable in
+`processScanConfirmation`) -- it therefore already includes the hop 1
+dispatch pickup delay the roadmap text calls out by name, plus hop 2's own
+processing time, and deliberately stops at hop 2 rather than hop 3, since the
+library data is already durable at that point regardless of how long the
+scan-side projection (hop 3) takes to catch up. Budget, with the isolated
+200ms default `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS`:
+
+- Hop 1 -> 2 dispatch pickup: ≤ 200ms worst case, and -- the actual fix --
+  bounded independent of `scan.analyze.v1` backlog size, which was not true
+  before this task.
+- BullMQ enqueue + delivery (local Redis): tens of milliseconds typical.
+- `processScanConfirmation`'s transaction (advisory lock, release
+  resolution, `library_items`/`library_copies` write, receipt insert):
+  tens of milliseconds typical, consistent with this codebase's other
+  transactions of similar shape.
+- Nominal total: a few hundred milliseconds; 2000ms leaves headroom for
+  SQS's higher latency in the SQS-driven deployment and ordinary jitter.
+
+This is a design budget, not a production measurement -- P4.1's live staging
+rehearsal (issue #19) has not run yet, so there is no real traffic to sample
+p95 from. It is also now directly verifiable, not just estimated:
+`applyConfirmationCompletion` (`confirmation-repository.ts`) returns
+`{ latencyMs } | null` (null on its existing redelivery/missing-row no-op
+paths), computed from the real `confirmedAt`/`completedAt` timestamps with no
+new column or migration, and `apps/worker/src/confirmation-completion-
+handler.ts` logs it as `confirmationToLibraryLatencyMs` on the existing
+`confirmation_completion_applied` line. A real browser e2e run
+(`apps/web/e2e/scan-flow.e2e.ts`, mobile-chromium, confirm-and-save test)
+measured 165ms end to end through real BullMQ/Postgres -- comfortably inside
+budget and consistent with the estimate above.
+
+`confirmation_receipts` -> `confirmation.completed.v1` dispatch (hop 2 -> 3,
+`dispatchNextConfirmationReceipt`) moved off `OUTBOX_POLL_INTERVAL_MS` onto
+the same new `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS`, since it is part of
+the same confirmation-pipeline latency budget, not the analysis one; this
+does not change the confirmation-to-library figure itself (which stops at
+hop 2) but does lower confirmation-to-_visible_ latency -- how quickly the
+UI's poll loop sees `status: "completed"` -- to roughly one more dispatch
+cycle beyond the figure above.
+
+**Task 4's thresholds still hold, revisited as the resume point asked.**
+Task 4 set a 20-second UI manual-retry threshold and a 5-minute reconciliation
+staleness threshold as UX choices, explicitly deferring the formal target to
+this task. Both remain appropriate: a confirmation stuck past 20 seconds is
+now ~100x this task's own nominal latency, a reliable signal that something
+is actually wrong (a dead-lettered job, a stalled worker) rather than
+ordinary pipeline latency, and 5 minutes remains a conservative safety-net
+window for the unattended sweep. Neither threshold changed.
+
+**Scope boundary: `infra/terraform/development`'s Lambda worker is
+unaffected by the latency target.** That root's `aws_cloudwatch_event_rule
+"outbox"` triggers `dispatchOutbox` on a `rate(1 minute)` EventBridge
+schedule -- a pre-existing, intentionally coarse cadence for that
+cost-optimized, non-production tier (staging and production instead run the
+long-running `apps/worker/src/index.ts` process against ECS/EKS, per
+ADR-0026/P4.1 Task 5, with this task's sub-second dispatch loops). Per
+`docs/ROADMAP.md`'s own sequencing note, "additional development service
+Lambdas and new hosting platforms are outside this scope," so that
+one-minute schedule was left untuned; `dispatchOutbox` still received the
+same topic-isolation fix, since the starvation bug it fixes is independent
+of invocation cadence.
+
+**Left to Task 6/7, unchanged by this task**: the `confirmation_receipts`/
+`scan_confirmations` FK policy, the account-deletion race, and the physical
+schema/role/process cutover.

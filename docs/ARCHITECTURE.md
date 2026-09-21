@@ -119,9 +119,24 @@ today's one `apps/worker` process:
 The scan page's existing queued/processing poll loop now also polls while a
 confirmation is `pending`, so the UI never reports a completed save before
 the projection lands. See ADR-0028 for the full design and its documented
-gaps (Task 4: replay/conflict polish and UI; Task 5: dispatch fairness;
-Task 6: the FK/account-deletion rework this pipeline still depends on;
-Task 7: the physical schema/role/process cutover).
+gaps (Task 4: replay/conflict polish and UI; Task 6: the FK/account-deletion
+rework this pipeline still depends on; Task 7: the physical
+schema/role/process cutover).
+
+**Task 5 isolated hop 1 -> 2 dispatch from scan-analysis dispatch and set a
+latency target.** `dispatchNextOutboxMessage` now scopes its claim to the
+topics registered with it, so `apps/worker` runs `scan.analyze.v1` and
+`scan.confirmed.v1` as two independent dispatch loops against
+`outbox_messages` rather than one shared FIFO claim -- a deep analysis
+backlog can no longer delay a newer confirmation event. Both confirmation
+hops (`scan.confirmed.v1` dispatch and the existing `confirmation_receipts`
+dispatch) run on a new, faster `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS`
+(200ms default), independent of the analysis-only `OUTBOX_POLL_INTERVAL_MS`.
+The confirmation-to-library latency target (p95 ≤ 2000ms,
+`scan_confirmations.confirmedAt` to `confirmation.completed.v1`'s
+`completedAt`) is directly measured, not just estimated:
+`applyConfirmationCompletion` returns the latency and the worker logs it as
+`confirmationToLibraryLatencyMs`. See ADR-0028's 2026-09-21 amendment.
 
 ## Deployment evolution
 

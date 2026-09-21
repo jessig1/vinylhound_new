@@ -308,4 +308,26 @@ describe("QueueWorkerConfigSchema", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("defaults confirmation dispatch to a faster poll than the analysis outbox (P4.2 Task 5)", () => {
+    const config = QueueWorkerConfigSchema.parse({
+      ...baseEnv,
+      REDIS_URL: "redis://localhost:6379",
+    });
+
+    expect(config.CONFIRMATION_DISPATCH_POLL_INTERVAL_MS).toBe(200);
+    expect(config.CONFIRMATION_DISPATCH_POLL_INTERVAL_MS).toBeLessThan(
+      config.OUTBOX_POLL_INTERVAL_MS,
+    );
+  });
+
+  it("rejects a confirmation dispatch poll interval below 50ms", () => {
+    expect(
+      QueueWorkerConfigSchema.safeParse({
+        ...baseEnv,
+        REDIS_URL: "redis://localhost:6379",
+        CONFIRMATION_DISPATCH_POLL_INTERVAL_MS: "10",
+      }).success,
+    ).toBe(false);
+  });
 });

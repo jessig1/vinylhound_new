@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 
 import { ANALYZE_SCAN_JOB, getEventContract } from "@vinylhound/contracts";
 
@@ -27,13 +27,26 @@ export type OutboxPublisher = (
 export type OutboxPublisherRegistry = Record<string, OutboxPublisher>;
 
 /**
- * Claims and delivers the single oldest available outbox row across every
- * topic, generalized from the scan-analysis-only design
- * `docs/PHASE_3_4_PLAN_REVIEW.md`'s G8 flagged (P4.2 Task 2, amending
- * ADR-0004). `SELECT ... FOR UPDATE SKIP LOCKED` still lets multiple
- * publisher processes claim distinct rows concurrently, and exponential
- * backoff plus the row lock held across the publish call are unchanged from
- * the scan-only implementation this replaces.
+ * Claims and delivers the single oldest available outbox row, generalized
+ * from the scan-analysis-only design `docs/PHASE_3_4_PLAN_REVIEW.md`'s G8
+ * flagged (P4.2 Task 2, amending ADR-0004). `SELECT ... FOR UPDATE SKIP
+ * LOCKED` still lets multiple publisher processes claim distinct rows
+ * concurrently, and exponential backoff plus the row lock held across the
+ * publish call are unchanged from the scan-only implementation this
+ * replaces.
+ *
+ * The claim is scoped to `Object.keys(publishers)` (P4.2 Task 5, ADR-0028):
+ * a call site that only registers `scan.confirmed.v1` never claims, locks,
+ * or backs off a `scan.analyze.v1` row, and vice versa. This is what lets
+ * `apps/worker` run one dispatch loop per topic group on independent
+ * schedules -- a burst of one topic's rows can no longer delay the other's
+ * claim query, since they are now separate `WHERE topic = ANY (...)`
+ * queries rather than one shared "oldest across every topic" ordering. Before
+ * this, a caller passing a single-topic registry still competed for the
+ * globally oldest row of *any* topic and, on claiming one outside its
+ * registry, threw the "no publisher registered" error below and backed the
+ * row off under an unrelated caller's exponential backoff -- a real
+ * cross-topic interference bug, not just a missed optimization.
  *
  * Cancellation is scoped to `scan.analyze.v1` deliberately: it is the only
  * topic whose aggregate (a scan) can be canceled by the user between submit
@@ -45,6 +58,7 @@ export async function dispatchNextOutboxMessage(
   publishers: OutboxPublisherRegistry,
   now = new Date(),
 ): Promise<OutboxDispatchResult> {
+  const topics = Object.keys(publishers);
   return db.transaction(async (transaction) => {
     const [message] = await transaction
       .select()
@@ -53,6 +67,7 @@ export async function dispatchNextOutboxMessage(
         and(
           isNull(outboxMessages.publishedAt),
           lte(outboxMessages.availableAt, now),
+          inArray(outboxMessages.topic, topics),
         ),
       )
       .orderBy(asc(outboxMessages.createdAt))

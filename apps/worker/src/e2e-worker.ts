@@ -152,8 +152,13 @@ const confirmationCompletionWorker = createConfirmationCompletionWorker({
 
 let stopping = false;
 let nextPoll: NodeJS.Timeout | undefined;
+let nextConfirmedEventPoll: NodeJS.Timeout | undefined;
 let nextConfirmationReceiptPoll: NodeJS.Timeout | undefined;
 
+// P4.2 Task 5 (ADR-0028): split from one combined dispatch loop into two
+// topic-scoped loops on independent schedules, mirroring apps/worker/src/
+// index.ts -- see that file's `dispatchAvailableAnalysisJobs`/
+// `dispatchAvailableConfirmedEvents` for the isolation rationale.
 async function poll() {
   try {
     while (!stopping) {
@@ -161,12 +166,6 @@ async function poll() {
         [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
           await queue.enqueueAnalyzeScan(
             payload as AnalyzeScanJob,
-            idempotencyKey,
-          );
-        },
-        [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
-          await confirmationProcessingQueue.enqueue(
-            payload as ScanConfirmedEvent,
             idempotencyKey,
           );
         },
@@ -182,6 +181,35 @@ async function poll() {
   } finally {
     if (!stopping) {
       nextPoll = setTimeout(() => void poll(), config.OUTBOX_POLL_INTERVAL_MS);
+    }
+  }
+}
+
+async function confirmedEventPoll() {
+  try {
+    while (!stopping) {
+      const result = await dispatchNextOutboxMessage(database.db, {
+        [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
+          await confirmationProcessingQueue.enqueue(
+            payload as ScanConfirmedEvent,
+            idempotencyKey,
+          );
+        },
+      });
+      if (result.status !== "published") {
+        break;
+      }
+    }
+  } catch (error) {
+    console.error("[e2e-worker] scan-confirmed-event polling failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+  } finally {
+    if (!stopping) {
+      nextConfirmedEventPoll = setTimeout(
+        () => void confirmedEventPoll(),
+        config.CONFIRMATION_DISPATCH_POLL_INTERVAL_MS,
+      );
     }
   }
 }
@@ -210,7 +238,7 @@ async function confirmationReceiptPoll() {
     if (!stopping) {
       nextConfirmationReceiptPoll = setTimeout(
         () => void confirmationReceiptPoll(),
-        config.OUTBOX_POLL_INTERVAL_MS,
+        config.CONFIRMATION_DISPATCH_POLL_INTERVAL_MS,
       );
     }
   }
@@ -223,6 +251,9 @@ async function shutdown() {
   stopping = true;
   if (nextPoll) {
     clearTimeout(nextPoll);
+  }
+  if (nextConfirmedEventPoll) {
+    clearTimeout(nextConfirmedEventPoll);
   }
   if (nextConfirmationReceiptPoll) {
     clearTimeout(nextConfirmationReceiptPoll);
@@ -246,4 +277,5 @@ console.info(
   `[e2e-worker] synthetic scan worker started; queue=${config.SCAN_QUEUE_NAME}`,
 );
 void poll();
+void confirmedEventPoll();
 void confirmationReceiptPoll();

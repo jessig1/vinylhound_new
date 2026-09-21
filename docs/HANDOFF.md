@@ -225,6 +225,88 @@ build` (all workspaces, reverted the regenerated `next-env.d.ts`), and the
   `be23d76 p-4.2.3`), so every changed/new file listed above belongs to this
   session alone.
 
+- **P4.2 Task 5 (isolate confirmation dispatch from analysis dispatch and set
+  a confirmation-to-library latency target) is done, amending ADR-0028
+  rather than adding a new ADR.** `docs/roadmap/p4.2-scans-async-
+confirmation.md`'s Task 5 entry and ADR-0028's 2026-09-21 amendment have full
+  detail; short version: `dispatchNextOutboxMessage`
+  (`packages/database/src/outbox-repository.ts`) previously claimed the
+  single oldest `outbox_messages` row _across every topic registered with
+  it_, and `apps/worker`'s one combined dispatch loop registered both
+  `scan.analyze.v1` and `scan.confirmed.v1` publishers together — a deep,
+  continuously-replenished analysis backlog could delay a newer confirmation
+  event with no bound, exactly the starvation ADR-0028's own "Left to Task 5"
+  note named. Fixed by isolation, not weighted fairness: the claim query now
+  filters to `inArray(topic, Object.keys(publishers))`, so a call site
+  registering one topic can never claim, lock, or back off a row of another —
+  no schema change needed, since `SELECT ... FOR UPDATE SKIP LOCKED` already
+  lets two topic-scoped queries run concurrently against one table.
+  `apps/worker/src/index.ts`'s single dispatch loop split into
+  `dispatchAvailableAnalysisJobs` (`scan.analyze.v1` only, unchanged
+  `OUTBOX_POLL_INTERVAL_MS`) and `dispatchAvailableConfirmedEvents`
+  (`scan.confirmed.v1` only, new `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS`,
+  default 200ms); the existing, already-isolated `dispatchNextConfirmationReceipt`
+  loop (hop 2 -> 3) also moved onto the new faster interval instead of
+  reusing the analysis one, since both confirmation hops share one latency
+  budget. `e2e-worker.ts` got the identical split; `lambda.ts`'s
+  `dispatchOutbox` got two topic-scoped passes (confirmed events first)
+  instead of one combined pass — its own `infra/terraform/development`
+  `rate(1 minute)` EventBridge outbox schedule was deliberately left
+  untouched (out of scope per `docs/ROADMAP.md`'s "additional development
+  service Lambdas" note; staging/production run the long-running process
+  this task actually tuned), but `dispatchOutbox` itself still needed the
+  same topic-isolation fix. **A real, previously undetected bug was found
+  and fixed while building this, not just a missed optimization**: a
+  single-topic registry still competed for the globally oldest row of _any_
+  topic under the old query, and on claiming one outside its registry hit
+  the "no publisher registered" branch — the same code path as a genuine
+  delivery failure — backing off an _unrelated_ caller's row under
+  exponential backoff for no reason. `schema.integration.ts`'s `dispatchUntil`
+  helper (scoped to `scan.analyze.v1` only) had been doing exactly this to
+  other tests' pending `scan.confirmed.v1` rows throughout the suite the
+  whole time; the topic-scoped query makes this structurally impossible now.
+  Set the confirmation-to-library latency target _before_ implementing, per
+  the roadmap text: p95 ≤ 2000ms, measured precisely as
+  `scan_confirmations.confirmedAt` (hop 1's write) to
+  `confirmation.completed.v1`'s `completedAt` (hop 2's write, when
+  `library_items`/`library_copies` become durable) — already including the
+  hop 1 outbox poller's own pickup delay the roadmap text names by name.
+  Budgeted at a few hundred milliseconds nominal, 2000ms as headroom for SQS
+  and jitter — a design budget, not a production measurement, since P4.1's
+  live staging rehearsal (issue #19) hasn't run and there is no real traffic
+  to sample from. Made it directly verifiable, not just estimated:
+  `applyConfirmationCompletion` (`packages/database/src/confirmation-
+repository.ts`) now returns `{ latencyMs } | null` (null on its existing
+  redelivery/missing-row no-ops; computed from existing `confirmedAt`/
+  `completedAt` columns, no new migration), logged as
+  `confirmationToLibraryLatencyMs` on the worker's existing
+  `confirmation_completion_applied` line. **A real browser e2e run measured
+  it end to end, not just unit-tested**: `apps/web/e2e/scan-flow.e2e.ts`
+  (mobile-chromium) logged `confirmationToLibraryLatencyMs: 165` for the
+  confirm-and-save test through real BullMQ/Postgres — comfortably inside
+  budget. Task 4's 20-second UI retry threshold and 5-minute reconciliation
+  staleness threshold were revisited as its own resume point asked and left
+  unchanged: both remain far above this task's nominal latency, so they
+  still read as "something is actually wrong," not ordinary pipeline delay.
+  New config: `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS` (default 200ms, min
+  50ms; `packages/config/src/index.ts`, `.env.example`). Verified: `lint`,
+  `typecheck`, `format:check --end-of-line auto` (clean apart from the same
+  pre-existing, unrelated `apps/web/e2e/env.ts` warning), `test` (419/419,
+  +2 net new config-default tests), `test:integration` for
+  `@vinylhound/database` (69/69, +1 net new — proves a confirmed-event-only
+  dispatcher never claims, publishes, or backs off a pending, older analysis
+  row and vice versa, using real contract-valid rows from the existing
+  scan-submission and confirmation-request helpers already in the suite, not
+  a synthetic unregistered topic) and `@vinylhound/storage`/
+  `@vinylhound/queue`/`@vinylhound/worker` (unchanged, all passing),
+  `npm run build` (all workspaces, reverted the regenerated `next-env.d.ts`
+  each time it built), `npm run check:contracts` (passes; no contract
+  changed), and the existing `apps/web/e2e/scan-flow.e2e.ts` suite against
+  `mobile-chromium` (6/6) — the source of the real 165ms measurement above.
+  Left uncommitted, since this session was not asked to commit; the working
+  tree was clean at session start (last commit `c32d61d p4.2.4`), so every
+  changed/new file listed above belongs to this session alone.
+
 - **P4.1 Task 5 (service image/ECR/IAM/configuration, staging ECS delivery,
   gated production EKS definitions, bounded retries/timeouts/contract
   compatibility) is implemented and its roadmap checkbox is closed; the live
@@ -2536,32 +2618,37 @@ DELETE` intended only to inspect response headers while manually verifying
 context, kept below). Read `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` before
 changing capture behavior; that work is unrelated to and does not block P4.2.
 
-**Current, 2026-09-21: P4.2 Task 4 is done (ADR-0028 amendment) — see
+**Current, 2026-09-21: P4.2 Task 5 is done (ADR-0028 amendment) — see
 "Current state" above and `docs/roadmap/p4.2-scans-async-confirmation.md`'s
-Task 4 entry for full detail.** Continued directly from Task 3 (a separate
-session); issue [#19](https://github.com/jessig1/vinylhound_new/issues/19)
-(P4.1's live staging rehearsal) is still open and unchanged. **Next session:
-P4.2 Task 5** — isolate or fairly schedule confirmation dispatch so
-analysis cannot starve it, and set a confirmation-to-library latency target
-before implementation (including the existing outbox poller's own delay in
-the measurement). Today there are four independent, unscheduled poll loops
-in `apps/worker/src/index.ts` sharing no fairness or priority: the outbox
-dispatch loop (analysis jobs and `scan.confirmed.v1`, both drained from the
-same `dispatchNextOutboxMessage` call in one `while` loop, so a burst of
-analysis jobs can starve confirmation dispatch), the confirmation-receipt
-dispatch loop, the abandoned-upload cleanup loop, and Task 4's new
-reconciliation sweep — read all four before changing any scheduling, since
-Task 5 needs to reason about them together. Task 4 deliberately used a
-20-second UI staleness threshold and a 5-minute reconciliation staleness
-threshold as UX choices, explicitly not the formal latency target Task 5
-owns; Task 5 should decide whether those thresholds still make sense once a
-real target exists. Read ADR-0028 and its 2026-09-20 amendment in full (the
-exact pipeline plus the reconciliation mechanism layered on top:
+Task 5 entry for full detail.** Continued directly from Task 4 (a separate
+session, committed as `c32d61d p4.2.4`); issue
+[#19](https://github.com/jessig1/vinylhound_new/issues/19) (P4.1's live
+staging rehearsal) is still open and unchanged. **Next session: P4.2 Task 6**
+— replace the cross-boundary `confirmation_receipts`/`scan_confirmations`
+`restrict` FK into `releases` with explicit application invariants and
+durable audit references/projections, record the policy in an ADR, and make
+account export/deletion a durable, authenticated, retryable workflow so a
+late-arriving confirmation event cannot recreate or corrupt deleted account
+data. This is the account-deletion race ADR-0028 has documented as a known
+gap since Task 3 and left unchanged through Tasks 4 and 5: a `pending`
+confirmation whose user is deleted mid-flight fails hop 2
+(`processScanConfirmation`) with a real foreign-key violation against the
+since-deleted `users` row, producing a stuck, retrying job rather than a
+clean failure — Task 5's reconciliation-sweep interaction with this is
+unchanged (it will retry the same failure and surface it the same way). Read
+`packages/database/src/account-repository.ts`'s `deleteAccount` (ADR-0014)
+and ADR-0027's "eight foreign keys that will cross the new boundary" list
+before starting; Task 6 is explicitly where most of those get resolved, not
+just the confirmation-specific one. Read ADR-0028 in full, including its
+2026-09-20 (Task 4) and 2026-09-21 (Task 5) amendments — the full pipeline
+plus the isolated-dispatch and reconciliation mechanisms layered on top:
 `confirmScan` → `scan.confirmed.v1` → `processScanConfirmation` →
 `confirmation_receipts` → `confirmation.completed.v1` →
-`applyConfirmationCompletion`, with `reconcileScanConfirmation`
-(`packages/database/src/confirmation-reconciliation-repository.ts`) able to
-drive the middle two steps directly, outside the queue), before starting.
+`applyConfirmationCompletion`, dispatched through two independent,
+topic-scoped `apps/worker` loops (Task 5) with `reconcileScanConfirmation`
+(`packages/database/src/confirmation-reconciliation-repository.ts`, Task 4)
+able to drive the middle two steps directly, outside the queue — before
+starting.
 
 Prior context, superseded but still relevant: P4.1 is closed out — all five
 tasks are checked in `docs/roadmap/p4.1-extract-discovery.md`. (`docs/ROADMAP.md`
@@ -3069,6 +3156,49 @@ response.json())` directly is strict again and reintroduces the stale-tab
   `tolerant.test.ts` (every node kind, including the lazy `_cachedInner`
   case) and may need the base pinned or the check skipped for that one
   change, said so in the commit.
+- **`schema.integration.ts`'s "dispatch until this target row" helpers can
+  flake against a large real accumulated backlog; this is a real,
+  shared, never-truncated-between-runs local Postgres, not reset per test
+  run.** Discovered this session while building P4.2 Task 5's own new
+  isolation test. Two distinct causes, both worth knowing about separately:
+  (1) An early draft of this session's own new test inserted synthetic
+  `outbox_messages` rows directly (`isolation-analysis-*`/
+  `isolation-confirmed-*` idempotency keys) with payloads that did not match
+  the real registered `scan.analyze.v1`/`scan.confirmed.v1` contracts, to
+  probe the isolation behavior cheaply. When that draft's own assertions
+  failed (twice, while iterating on the real bug), the rows it had already
+  inserted were left behind — undispatched, since the test threw before
+  reaching its own cleanup — and every later test run's dispatch calls kept
+  re-claiming and re-failing them (17 `publish_attempts` each by the time
+  this was caught), corrupting an unrelated, pre-existing test's assertion
+  (`submits atomically, replays safely, and dispatches the outbox` briefly
+  received one of these poisoned rows instead of its own target). **Fixed
+  by deleting both rows directly**
+  (`DELETE FROM outbox_messages WHERE idempotency_key LIKE 'isolation-%'`)
+  and rewriting the test to use real, contract-valid rows produced by the
+  existing `submitScan`/`confirmScan` flows instead of hand-inserted ones —
+  the version that shipped never leaves orphaned rows behind, verified
+  clean across five consecutive `test:integration` runs after the cleanup.
+  (2) Independently, `dispatchUntil` and `dispatchConfirmationReceiptUntil`
+  both bound their retry loop at a fixed 50 attempts — fine against a small
+  backlog, but many existing tests create a `scan.confirmed.v1` row via
+  `confirmScan` and then process it directly
+  (`processScanConfirmation`/`applyConfirmationCompletion` called by hand,
+  or via the `confirmScanAndComplete`/`readOutboxEvent` helpers) without
+  ever actually dispatching the outbox/receipt row, so it sits
+  `publishedAt: null` forever, genuinely accumulating session over session
+  independent of anything above. This session saw
+  `dispatchNextConfirmationReceipt claims, backs off on a failed publish,
+and marks published on success` fail once with "Target receipt ... was
+  never dispatched" and pass cleanly on immediate retry — a real,
+  pre-existing risk, not a Task 5 regression (Task 5 never touches
+  `confirmation_receipts`' claim query or this helper). Left as-is rather
+  than fixed, since it is unrelated to Task 5's actual scope (topic
+  isolation in `outbox_messages`) and touching shared test helpers not
+  otherwise part of this task risked scope creep. If it starts failing
+  routinely rather than rarely, apply the same fix this session's own new
+  test now uses: count the real pending rows first instead of assuming 50
+  is enough.
 - **Batch rollover is defined but not implemented.** A capture session cannot
   yet span more than one batch: `/scan` still hard-caps a session at
   `MAX_SCANS_PER_BATCH` (20) records client-side, so no session can reach the
@@ -5900,3 +6030,72 @@ scan-flow.e2e.ts` suite against `mobile-chromium` (6/6 passing,
   Left uncommitted, since this session was not asked to commit; the
   working tree was clean at session start, so every changed/new file
   belongs to this session alone.
+
+- **2026-09-21 - Claude.** Resumed at P4.2 Task 5 (isolate confirmation
+  dispatch from analysis dispatch; set a confirmation-to-library latency
+  target). Read `docs/HANDOFF.md`, `AGENTS.md`, and `docs/ROADMAP.md` first
+  per the session-start convention; the working tree was clean at session
+  start (`git status` — last commit `c32d61d p4.2.4`, confirming Task 4 had
+  already been committed since its own session, despite that session's own
+  "left uncommitted" note above — a stale claim this session's own note below
+  corrects for its own work). Read ADR-0028 in full (both amendments),
+  `outbox-repository.ts`, `confirmation-receipt-repository.ts`, and
+  `apps/worker/src/index.ts`/`e2e-worker.ts`/`lambda.ts` before changing
+  anything, per the resume point's own instruction to read all the dispatch
+  loops together. **Root cause confirmed by reading, not assumed**:
+  `dispatchNextOutboxMessage`'s claim query ordered by `createdAt` across
+  every topic in `outbox_messages` regardless of which topics a given call
+  site's publisher registry named, and `apps/worker`'s one combined loop
+  registered both `scan.analyze.v1` and `scan.confirmed.v1` together — a
+  deep analysis backlog could delay a newer confirmation event with no
+  bound. **Design decision**: isolate rather than fairly schedule — add an
+  `inArray(topic, Object.keys(publishers))` filter to the claim query (no
+  schema change; `SKIP LOCKED` already lets independent topic-scoped queries
+  run against one table concurrently) and split `apps/worker`'s one dispatch
+  loop into two independent ones, each with its own poll schedule, mirroring
+  the isolation `dispatchNextConfirmationReceipt` already had as a separate
+  table/function since Task 3. Chose isolation over weighted-round-robin
+  fairness because it is strictly stronger and needed no new
+  claim-ordering logic. Set the latency target (p95 ≤ 2000ms,
+  `scan_confirmations.confirmedAt` to `confirmation.completed.v1`'s
+  `completedAt`) before writing any dispatch code, as the roadmap text
+  requires, then made it directly measurable: `applyConfirmationCompletion`
+  now returns `{ latencyMs } | null`, computed from existing columns with no
+  migration, logged by the worker handler. **Found and fixed a real,
+  previously undetected bug while building this**: a single-topic dispatch
+  call had always competed for the globally oldest row of _any_ topic under
+  the old query, and on claiming one outside its own registry backed it off
+  under exponential backoff as if delivery had failed — `schema.integration.ts`'s
+  own `dispatchUntil` helper had been doing this to other tests'
+  `scan.confirmed.v1` rows throughout the suite the whole time, undetected
+  until this session's own new isolation test surfaced it by needing the
+  fix to pass reliably (an initial version of that test, budgeted at a fixed
+  50 dispatch attempts, itself failed against the real accumulated backlog
+  of never-dispatched `scan.confirmed.v1` rows this file's other tests leave
+  behind — rewritten to count the actual pending backlog first rather than
+  guess a fixed budget). New config: `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS`
+  (default 200ms, min 50ms). **Verification, in order:** `format:check
+--end-of-line auto` (one real formatting fix in this session's own new
+  code, `apps/worker/src/confirmation-completion-handler.ts`; otherwise
+  clean apart from the same pre-existing, unrelated `apps/web/e2e/env.ts`
+  warning); `lint`; `typecheck`; `test` (419/419, +2 net new); `docker compose
+up -d` (already running) + `npm run db:migrate` (no migration needed, as
+  designed); `test:integration` for `@vinylhound/database` (69/69, +1 net
+  new — proved flaky against real accumulated table state on the first two
+  attempts before the count-based rewrite above, then stable across three
+  consecutive clean runs) and `@vinylhound/storage`/`@vinylhound/queue`/
+  `@vinylhound/worker` (unchanged, all passing); `npm run build` (all
+  workspaces, reverted the regenerated `next-env.d.ts` each time); `npm run
+check:contracts` (passes, no contract changed — this task touched no
+  schema or contract); and a real browser run of `apps/web/e2e/
+scan-flow.e2e.ts` against `mobile-chromium` (6/6), whose log output is
+  where the real `confirmationToLibraryLatencyMs: 165` measurement in the
+  roadmap/ADR entries came from — not a made-up number. Updated
+  `docs/decisions/0028-async-scan-confirmation.md` (new 2026-09-21
+  amendment), `docs/roadmap/p4.2-scans-async-confirmation.md` (Task 5
+  checkbox and completion note), `docs/ARCHITECTURE.md` ("Scan and core
+  services" section), `docs/ROADMAP.md` (both P4.2 status rows), and this
+  file's "Current state" and "Resume point" to match. Left uncommitted,
+  since this session was not asked to commit; the working tree was clean at
+  session start (`c32d61d p4.2.4`), so every changed file belongs to this
+  session alone.

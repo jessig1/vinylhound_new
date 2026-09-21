@@ -202,21 +202,22 @@ async function recordHeartbeat() {
   }
 }
 
-async function dispatchAvailableMessages() {
+/**
+ * P4.2 Task 5 (ADR-0028): scoped to `scan.analyze.v1` alone.
+ * `dispatchNextOutboxMessage` now claims only the topics named in its
+ * registry, so a deep analysis backlog can grow this loop's own queue
+ * arbitrarily long without ever affecting `dispatchAvailableConfirmedEvents`
+ * below -- they run independent `WHERE topic = ANY (...)` queries against
+ * the same table rather than competing for one shared "oldest across every
+ * topic" claim, which is what previously let an analysis burst starve
+ * confirmation dispatch.
+ */
+async function dispatchAvailableAnalysisJobs() {
   while (!stopping) {
     const result = await dispatchNextOutboxMessage(database.db, {
       [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
         await queue.enqueueAnalyzeScan(
           payload as AnalyzeScanJob,
-          idempotencyKey,
-        );
-      },
-      // P4.2 Task 3: no dispatch-loop changes needed beyond this registry
-      // entry -- `dispatchNextOutboxMessage` was already made topic-generic
-      // by Task 2.
-      [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
-        await confirmationProcessingQueue.enqueue(
-          payload as ScanConfirmedEvent,
           idempotencyKey,
         );
       },
@@ -235,7 +236,7 @@ async function dispatchAvailableMessages() {
 
 async function poll() {
   try {
-    await dispatchAvailableMessages();
+    await dispatchAvailableAnalysisJobs();
   } catch (error) {
     console.error("[worker] outbox polling failed", {
       errorName: error instanceof Error ? error.name : "UnknownError",
@@ -254,17 +255,78 @@ function runPoll() {
   });
 }
 
+let nextConfirmedEventPoll: NodeJS.Timeout | undefined;
+let activeConfirmedEventPoll: Promise<void> | undefined;
+
+/**
+ * P4.2 Task 5 (ADR-0028): hop 1 -> 2 dispatch, scoped to `scan.confirmed.v1`
+ * alone and run on its own, faster `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS`
+ * schedule -- independent of `dispatchAvailableAnalysisJobs` above, per the
+ * isolation note on `dispatchNextOutboxMessage` itself. This is the loop
+ * that used to be merged into a single combined dispatch pass with analysis;
+ * splitting it is what actually fixes the starvation the roadmap names, not
+ * just the topic-scoped query alone -- a merged loop would still process
+ * one topic's full backlog before returning to poll the other.
+ */
+async function dispatchAvailableConfirmedEvents() {
+  while (!stopping) {
+    const result = await dispatchNextOutboxMessage(database.db, {
+      [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
+        await confirmationProcessingQueue.enqueue(
+          payload as ScanConfirmedEvent,
+          idempotencyKey,
+        );
+      },
+    });
+
+    if (result.status !== "published") {
+      return;
+    }
+    console.info("[worker] scan_confirmed_event_published", {
+      messageId: result.messageId,
+      jobId: result.jobId,
+    });
+    await recordHeartbeat();
+  }
+}
+
+async function confirmedEventPoll() {
+  try {
+    await dispatchAvailableConfirmedEvents();
+  } catch (error) {
+    console.error("[worker] scan-confirmed-event polling failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+  } finally {
+    await recordHeartbeat();
+    if (!stopping) {
+      nextConfirmedEventPoll = setTimeout(
+        runConfirmedEventPoll,
+        config.CONFIRMATION_DISPATCH_POLL_INTERVAL_MS,
+      );
+    }
+  }
+}
+
+function runConfirmedEventPoll() {
+  activeConfirmedEventPoll = confirmedEventPoll().finally(() => {
+    activeConfirmedEventPoll = undefined;
+  });
+}
+
 let nextConfirmationReceiptPoll: NodeJS.Timeout | undefined;
 let activeConfirmationReceiptPoll: Promise<void> | undefined;
 
 /**
  * P4.2 Task 3's second dispatch loop (hop 2 -> 3): drains
- * `confirmation_receipts` the same way `dispatchAvailableMessages` drains
- * `outbox_messages`, but against the dedicated, single-topic dispatcher
- * (`dispatchNextConfirmationReceipt`) rather than the generalized one. This
- * is a naive, independent poll -- not fairly scheduled against the analysis/
- * confirmation-processing loops above -- which is fine for now; isolating or
- * fairly scheduling dispatch across all of them is Task 5's job.
+ * `confirmation_receipts` the same way `dispatchAvailableConfirmedEvents`
+ * drains `outbox_messages`, but against the dedicated, single-topic
+ * dispatcher (`dispatchNextConfirmationReceipt`) rather than the generalized
+ * one -- it already had its own table, so it never shared a claim query with
+ * analysis dispatch. P4.2 Task 5 gives it the same dedicated
+ * `CONFIRMATION_DISPATCH_POLL_INTERVAL_MS` schedule as the hop 1 -> 2 loop
+ * above instead of reusing `OUTBOX_POLL_INTERVAL_MS`, since both hops are
+ * part of the same confirmation-to-library-visible latency budget.
  */
 async function dispatchAvailableConfirmationReceipts() {
   while (!stopping) {
@@ -300,7 +362,7 @@ async function confirmationReceiptPoll() {
     if (!stopping) {
       nextConfirmationReceiptPoll = setTimeout(
         runConfirmationReceiptPoll,
-        config.OUTBOX_POLL_INTERVAL_MS,
+        config.CONFIRMATION_DISPATCH_POLL_INTERVAL_MS,
       );
     }
   }
@@ -441,6 +503,9 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
   if (nextCleanupPoll) {
     clearTimeout(nextCleanupPoll);
   }
+  if (nextConfirmedEventPoll) {
+    clearTimeout(nextConfirmedEventPoll);
+  }
   if (nextConfirmationReceiptPoll) {
     clearTimeout(nextConfirmationReceiptPoll);
   }
@@ -454,6 +519,7 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
     confirmationCompletionWorker.close(),
     activePoll,
     activeCleanupPoll,
+    activeConfirmedEventPoll,
     activeConfirmationReceiptPoll,
     activeReconciliationPoll,
   ]);
@@ -473,6 +539,8 @@ console.info("[worker] started", {
   deploymentVersion: config.DEPLOYMENT_VERSION,
   queueDriver: config.QUEUE_DRIVER,
   outboxPollIntervalMs: config.OUTBOX_POLL_INTERVAL_MS,
+  confirmationDispatchPollIntervalMs:
+    config.CONFIRMATION_DISPATCH_POLL_INTERVAL_MS,
   analysisConcurrency: config.ANALYSIS_CONCURRENCY,
   cloudWatchMetricsEnabled: config.CLOUDWATCH_METRICS_ENABLED,
   abandonedUploadTtlHours: config.ABANDONED_UPLOAD_TTL_HOURS,
@@ -484,6 +552,7 @@ console.info("[worker] started", {
 });
 void recordHeartbeat();
 runPoll();
+runConfirmedEventPoll();
 runCleanupPoll();
 runConfirmationReceiptPoll();
 runReconciliationPoll();

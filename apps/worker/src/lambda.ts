@@ -102,19 +102,46 @@ const applyConfirmationCompleted = createConfirmationCompletionHandler({
   database: database.db,
 });
 
+/**
+ * P4.2 Task 5 (ADR-0028): three topic-scoped passes, not one combined
+ * analysis+confirmation pass. `dispatchNextOutboxMessage` claims only the
+ * topics in its registry, so this invocation's confirmed-event pass can
+ * never be blocked behind (or have its rows claimed by) the analysis pass --
+ * each gets its own 100-message budget. Confirmed events are drained first,
+ * deliberately: they are the latency-sensitive hop of this pipeline, and
+ * this Lambda's own EventBridge schedule (`infra/terraform/development`'s
+ * `rate(1 minute)` "outbox" rule) is the dominant term in this topology's
+ * confirmation-to-library latency, far larger than either dispatch loop's
+ * own claim/enqueue cost -- ordering only controls which pass runs first
+ * within one invocation, not that schedule. That schedule is a pre-existing,
+ * intentionally coarse choice for a cost-optimized development-tier Lambda,
+ * out of scope for this task's own latency target (`docs/roadmap/
+ * p4.2-scans-async-confirmation.md`'s "Additional development service
+ * Lambdas ... are outside this scope"); staging/production instead run the
+ * long-running `apps/worker/src/index.ts` process, whose two dispatch loops
+ * this task tuned directly.
+ */
 async function dispatchOutbox() {
+  let confirmedEventsPublished = 0;
+  while (confirmedEventsPublished < 100) {
+    const result = await dispatchNextOutboxMessage(database.db, {
+      [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
+        await confirmationProcessingQueue.enqueue(
+          payload as ScanConfirmedEvent,
+          idempotencyKey,
+        );
+      },
+    });
+    if (result.status !== "published") break;
+    confirmedEventsPublished += 1;
+  }
+
   let published = 0;
   while (published < 100) {
     const result = await dispatchNextOutboxMessage(database.db, {
       [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
         await queue.enqueueAnalyzeScan(
           payload as AnalyzeScanJob,
-          idempotencyKey,
-        );
-      },
-      [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
-        await confirmationProcessingQueue.enqueue(
-          payload as ScanConfirmedEvent,
           idempotencyKey,
         );
       },
@@ -138,7 +165,7 @@ async function dispatchOutbox() {
     confirmationReceiptsPublished += 1;
   }
 
-  return { published, confirmationReceiptsPublished };
+  return { published, confirmedEventsPublished, confirmationReceiptsPublished };
 }
 
 /** The queue name is the last path segment of its URL; an SQS-populated

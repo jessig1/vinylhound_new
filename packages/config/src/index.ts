@@ -249,9 +249,7 @@ export const QueueWorkerConfigSchema = z
       .default(120_000),
     SCAN_QUEUE_NAME: z.string().min(1).default("vinylhound-scans"),
     // P4.2 Task 3 (ADR-0028): the two confirmation-pipeline queue names,
-    // parallel to SCAN_QUEUE_NAME above. Confirmation-receipt dispatch
-    // (hop 2 -> 3) reuses OUTBOX_POLL_INTERVAL_MS rather than a second knob;
-    // Task 5 is where dispatch-fairness/latency tuning belongs.
+    // parallel to SCAN_QUEUE_NAME above.
     CONFIRMATION_PROCESSING_QUEUE_NAME: z
       .string()
       .min(1)
@@ -261,6 +259,19 @@ export const QueueWorkerConfigSchema = z
       .min(1)
       .default("vinylhound-confirmation-completions"),
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
+    // P4.2 Task 5 (ADR-0028): the two confirmation-pipeline dispatch loops
+    // (`scan.confirmed.v1` out of `outbox_messages`, hop 1 -> 2; and
+    // `confirmation_receipts` -> `confirmation.completed.v1`, hop 2 -> 3) no
+    // longer share OUTBOX_POLL_INTERVAL_MS -- that knob now governs the
+    // scan-analysis dispatch loop only. A faster, dedicated default keeps the
+    // confirmation-to-library latency target low independent of analysis
+    // dispatch cadence.
+    CONFIRMATION_DISPATCH_POLL_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(50)
+      .max(60_000)
+      .default(200),
     ANALYSIS_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(1),
     // A scan left awaiting_upload with no activity (neither the scan nor
     // any of its images created) for this long is abandoned: canceled, and
