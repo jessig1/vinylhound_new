@@ -15,6 +15,26 @@ the log.
 
 ## Current state — verified 2026-09-21
 
+- **CI reliability repair is implemented on `fix/ci-reliability` in the
+  isolated `../vinylhound-ci-fix` worktree and published as
+  [draft PR #24](https://github.com/jessig1/vinylhound_new/pull/24).** The two latest main CI failures
+  (runs `35452335413` and `35621549131`) were the same Prettier error in
+  `apps/web/e2e/env.ts`; older run `35269365186` failed formatting in this
+  handoff. The TypeScript 7 Dependabot branch also repeatedly failed CI and
+  Platform at `npm ci` because typescript-eslint 8.68.0 requires TypeScript
+  `<6.1.0`. Fixed the formatting, added Git LF checkout policy matching the
+  editor/formatter, added Windows formatting and pinned actionlint validation,
+  kept the required `CI / validate` name as an aggregate gate, and made Linux
+  checks report independent failures after installation. Development deployment
+  now calls that same CI workflow before its AWS/image-publishing job; the
+  original deployment ran successfully despite failing CI. Dependabot now groups
+  compiler/lint tooling and leaves compiler major migrations to a coordinated
+  peer-compatible upgrade. No dependency versions or lockfile changed. Local
+  `npm ci`, `npm run check` (417 tests), `npm run build`, contract compatibility
+  against `c32d61d`, and actionlint workflow validation passed. Original-worktree
+  application edits were preserved; they are not part of this fix. See
+  `docs/TESTING.md`'s CI reliability section for policy and maintenance commands.
+
 - **Continuous-capture reliability research is complete; implementation was
   explicitly out of scope.** See
   `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` for the code review, primary-source
@@ -2610,6 +2630,15 @@ DELETE` intended only to inspect response headers while manually verifying
   detail. The ignored local `.env` is synchronized to the Sol default.
 
 ## Resume point
+
+CI repair: check the latest hosted results on
+[draft PR #24](https://github.com/jessig1/vinylhound_new/pull/24), review and land
+`fix/ci-reliability` from the isolated `../vinylhound-ci-fix` worktree, then verify
+the first main CI/development run.
+The existing TypeScript 7 PR #6 needs to remain unmerged until a compatible
+compiler/lint migration is prepared; the new Dependabot policy does not modify
+that existing branch. Keep the original workspace's concurrent P4.2 edits
+separate. The feature-roadmap resume point below is unchanged.
 
 <!-- The next session starts here. Replace this section when the task
      completes or is re-scoped. -->
@@ -6030,6 +6059,32 @@ scan-flow.e2e.ts` suite against `mobile-chromium` (6/6 passing,
   Left uncommitted, since this session was not asked to commit; the
   working tree was clean at session start, so every changed/new file
   belongs to this session alone.
+
+- **2026-09-21 — CI failure review and durable repair (Codex).** Reviewed
+  [main's latest failure](https://github.com/jessig1/vinylhound_new/actions/runs/35621549131),
+  its identical predecessor `35452335413`, the earlier handoff-format failure
+  `35269365186`, and the TypeScript 7 PR's CI/Platform failures
+  `35419839213`/`35419839220`. The main blocker was unformatted confirmation
+  queue constants in `apps/web/e2e/env.ts`, obscured locally by many CRLF
+  warnings and prior sessions accepting nonzero formatting checks. The PR
+  blocker was an incompatible compiler/linter peer range, not an npm outage.
+  Implemented the fixes and safeguards described in Current state and
+  `docs/TESTING.md`; kept application behavior, dependencies, frozen fixtures,
+  and architecture decisions unchanged. Isolated this work in
+  `../vinylhound-ci-fix` because the original worktree had concurrent application
+  edits. Verified a clean `npm ci`, the exact `npm run check` (417/417), all
+  workspace builds, all 46 contract fixtures against `c32d61d`, and actionlint
+  with its optional ShellCheck integration disabled (the unmodified deployment
+  workflows have existing ShellCheck style/unused-loop-variable warnings).
+  Exported the staged tree through Git with `core.autocrlf=true` and confirmed
+  its full Prettier check passes, proving the checkout policy on Windows.
+  Reverted only the isolated worktree's generated `next-env.d.ts` build artifact.
+  The existing development deployment `35621549147` completed successfully
+  despite its failing sibling CI, confirming why the new dependency is needed.
+  Published [draft PR #24](https://github.com/jessig1/vinylhound_new/pull/24)
+  for hosted CI, Security, and Platform validation; inspect that PR's latest
+  checks before merging. No main push, deployment, repository-settings change,
+  or existing-PR modification performed.
 
 - **2026-09-21 - Claude.** Resumed at P4.2 Task 5 (isolate confirmation
   dispatch from analysis dispatch; set a confirmation-to-library latency
