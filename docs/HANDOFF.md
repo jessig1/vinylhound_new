@@ -16,7 +16,8 @@ the log.
 ## Current state — verified 2026-09-21
 
 - **CI reliability repair is implemented on `fix/ci-reliability` in the
-  isolated `../vinylhound-ci-fix` worktree.** The two latest main CI failures
+  isolated `../vinylhound-ci-fix` worktree and published as
+  [draft PR #24](https://github.com/jessig1/vinylhound_new/pull/24).** The two latest main CI failures
   (runs `35452335413` and `35621549131`) were the same Prettier error in
   `apps/web/e2e/env.ts`; older run `35269365186` failed formatting in this
   handoff. The TypeScript 7 Dependabot branch also repeatedly failed CI and
@@ -2548,8 +2549,10 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-CI repair: review and land `fix/ci-reliability` from the isolated
-`../vinylhound-ci-fix` worktree, then verify the first main CI/development run.
+CI repair: check the latest hosted results on
+[draft PR #24](https://github.com/jessig1/vinylhound_new/pull/24), review and land
+`fix/ci-reliability` from the isolated `../vinylhound-ci-fix` worktree, then verify
+the first main CI/development run.
 The existing TypeScript 7 PR #6 needs to remain unmerged until a compatible
 compiler/lint migration is prepared; the new Dependabot policy does not modify
 that existing branch. Keep the original workspace's concurrent P4.2 edits
@@ -5948,5 +5951,7 @@ scan-flow.e2e.ts` suite against `mobile-chromium` (6/6 passing,
   Reverted only the isolated worktree's generated `next-env.d.ts` build artifact.
   The existing development deployment `35621549147` completed successfully
   despite its failing sibling CI, confirming why the new dependency is needed.
-  Preparing a draft PR to verify the updated workflows on GitHub; no main push,
-  deployment, repository-settings change, or existing-PR modification performed.
+  Published [draft PR #24](https://github.com/jessig1/vinylhound_new/pull/24)
+  for hosted CI, Security, and Platform validation; inspect that PR's latest
+  checks before merging. No main push, deployment, repository-settings change,
+  or existing-PR modification performed.
