@@ -38,6 +38,19 @@ npm run check
 npm run build
 ```
 
+Use these exact checks, including after the final documentation/handoff edit.
+Do not override Prettier's line-ending setting or discount a known formatting
+failure. `.gitattributes`, EditorConfig, and Prettier require LF text files on
+every platform, even when Windows Git uses `core.autocrlf=true`. An existing
+checkout can still contain old CRLF files: run `npm run format` once and review
+the diff to normalize them; fresh checkouts use LF automatically.
+
+CI checks formatting on Linux and Windows and reports independent validation
+failures together. The required `CI / validate` result aggregates both jobs;
+development deployment runs the same validation before publishing images or
+obtaining AWS credentials. See [the CI maintenance notes](docs/TESTING.md#ci-reliability)
+for workflow checks and dependency-upgrade policy.
+
 Run `npm run check:contracts` for any change under `packages/contracts` — it
 compares against `origin/main` locally and is a separate CI step (ADR-0022).
 Run `npm run test:integration` for provider or persistence changes and the

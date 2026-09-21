@@ -4,12 +4,13 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
-  validate:
+  checks:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -19,9 +20,21 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+        id: install
+      - name: Validate workflow syntax and expressions
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12
+        with:
+          # ShellCheck is a separate concern; this gate checks workflow wiring.
+          args: -shellcheck= -color
+      # Report every independent failure in one run. Each failed step still
+      # fails the job; only a failed install or cancellation stops these checks.
       - run: npm run format:check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       - run: npm run lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       - run: npm run typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       # Affected-workspace test/build selection (P3.5 Task 5): scopes vitest
       # and the workspace build to changed workspaces plus their dependency
       # closure, computed from git diff + each package.json's internal
@@ -31,12 +44,17 @@ jobs:
       # (see scripts/affected/README.md) — the worst case is identical to
       # today's full run, never less coverage.
       - name: Test (affected workspaces)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           AFFECTED_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           if [[ -n "$AFFECTED_BASE_REF" && ! "$AFFECTED_BASE_REF" =~ ^0+$ ]]; then
-            git fetch --no-tags --depth=1 origin "$AFFECTED_BASE_REF"
-            npm run test:affected -- --base "$AFFECTED_BASE_REF"
+            if git fetch --no-tags --depth=1 origin "$AFFECTED_BASE_REF"; then
+              npm run test:affected -- --base "$AFFECTED_BASE_REF"
+            else
+              echo "::warning title=Affected selection unavailable::Cannot fetch the base; running the full test suite."
+              npm test
+            fi
           else
             echo "::notice title=Affected selection skipped::No previous commit to compare against (first push or forced history); running the full test suite."
             npm test
@@ -47,6 +65,7 @@ jobs:
       # fixture; this step proves the base's consumers accept this tree's event
       # payloads and that no frozen fixture was edited in place.
       - name: Contract compatibility with the previous version
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           CONTRACTS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
@@ -57,13 +76,50 @@ jobs:
           git fetch --no-tags --depth=1 origin "$CONTRACTS_BASE_REF"
           npm run check:contracts
       - name: Build (affected workspaces)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           AFFECTED_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           if [[ -n "$AFFECTED_BASE_REF" && ! "$AFFECTED_BASE_REF" =~ ^0+$ ]]; then
-            git fetch --no-tags --depth=1 origin "$AFFECTED_BASE_REF"
-            npm run build:affected -- --base "$AFFECTED_BASE_REF"
+            if git fetch --no-tags --depth=1 origin "$AFFECTED_BASE_REF"; then
+              npm run build:affected -- --base "$AFFECTED_BASE_REF"
+            else
+              echo "::warning title=Affected selection unavailable::Cannot fetch the base; running the full build."
+              npm run build
+            fi
           else
             echo "::notice title=Affected selection skipped::No previous commit to compare against (first push or forced history); running the full build."
             npm run build
+          fi
+
+  format-windows:
+    name: Formatting (Windows checkout)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Exercise Windows line-ending defaults
+        run: git config --global core.autocrlf true
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+
+  # Keep the existing required status name while gating on both platforms.
+  validate:
+    needs: [checks, format-windows]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require all validation jobs to pass
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          WINDOWS_RESULT: ${{ needs.format-windows.result }}
+        run: |
+          if [[ "$CHECKS_RESULT" != success || "$WINDOWS_RESULT" != success ]]; then
+            echo "::error::Validation failed: checks=$CHECKS_RESULT, Windows formatting=$WINDOWS_RESULT"
+            exit 1
           fi

@@ -63,6 +63,61 @@ terraform -chdir=infra/terraform/production validate
 
 ## Platform and public-repository gates
 
+### CI reliability
+
+The required `CI / validate` job aggregates the Linux `checks` job and the
+Windows formatting job. It fails if either dependency fails, is skipped, or
+is cancelled. On Linux, formatting, lint, typechecking, tests, contract
+compatibility, and builds continue independently after a successful `npm ci`
+so a formatting error cannot hide a second failure. A failed install stops
+those dependent checks; no check uses `continue-on-error`.
+
+`.gitattributes` sets LF for detected text files without transforming binary
+assets. Prettier explicitly requires LF, matching EditorConfig. Windows CI
+sets `core.autocrlf=true` before checkout to exercise this policy rather than
+relying on the runner's default. Existing checkouts may need a one-time
+`npm run format`; do not validate with `--end-of-line auto`, which tests a
+different policy from CI.
+
+The Linux job also validates all workflow syntax, expressions, and reusable
+workflow calls with a digest-pinned actionlint image. It disables actionlint's
+optional ShellCheck integration; this is a workflow-wiring gate, not a shell
+lint gate. To reproduce it locally with Docker, from the repository root:
+
+```bash
+docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -shellcheck= -color
+```
+
+Affected test/build selection falls back to the full command if its base
+cannot be fetched. Contract compatibility remains strict when an explicit
+base is supplied: inability to fetch that base fails the check. Initial pushes
+and manual development deployments without a previous-event SHA run full
+tests/builds and report the missing compatibility baseline explicitly.
+
+`ci.yml` supports `workflow_call`. Development deployment depends on that
+reusable workflow for the same caller commit, for both push and manual runs.
+The validation job has only `contents: read`; the deployment job alone receives
+OIDC permission and the development environment. This deliberately repeats CI
+on a main push so the deployment gate cannot race a separate workflow or use
+a successful result from a different commit. The public required check name
+stays `CI / validate`, so existing branch rules need no rename. GitHub documents
+the caller context and permission restrictions under
+[reusable workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations).
+
+Dependabot groups TypeScript and typescript-eslint updates. Automatic compiler
+major updates are excluded because TypeScript 7's proposed update failed
+`npm ci` against typescript-eslint 8.68.0's `>=4.8.4 <6.1.0` peer range in both
+CI and container builds. Minor/patch compiler updates and lint-tool updates
+remain enabled. A compiler major is a coordinated migration: check the proposed
+tooling's published peer ranges, update the compiler and lint stack together,
+regenerate the lockfile with normal npm peer resolution, and run `npm ci`,
+`npm run check`, `npm run build`, and `npm run container:build` before changing
+the ignore rule. Do not use `--force` or `--legacy-peer-deps` to make CI green.
+See GitHub's [Dependabot options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
+for group and ignore semantics.
+
+### Infrastructure and security
+
 Pull requests build the web, long-running worker, and Lambda-worker images
 without publishing them, create SBOMs, scan the images, validate all four
 Terraform roots, and schema-check the Kubernetes manifests with a digest-pinned
