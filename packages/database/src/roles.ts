@@ -45,7 +45,15 @@ interface RoleCredentials {
 
 function parseRoleCredentials(connectionString: string): RoleCredentials {
   const url = new URL(connectionString);
-  const name = decodeURIComponent(url.username);
+  const rawUsername = decodeURIComponent(url.username);
+  // A pooled connection (e.g. Supabase's Supavisor, used by development's
+  // externally-supplied database) uses "<role>.<project-ref>" as the
+  // connection username -- the pooler strips the ".<project-ref>" routing
+  // suffix itself before authenticating against the real role name, so
+  // that suffix must not become part of the role CREATE ROLE/ALTER ROLE
+  // below operates on. A direct connection's username (Aurora, local
+  // Postgres) never contains a literal ".", so this is a no-op there.
+  const name = rawUsername.split(".")[0]!;
   const password = decodeURIComponent(url.password);
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(name)) {
     throw new Error(
