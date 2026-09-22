@@ -168,6 +168,25 @@ The confirmation-to-library latency target (p95 ≤ 2000ms,
 `applyConfirmationCompletion` returns the latency and the worker logs it as
 `confirmationToLibraryLatencyMs`. See ADR-0028's 2026-09-21 amendment.
 
+## Platform delivery repository (P4.3 Task 1, ADR-0031)
+
+A decision record only — nothing described here has been created yet.
+ADR-0031 documents the target split for a future, dedicated platform
+repository: the four `infra/terraform/` roots (`bootstrap`, `development`,
+`environment`, `production`), `infra/kubernetes/**`, and every workflow step
+that applies Terraform or deploys would move there; Dockerfiles, application
+source, `ci.yml`/`security.yml`, and each service image's build-and-push
+step stay in this repository, so the platform repository never needs
+application build context and only ever consumes an already-built, already-
+scanned image by immutable digest — the same `staging-passed-<sha>`
+promotion contract staging and production already use today, preserved
+unchanged. OIDC roles would narrow along a second axis (per-repository
+build role, plus per-environment deploy roles scoped to the AWS services
+each Terraform root actually manages, replacing today's one broad policy
+shared across all three environments). See ADR-0031 for the full inventory
+and rationale; P4.3 Tasks 2-4 perform the actual inventory, rehearsed
+transfer, and staging demonstration.
+
 ## Deployment evolution
 
 For personal use, web and worker can run on one host with one PostgreSQL/Redis deployment. Scale in this order only when measurements justify it:

@@ -13,7 +13,35 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-21/22
+## Current state — verified 2026-09-22
+
+- **P4.3 Task 1 is done, as a decision record only (ADR-0031).** Per the
+  maintainer's explicit direction to start P4.3 Task 1, and per the same
+  precedent P4.1 Task 1 / P4.2 Task 1 set (starting ahead of the roadmap's
+  own "P4.3 follows a working staging extraction" sequence note, recorded
+  explicitly rather than silently skipped), this session wrote
+  `docs/decisions/0031-platform-delivery-repository-split.md` describing:
+  what moves to a future dedicated platform repository (the four
+  `infra/terraform/` roots, `infra/kubernetes/**`, and every
+  Terraform-apply/deploy workflow step); what stays in this repository
+  (Dockerfiles, application source, `ci.yml`/`security.yml`, and each
+  service image's build-and-push step, so the platform repository never
+  needs application build context and only ever consumes an already-built
+  digest — the exact `staging-passed-<sha>` promotion contract staging/
+  production already use); the two-axis OIDC narrowing this split makes
+  possible (a new narrow per-repository ECR-push role, plus the three
+  existing per-environment deploy roles narrowed to the AWS services each
+  Terraform root actually manages, replacing today's one identical
+  wildcard policy across all three); and confirmation that P3.5 Task 5's
+  affected-workspace scoping needs no change. **No repository was created;
+  no Terraform, workflow, or IAM change was made** — Task 3 is where that
+  happens. `docs/roadmap/p4.3-platform-delivery.md`'s Task 1 checkbox,
+  `docs/ROADMAP.md`'s two P4.3-related status cells, and
+  `docs/ARCHITECTURE.md` (new "Platform delivery repository" section) were
+  updated to match. Left uncommitted, since this session was not asked to
+  commit; the working tree was clean at session start, so every changed/new
+  file (this file, ADR-0031, the three docs above) belongs to this session
+  alone.
 
 - **P4.2 is complete. Task 7 (the final task) is done: `scan`/`core` are now
   physically separate Postgres schemas and roles, not just a documented
@@ -2775,36 +2803,29 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**P4.2 is fully complete as of this session (2026-09-21/22): all seven tasks
-are checked in `docs/roadmap/p4.2-scans-async-confirmation.md`.** See
-"Current state" above for the full Task 7 summary. Everything code/migration/
-Terraform-side is implemented and locally verified (`npm run check`/`build`/
-`check:contracts`, 92/92 integration tests across every workspace, the real
-e2e suite, and an actually-executed rollback drill — not just a designed
-runbook). Left uncommitted, since this session was not asked to commit; the
-working tree was clean at session start (`160073a p4.2.6`), so every changed/
-new file belongs to this session alone.
+**P4.3 Task 1 is done as of this session (2026-09-22): ADR-0031, a decision
+record only.** See "Current state" above for the full summary. No
+repository, Terraform, workflow, or IAM change was made. Left uncommitted,
+since this session was not asked to commit; the working tree was clean at
+session start (`da8e29b`), so every changed/new file belongs to this session
+alone.
 
 **Next session, pick one:**
 
-1. **[Issue #29](https://github.com/jessig1/vinylhound_new/issues/29)** — P4.2
+1. **P4.3 Task 2** (`docs/roadmap/p4.3-platform-delivery.md`) — inventory the
+   four Terraform roots' backend keys, locks, IAM trust, configuration, and
+   owning workflows in full (ADR-0031's Context section is a starting point,
+   not a completed inventory); close #9/#10 before any ownership transfer.
+   Read ADR-0031 in full first.
+2. **[Issue #29](https://github.com/jessig1/vinylhound_new/issues/29)** — P4.2
    Task 7's own live staging rehearsal (apply the new Terraform, trigger
    `deploy-staging.yml`, verify the cutover and a rollback under real
    traffic). Needs real AWS access and GitHub environment/Actions
    permissions no agent session can use unilaterally, same constraint as
    issue #19 below.
-2. **[Issue #19](https://github.com/jessig1/vinylhound_new/issues/19)** — P4.1's
+3. **[Issue #19](https://github.com/jessig1/vinylhound_new/issues/19)** — P4.1's
    own still-open live staging rehearsal, older and still unstarted. Same
    access constraint.
-3. **Start P4.3** (`docs/roadmap/p4.3-platform-delivery.md`) — "follows a
-   working staging extraction" per `docs/ROADMAP.md`'s "Sequence and gates"
-   note, which per the roadmap's own precedent (Task 1 of both P4.1 and
-   P4.2 were started ahead of their sequence note's stated prerequisite, at
-   the maintainer's explicit direction, and recorded as such rather than
-   silently skipped) does not strictly block starting P4.3's own Task 1 if
-   the maintainer chooses to proceed without either rehearsal closed first —
-   read `docs/roadmap/p4.3-platform-delivery.md` and ADR-0027/ADR-0030 in
-   full before doing so, and record the decision explicitly if taken.
 4. Before starting new Phase 4 work, read `docs/decisions/0030-scan-core-physical-split.md`
    (ADR-0030) and this session's Task 7 entry in
    `docs/roadmap/p4.2-scans-async-confirmation.md` in full — the account-deletion
@@ -6528,3 +6549,38 @@ storage` 1/1, `@vinylhound/queue` 2/2, `@vinylhound/worker` 6/6, the last
   not asked to commit; the working tree was clean at session start
   (`160073a p4.2.6`), so every changed/new file belongs to this session
   alone.
+
+**2026-09-22: started P4.3 Task 1 at the maintainer's explicit direction,
+closed as a decision record only.** Read `docs/HANDOFF.md`'s prior resume
+point (option 3: start P4.3), `docs/roadmap/p4.3-platform-delivery.md`,
+`docs/ROADMAP.md`'s "Sequence and gates" note, and ADR-0027/ADR-0030 in full
+first, as that resume point asked. Confirmed with the maintainer before
+proceeding, since "move platform configuration/delivery into a dedicated
+platform repository" reads as an infrastructure action (new GitHub
+repository, re-pointed OIDC trust, migrated live CI/CD) rather than a plan —
+the maintainer chose the ADR-only scope (matching P4.1 Task 1 / P4.2 Task 1's
+own precedent: those were decision records, not implementations, per
+ADR-0025/ADR-0027). Dispatched a research subagent to inventory the current
+platform surface first (the four Terraform roots' backend/provider shape;
+all seven `.github/workflows/*.yml` files' responsibilities; the OIDC plan/
+deploy IAM roles and exactly how they are/aren't narrow today; the ECR
+immutable-tag and `staging-passed-<sha>` digest-promotion convention; P3.5
+Task 5's affected-workspace scoping and its lack of coupling to `infra/`;
+and which of two same-named "contract" concepts — `packages/contracts`'
+API/event compatibility vs. the deploy-time digest-promotion handoff —
+P4.3's "previous-contract compatibility" phrase actually means), then wrote
+`docs/decisions/0031-platform-delivery-repository-split.md` from its
+findings: what moves to a future platform repository, what stays here (
+Dockerfiles/build-push, so the platform repo never needs application build
+context), the two-axis OIDC narrowing this split enables, and explicit
+confirmation that the digest-promotion contract and the affected-workspace
+script both carry over unchanged. Updated `docs/decisions/README.md` (added
+ADR-0031), `docs/roadmap/p4.3-platform-delivery.md` (Task 1 checked, with a
+closing note), `docs/ROADMAP.md` (both P4.3-related status cells), and
+`docs/ARCHITECTURE.md` (new "Platform delivery repository" section) to
+match. **No repository was created; no Terraform, workflow, or IAM file was
+touched** — this session made no infrastructure change, only documentation.
+Updated this file's "Current state" and "Resume point" to match. Left
+uncommitted, since this session was not asked to commit; the working tree
+was clean at session start (`da8e29b`), so every changed/new file (this
+file, ADR-0031, and the three docs above) belongs to this session alone.

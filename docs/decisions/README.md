@@ -32,3 +32,4 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0028: Scan confirmation is a three-hop async pipeline, not one transaction](0028-async-scan-confirmation.md)
 - [ADR-0029: Account deletion is a durable drain-then-delete workflow; the release_id `restrict` FKs become `set null`](0029-durable-account-deletion-and-release-id-policy.md)
 - [ADR-0030: Scan and core become physically separate Postgres schemas and roles; the writer switch drops the remaining cross-schema FKs](0030-scan-core-physical-split.md)
+- [ADR-0031: Split platform delivery into a dedicated repository](0031-platform-delivery-repository-split.md)
