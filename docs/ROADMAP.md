@@ -19,7 +19,7 @@ are checked off.
 | Phase 1 — MVP                                           | Complete                                                                                                                                               | [phase-1-mvp.md](roadmap/phase-1-mvp.md)                                   |
 | Phase 2 — AWS platform engineering and public readiness | Mostly complete; remaining items are manual/maintainer-gated (issues #8-#15)                                                                           | [phase-2-platform-engineering.md](roadmap/phase-2-platform-engineering.md) |
 | Phase 3 — product maturity and a measured baseline      | Complete except P3.4 Task 4 (issue #20)                                                                                                                | see the P3.1-P3.5 table below                                              |
-| Phase 4 — measured service extraction                   | P4.1 implemented; its live rehearsal is tracked in issue #19. P4.2 complete (its staging rehearsal is a separate tracked issue); P4.3 Task 1 (decision record) done, Tasks 2-4 not started; P4.4-P4.5 not started | see the P4.1-P4.5 table below                                              |
+| Phase 4 — measured service extraction                   | P4.1 implemented; its live rehearsal is tracked in issue #19. P4.2 complete (its staging rehearsal is a separate tracked issue); P4.3 Task 1 (decision record) and Task 2 (inventory) done, Tasks 3-4 not started (both gated on issues #9/#10); P4.4-P4.5 not started | see the P4.1-P4.5 table below                                              |
 
 ## Phase 1 — MVP (complete)
 
@@ -94,7 +94,7 @@ remain authoritative until the corresponding cutover.
 | ----------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | P4.1 — Extract discovery first                        | Implemented; live staging rehearsal tracked in issue #19 | [p4.1-extract-discovery.md](roadmap/p4.1-extract-discovery.md)               |
 | P4.2 — Extract scans and asynchronous confirmation    | Complete; staging live rehearsal tracked separately      | [p4.2-scans-async-confirmation.md](roadmap/p4.2-scans-async-confirmation.md) |
-| P4.3 — Separate platform delivery and state ownership | Task 1 (decision record, ADR-0031) done; Tasks 2-4 not started | [p4.3-platform-delivery.md](roadmap/p4.3-platform-delivery.md)               |
+| P4.3 — Separate platform delivery and state ownership | Task 1 (decision record, ADR-0031) and Task 2 (inventory, OPERATIONS.md) done; Tasks 3-4 not started, gated on issues #9/#10 | [p4.3-platform-delivery.md](roadmap/p4.3-platform-delivery.md)               |
 | P4.4 — Verify benefits and costs against the monolith | Not started                                              | [p4.4-verify-benefits.md](roadmap/p4.4-verify-benefits.md)                   |
 | P4.5 — Private data and AI baseline                   | Not started                                              | [p4.5-private-data-ai-baseline.md](roadmap/p4.5-private-data-ai-baseline.md) |
 

@@ -15,6 +15,55 @@ the log.
 
 ## Current state — verified 2026-09-22
 
+- **P4.3 Task 2 is done: a full inventory of the four Terraform roots' backend
+  keys, locks, IAM trust, configuration, and owning workflows**, recorded in
+  `docs/OPERATIONS.md`'s new "Platform delivery inventory (P4.3 Task 2)"
+  section. Resumed at the maintainer's direction ("work on task 2 of 4.3");
+  the working tree was clean at session start (`f3abb27 p4.3.1`, confirming
+  Task 1/ADR-0031 had already been committed). Read ADR-0031 in full first,
+  per the roadmap's own resume-point instruction, then dispatched a research
+  subagent to read every Terraform root's `versions.tf`/`variables.tf`/
+  `outputs.tf` and `bootstrap/main.tf`'s IAM policies plus all seven
+  `.github/workflows/*.yml` files directly — not to summarize ADR-0031, but
+  to verify its "current state" section against source, since that section
+  explicitly says it is a starting point, not a completed inventory. This
+  session independently re-verified the subagent's highest-value claims by
+  reading the same files itself (bootstrap's missing `backend` block, the
+  absence of any DynamoDB table repository-wide, the exact
+  `terraform-plan`/`terraform` job split in `platform.yml`, and the
+  production SSM parameter reads in `deploy-production.yml`/
+  `deactivate-environment.yml`) before writing anything down. **Found three
+  corrections to ADR-0031's own Context section**, all now recorded in
+  OPERATIONS.md: (1) `platform.yml` runs a real `terraform plan` against
+  only the `environment` (staging) root, not all four roots as the ADR's
+  wording implied — its `terraform` job only runs syntax-only `validate`
+  against the other three; (2) bootstrap has no S3 backend and no owning
+  apply workflow at all (local state, human-applied only), which the ADR
+  never states explicitly even though Task 2 was asked to inventory "backend
+  keys" per root; (3) production's activation/deactivation logic reads two
+  SSM parameters (`/vinylhound/production/active`,
+  `/vinylhound/production/expires-at`) as a state source entirely outside
+  Terraform and outside the state lock, which ADR-0031 never mentions. Also
+  confirmed a minor, non-blocking detail worth flagging: `environment/
+backend.hcl.example`'s placeholder key comment is stale (references
+  "staging-or-production" when this root is hard-validated to staging only).
+  **Issues #9 and #10 remain open, as the roadmap's own gate requires** — #9
+  needs a real `terraform apply` against `bootstrap` with an AWS
+  administrator identity (no agent session can do this unilaterally, same
+  constraint as issues #19/#29); #10 is a workflow-hardening review this
+  session did not attempt, since the roadmap ties both issues to gating
+  Task 3's ownership transfer specifically, not Task 2's own inventory scope.
+  **Task 3 remains explicitly blocked on both.** Updated
+  `docs/roadmap/p4.3-platform-delivery.md` (Task 2 checked, with a closing
+  note listing the three corrections and the still-open gate), `docs/
+ROADMAP.md` (both P4.3-related status cells), and this file's "Current
+  state"/"Resume point" to match. No Terraform, workflow, or IAM file was
+  read for anything other than verification — none was modified, and no
+  infrastructure command was run. Left uncommitted, since this session was
+  not asked to commit; the working tree was clean at session start, so every
+  changed file (`docs/OPERATIONS.md`, `docs/roadmap/p4.3-platform-delivery.md`,
+  `docs/ROADMAP.md`, this file) belongs to this session alone.
+
 - **P4.3 Task 1 is done, as a decision record only (ADR-0031).** Per the
   maintainer's explicit direction to start P4.3 Task 1, and per the same
   precedent P4.1 Task 1 / P4.2 Task 1 set (starting ahead of the roadmap's
@@ -2803,30 +2852,56 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**P4.3 Task 1 is done as of this session (2026-09-22): ADR-0031, a decision
-record only.** See "Current state" above for the full summary. No
-repository, Terraform, workflow, or IAM change was made. Left uncommitted,
-since this session was not asked to commit; the working tree was clean at
-session start (`da8e29b`), so every changed/new file belongs to this session
-alone.
+**P4.3 Task 2 is done as of this session (2026-09-22): a full, verified
+inventory of the four Terraform roots, recorded in `docs/OPERATIONS.md`.**
+See "Current state" above for the full summary, including the three
+corrections found to ADR-0031's own Context section. No repository,
+Terraform, workflow, or IAM change was made — this session only read files
+and a research subagent's report, both independently spot-verified. Left
+uncommitted, since this session was not asked to commit; the working tree
+was clean at session start (`f3abb27 p4.3.1`), so every changed file belongs
+to this session alone.
+
+**Task 3 is explicitly blocked**: the roadmap requires closing issues #9/#10
+before any ownership transfer, and neither is closed. #9 needs a real
+`terraform apply` against `bootstrap` with an AWS administrator identity;
+#10 is an unreviewed-hardening item on `deactivate-environment.yml`'s
+emergency `skip_activation_check`/`stale_lock_id` inputs. Neither needs live
+AWS deploy access in the way issues #19/#29 do, but #9 specifically requires
+an AWS administrator identity outside GitHub OIDC (per
+`docs/OPERATIONS.md`'s "Apply bootstrap once with an AWS administrator
+identity"), which no agent session holds.
 
 **Next session, pick one:**
 
-1. **P4.3 Task 2** (`docs/roadmap/p4.3-platform-delivery.md`) — inventory the
-   four Terraform roots' backend keys, locks, IAM trust, configuration, and
-   owning workflows in full (ADR-0031's Context section is a starting point,
-   not a completed inventory); close #9/#10 before any ownership transfer.
-   Read ADR-0031 in full first.
-2. **[Issue #29](https://github.com/jessig1/vinylhound_new/issues/29)** — P4.2
+1. **[Issue #10](https://github.com/jessig1/vinylhound_new/issues/10)** —
+   review and harden `deactivate-environment.yml`'s `skip_activation_check`/
+   `stale_lock_id` emergency inputs. This is a workflow-YAML change with no
+   AWS credentials needed to write or `actionlint` it (though exercising the
+   real teardown path to verify still needs staging/production access) — the
+   most likely of the three blocking/adjacent items an agent session can
+   actually move forward alone. Read the issue's own "Things worth
+   reviewing" list first; it already scopes the concern precisely.
+2. **[Issue #9](https://github.com/jessig1/vinylhound_new/issues/9)** — raise
+   `aws_iam_role.github_deploy`'s `max_session_duration` in
+   `infra/terraform/bootstrap/main.tf` and `deploy-production.yml`/
+   `deactivate-environment.yml`'s `role-duration-seconds`. The Terraform
+   change itself can be written and `terraform validate`d without AWS
+   access, but applying it against `bootstrap` needs an AWS administrator
+   identity no agent session holds — confirm with the maintainer whether
+   they want the change drafted now for their own later apply, similar to
+   how P4.1/P4.2/P4.3 Task 1 were scoped as decision records ahead of their
+   own infrastructure step.
+3. **[Issue #29](https://github.com/jessig1/vinylhound_new/issues/29)** — P4.2
    Task 7's own live staging rehearsal (apply the new Terraform, trigger
    `deploy-staging.yml`, verify the cutover and a rollback under real
    traffic). Needs real AWS access and GitHub environment/Actions
    permissions no agent session can use unilaterally, same constraint as
    issue #19 below.
-3. **[Issue #19](https://github.com/jessig1/vinylhound_new/issues/19)** — P4.1's
+4. **[Issue #19](https://github.com/jessig1/vinylhound_new/issues/19)** — P4.1's
    own still-open live staging rehearsal, older and still unstarted. Same
    access constraint.
-4. Before starting new Phase 4 work, read `docs/decisions/0030-scan-core-physical-split.md`
+5. Before starting new Phase 4 work, read `docs/decisions/0030-scan-core-physical-split.md`
    (ADR-0030) and this session's Task 7 entry in
    `docs/roadmap/p4.2-scans-async-confirmation.md` in full — the account-deletion
    two-phase workflow, the ADR-0018 liveness/self-heal replacement, and the

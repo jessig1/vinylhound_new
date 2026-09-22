@@ -146,6 +146,198 @@ generate theirs in Terraform), Clerk secret, Clerk publishable key, and
 OpenAI key containers named by each root's outputs. Never put those values in
 Terraform variables or GitHub secrets.
 
+## Platform delivery inventory (P4.3 Task 2)
+
+Full accounting of the four Terraform roots' backend keys, locks, IAM trust,
+configuration, and owning workflows, verified against source (not just
+ADR-0031's own "current state" summary, which itself says it is a starting
+point, not a completed inventory). See
+[ADR-0031](decisions/0031-platform-delivery-repository-split.md) for the
+target shape this inventory feeds into (P4.3 Task 3's actual repository
+split) and `docs/roadmap/p4.3-platform-delivery.md` for the task itself.
+
+### bootstrap
+
+- **Backend**: none — `infra/terraform/bootstrap/versions.tf` declares no
+  `backend` block, so bootstrap's own state is a local `terraform.tfstate`
+  file, not S3. It precedes and sits outside the S3-backend scheme the other
+  three roots use. Applied once, manually, with an AWS administrator
+  identity (`terraform apply -var="terraform_state_bucket=<name>"`,
+  `infra/terraform/bootstrap/README.md`) — **no workflow ever plans or
+  applies bootstrap**; `platform.yml`'s `terraform` job only runs `init
+  -backend=false` + `validate` (syntax-only) against it.
+- **Locking**: N/A (local state, single human operator).
+- **IAM / OIDC trust** — bootstrap/main.tf defines every role in the account:
+  - GitHub OIDC provider (`aws_iam_openid_connect_provider.github`,
+    audience `sts.amazonaws.com`), subject prefix
+    `repo:jessig1@13804284/vinylhound_new@1345526931`
+    (`github_oidc_subject_prefix`, validated to start with `repo:`).
+  - `vinylhound-github-plan`: trusted for `${prefix}:pull_request` and
+    `${prefix}:ref:refs/heads/main` (the latter currently unused — no
+    workflow assumes this role on a `main` push today, only on
+    `pull_request`). Grants AWS-managed `ReadOnlyAccess` plus
+    `s3:PutObject`/`s3:DeleteObject` on
+    `${state_bucket_arn}/environments/*.tfstate.tflock` — a single wildcard
+    covering all three non-bootstrap roots' lock objects, i.e. lock-write
+    permission is shared/ungated per-root even though each root's lock
+    object is distinct by key. In practice only ever used against the
+    `environment` (staging) root (`platform.yml`'s `terraform-plan` job).
+  - `vinylhound-github-<env>-deploy` (`for_each` over development/staging/
+    production): each trusted only for its own exact GitHub Environment
+    subject (`${prefix}:environment:<env>`, `StringEquals`). All three share
+    one identical, broad inline policy (`ec2:*`, `ecs:*`, `eks:*`, `ecr:*`,
+    `lambda:*`, `rds:*`, `s3:*`, `secretsmanager:*`, `iam:*Role*`/`*Policy*`
+    actions, ... on `Resource = "*"`) — the one-axis-only narrowing
+    ADR-0031 already flags for its own two-axis fix.
+- **Configuration**: `variables.tf` — `aws_region` (default us-east-1),
+  `terraform_state_bucket` (required), `github_oidc_subject_prefix`,
+  `create_github_oidc_provider`. `outputs.tf` — `terraform_state_bucket`,
+  `ecr_repository_urls` (web/worker/worker-lambda/discovery),
+  `github_plan_role_arn`, `github_deploy_role_arns` (map). These four
+  outputs must be hand-seeded as GitHub repository/environment variables
+  after every bootstrap apply (README).
+- **Owning workflow**: none applies it; `platform.yml` validates its syntax
+  only.
+
+### development
+
+- **Backend**: `backend "s3" {}` with only `use_lockfile = true` and
+  `encrypt = true` in the file — bucket/region/key supplied at `terraform
+init` time by `deploy-development.yml`'s "Initialize state" step:
+  `bucket=${{ vars.TF_STATE_BUCKET }}`, `region=us-east-1`,
+  `key=environments/development.tfstate`. No `backend.hcl.example` exists
+  for this root (CI-init-only).
+- **Locking**: Terraform's native S3 lockfile (Terraform ≥1.10), not
+  DynamoDB — there is no DynamoDB table anywhere under `infra/` (confirmed
+  by repository-wide search). The lock is the `.tflock` object next to this
+  root's own state key in the shared state bucket.
+- **IAM / OIDC trust**: `vinylhound-github-development-deploy`
+  (`environment: development`), used for **both** the ECR image pushes
+  (`web`, `worker-lambda`) and the Terraform apply — i.e. a plain `docker
+push` runs under the same broad, `Resource = "*"` policy as the Terraform
+  apply, the over-grant ADR-0031's narrower application-repository role is
+  meant to fix.
+- **Configuration**: `variables.tf` — `aws_region`, `domain_name`,
+  `hostname`, `web_image`/`worker_lambda_image` (digest-pinned), `deployment_version`,
+  `runtime_configured` (gates secret-dependent resources until injected),
+  `budget_alert_email`. `outputs.tf` — `application_url`, Lambda function
+  names, `image_bucket`, six queue/DLQ URLs, `runtime_secret_arns` (map),
+  consumed by a post-apply `aws lambda update-function-configuration` step
+  that reads Secrets Manager directly (Terraform never sees secret values).
+- **Owning workflow**: `deploy-development.yml` only — triggers `push` to
+  `main` and `workflow_dispatch`, chained off `ci.yml` via a same-repository
+  `workflow_call` (the mechanism ADR-0031's split replaces with a
+  cross-repository `repository_dispatch`). Concurrency group
+  `development-platform`. Also validated (syntax-only) by `platform.yml`.
+
+### environment (staging)
+
+- **Backend**: `backend "s3" {}`, same `use_lockfile`/`encrypt`-only shape.
+  The only root with a `backend.hcl.example` (for local use), but its
+  placeholder key comment ("replace-with-staging-or-production") is stale —
+  `variables.tf` hard-validates `var.environment == "staging"` only; the
+  `production.tfstate` key belongs exclusively to the separate `production`
+  root. In CI, two different workflows initialize this root against the
+  same key (`environments/staging.tfstate`, same bucket): `platform.yml`'s
+  `terraform-plan` job and `deploy-staging.yml`'s apply.
+- **Locking**: Terraform native S3 lockfile, same shared bucket, key
+  `environments/staging.tfstate`.
+- **IAM / OIDC trust**: two roles touch this root.
+  - `vinylhound-github-plan`, used by `platform.yml`'s `terraform-plan` job
+    (plan only, never apply) — gated on `pull_request` events from a
+    same-repository head, but notably this job sets **no `environment:`
+    block**, so it bypasses GitHub Environment protection rules (required
+    reviewers, wait timers) that every deploy job gets.
+  - `vinylhound-github-staging-deploy` (`environment: staging`), used by
+    `deploy-staging.yml` for the full build/push/apply/migrate/deploy/
+    verify/promote sequence.
+  - **Correction to ADR-0031's Context section**: that ADR states
+    "`platform.yml` validates/plans all four Terraform roots on PRs." Only
+    half true — `platform.yml`'s `terraform` job runs `validate` (syntax
+    only, `-backend=false`, no state) against all four roots, but its
+    separate `terraform-plan` job runs an actual `terraform plan` against
+    **only** this root. There is no automated real plan for bootstrap,
+    development, or production.
+- **Configuration**: `variables.tf` — `environment` (locked to
+  `"staging"`), `environment_active` (the scale-to-zero switch, default
+  false), `deploy_services` (requires `environment_active`), `vpc_cidr`,
+  `domain_name`/`hostname`, `web_image`/`worker_image`/`discovery_image`
+  (digest-pinned only when active), `database_max_acu` (0.5-8, default 2),
+  and the app cost-guard knobs (`user_daily_analysis_limit`,
+  `user_active_scan_limit`, `user_monthly_spend_limit_usd`,
+  `scan_cost_reservation_usd`). `outputs.tf` — `application_url` (null
+  unless active), `environment_active`, `ecs_cluster_name`,
+  `db_cluster_identifier`, `runtime_secret_arns` (map, including
+  `scan_database_url`/`core_database_url` since P4.2 Task 7).
+- **Owning workflows**: `platform.yml` (`terraform-plan`, PR-triggered,
+  plan only); `deploy-staging.yml` (`workflow_dispatch` only, no push
+  trigger, concurrency group `staging-platform`).
+
+### production
+
+- **Backend**: `backend "s3" {}`, same shape, no `backend.hcl.example`.
+  Three workflow steps initialize it against the same key
+  (`environments/production.tfstate`, same bucket): `deploy-production.yml`,
+  and `deactivate-environment.yml`'s two paths (normal and
+  `skip_activation_check`-forced).
+- **Locking**: Terraform native S3 lockfile, same bucket, key
+  `environments/production.tfstate`. The only root with a documented manual
+  unlock runbook step (`stale_lock_id` input, `terraform force-unlock
+-force`, `deactivate-environment.yml`) — see [issue #9](https://github.com/jessig1/vinylhound_new/issues/9)
+  for the incident that motivated it.
+- **IAM / OIDC trust**: `vinylhound-github-production-deploy` only, used by
+  both `deploy-production.yml` (`environment: production`) and
+  `deactivate-environment.yml` (`environment: production`). No plan role is
+  ever used against production.
+- **Out-of-Terraform state, not mentioned by ADR-0031**: SSM parameters
+  `/vinylhound/production/active` and `/vinylhound/production/expires-at`
+  gate activation/deactivation decisions independently of Terraform's own
+  `environment_active` variable and independently of the state lock — a
+  real operational coupling a future platform-repository split has to
+  preserve, since it is account/region-global state read by both deploy
+  workflows.
+- **Configuration**: `variables.tf` — `aws_region` (locked to `us-east-1`
+  so the CloudFront certificate stays valid), `environment_active`,
+  `vpc_cidr`, `domain_name`/`hostname`, `kubernetes_version` (nullable),
+  `database_max_acu` (0.5-16, default 4), the same cost-guard knobs as
+  staging. `outputs.tf` — `application_url`, `environment_active`,
+  `eks_cluster_name` (null unless active), `db_cluster_identifier`,
+  `database_ca_base64` (sensitive RDS CA bundle), `runtime_secret_arns`
+  (map), and a sensitive `kubernetes_runtime` object bundling the values
+  `kubectl create configmap` needs.
+- **Owning workflows**: `deploy-production.yml` (`workflow_dispatch` only,
+  requires `commit_sha`/`ttl_hours`/`break_glass` inputs);
+  `deactivate-environment.yml` (hourly `schedule` plus `workflow_dispatch`
+  with `force`/`skip_activation_check`/`stale_lock_id` escape-hatch
+  inputs — see [issue #10](https://github.com/jessig1/vinylhound_new/issues/10)
+  for the unreviewed-hardening tracking on those inputs). Both share
+  concurrency group `production-platform`, so they cannot run concurrently.
+
+### Cross-cutting: ECR, the digest-promotion contract, and locking
+
+- **ECR repositories** (`bootstrap/main.tf`): `vinylhound-web`,
+  `vinylhound-worker`, `vinylhound-worker-lambda`, `vinylhound-discovery`,
+  all `image_tag_mutability = "IMMUTABLE"`, scan-on-push, AES256 encryption.
+  Lifecycle policy retains only the newest 20 images by count per
+  repository — a latent interaction with the promotion contract below that
+  ADR-0031 does not discuss: past 20 accumulated tags, an older
+  `staging-passed-<sha>` tag could in principle be expired before it is
+  promoted. Not observed in practice; worth keeping in mind if promotion
+  cadence ever slows relative to build cadence.
+- **Digest-promotion contract, exact tags**: `${sha}` (development only,
+  produced/consumed within `deploy-development.yml`); `${sha}-staging`
+  (produced by `deploy-staging.yml`'s build/push steps, idempotent via an
+  `aws ecr describe-images` existence check before rebuilding);
+  `staging-passed-${sha}` (produced by `deploy-staging.yml` only after the
+  post-deploy smoke test passes, by re-tagging the exact same digest via
+  `aws ecr put-image`; consumed by `deploy-production.yml`'s
+  `--image-ids imageTag=staging-passed-<commit_sha>` resolution). Production
+  never builds an image.
+- **No DynamoDB lock table exists anywhere in this repository.** All
+  locking is Terraform's native S3 lockfile feature, sharing one state
+  bucket (bootstrap's `terraform_state_bucket` output) with per-root
+  `.tflock` objects keyed by each root's own state key.
+
 ## Scan/core schema and role rollback (P4.2 Task 7, ADR-0030)
 
 Migration `021_scan_core_schema_split.sql` (additive: two schemas, two roles,
