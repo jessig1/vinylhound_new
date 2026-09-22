@@ -64,14 +64,45 @@ VALID`, 6/8 validated cleanly against real data — the other 2 hit genuine
   implementation-complete but **not deployed**, matching P4.1 Task 5's own
   precedent exactly — the live staging rehearsal is
   [issue #29](https://github.com/jessig1/vinylhound_new/issues/29).
-  Development's externally-supplied database needs the maintainer to
-  populate two new, currently-empty Secrets Manager placeholders
-  (`scan-database-url`/`core-database-url`) before its next
-  `deploy-development.yml` run, or that deploy's migration step will fail —
-  flagged explicitly in the issue and in ADR-0030's own "Consequences"
-  section so it isn't a silent surprise. Full detail:
-  `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 7 entry and
-  `docs/decisions/0030-scan-core-physical-split.md`.
+
+  **Development is deployed and confirmed healthy as of this session** —
+  it deploys automatically on every push to `main`, which this task's own
+  push triggered, and two real problems surfaced and were fixed live rather
+  than caught only in review:
+  1. Pushing the Terraform changes (which create `scan-database-url`/
+     `core-database-url` as empty Secrets Manager placeholders, mirroring
+     `database-url`'s own manually-populated pattern) triggered
+     `deploy-development.yml` immediately, before anyone had populated
+     those two values — the deploy's Terraform step had already updated the
+     Lambda functions to the new code (which now requires
+     `SCAN_DATABASE_URL`/`CORE_DATABASE_URL` at startup) before the
+     env-injection step failed on the empty secrets, leaving
+     `dev-vh.siliconforest.io` returning `500` on every request, including
+     `/api/healthz`, until fixed.
+  2. Populating those two secrets exposed a second, genuine bug:
+     development's database is Supabase, reached through its Supavisor
+     connection pooler, whose connection-string username convention is
+     `<role>.<project-ref>` — `ensureDatabaseRoles`
+     (`packages/database/src/roles.ts`) was passing that whole pooled
+     username straight to `CREATE ROLE`/`ALTER ROLE`, which correctly
+     rejected it as an invalid identifier. Fixed to take the role name from
+     before the first `.` (a no-op for Aurora/local Postgres URLs, which
+     never contain one). Verified directly: created both roles against the
+     real Supabase database and confirmed each authenticates through the
+     pooler using the fixed parsing, _before_ writing the fix, then before
+     writing the two secret values or re-running the deploy.
+
+  Both fixes are pushed (`303c0ed`, on top of `958a399`). The redeployed
+  `dev-vh.siliconforest.io` returns `200` on `/api/healthz`/`/api/readyz`/`/`,
+  and the real database now shows both `scan`/`core` schemas and migrations
+  `021`/`022` applied — the two-connection wiring is confirmed working
+  against a real deployed environment, not just local Docker Postgres.
+  `vinylhound-development/scan-database-url`/`core-database-url` are
+  populated for real now; no manual maintainer step remains for
+  development specifically (staging/production still need their own
+  Terraform apply before their first post-cutover deploy, per issue #29).
+  Full detail: `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 7
+  entry and `docs/decisions/0030-scan-core-physical-split.md`.
 
 - **CI reliability repair is merged.** [PR #24](https://github.com/jessig1/vinylhound_new/pull/24)
   (`fix/ci-reliability`) merged to `main` at `d555988`; the first post-merge
@@ -6466,12 +6497,26 @@ storage` 1/1, `@vinylhound/queue` 2/2, `@vinylhound/worker` 6/6, the last
   P4.1 Task 5's own precedent exactly — new Terraform-generated `scan`/
   `core` role passwords per environment (mirroring `discovery_shared_secret`'s
   pattern) threaded into the existing ECS task definitions/Kubernetes
-  secrets in `environment` and `production`; `development`'s externally-
-  supplied database gets two new, currently-empty Secrets Manager
-  placeholders the maintainer must populate before its next
-  `deploy-development.yml` run. Opened
-  [issue #29](https://github.com/jessig1/vinylhound_new/issues/29) for the
-  staging live rehearsal, matching issue #19's precedent exactly. Updated
+  secrets in `environment` and `production`. **Development is different: it
+  deploys on every push, so pushing this task's own Terraform changes
+  triggered `deploy-development.yml` immediately and it failed twice, live**
+  — first on the then-empty `scan-database-url`/`core-database-url`
+  placeholders (development's database is externally-supplied, not
+  Terraform-managed, so nothing auto-populates them the way Aurora's
+  `random_password` does for staging/production), leaving
+  `dev-vh.siliconforest.io` returning `500` on every request until fixed;
+  then, after populating those two secrets, on a genuine bug in
+  `ensureDatabaseRoles` that only a pooled connection could expose —
+  development's database is Supabase, reached through its Supavisor
+  pooler, whose connection username convention (`<role>.<project-ref>`)
+  `packages/database/src/roles.ts` was passing whole into `CREATE ROLE`,
+  which correctly rejected it. Both fixed and pushed (`303c0ed`); the
+  redeployed site is confirmed healthy (`/api/healthz`/`/api/readyz`/`/`
+  all `200`) with migrations `021`/`022` applied against the real database.
+  No manual step remains for development specifically. Opened
+  [issue #29](https://github.com/jessig1/vinylhound_new/issues/29) for
+  staging's still-outstanding live rehearsal, matching issue #19's
+  precedent. Updated
   `docs/decisions/0030-scan-core-physical-split.md` (new),
   `docs/decisions/README.md` (added both ADR-0029 and ADR-0030, the former
   had been missed by its own session), `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`
