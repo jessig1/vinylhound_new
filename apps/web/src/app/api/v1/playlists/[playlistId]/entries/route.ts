@@ -29,11 +29,15 @@ export const POST = withRoute(
     const parsed = await parseJson(request, AddPlaylistEntrySchema);
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const { playlist, created } = await addPlaylistEntry(context.database.db, {
-      userId,
-      playlistId,
-      libraryItemId: parsed.libraryItemId,
-    });
+    const { playlist, created } = await addPlaylistEntry(
+      context.database.core,
+      context.database.scan,
+      {
+        userId,
+        playlistId,
+        libraryItemId: parsed.libraryItemId,
+      },
+    );
     const response = jsonResponse(
       GetPlaylistResponseSchema.parse({ playlist }),
       created ? 201 : 200,

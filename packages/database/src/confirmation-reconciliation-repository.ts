@@ -7,7 +7,7 @@ import {
   type ScanConfirmationSummary,
 } from "@vinylhound/contracts";
 
-import type { Database } from "./database.ts";
+import type { CoreDatabase, ScanDatabase } from "./database.ts";
 import {
   applyConfirmationCompletion,
   confirmationEventId,
@@ -34,12 +34,18 @@ import {
  * both hops it drives are idempotent, and `processScanConfirmation` now
  * takes the same advisory lock `confirmScan` does so two concurrent callers
  * for the same event never race on the receipt insert.
+ *
+ * P4.2 Task 7 (ADR-0030): every step below already ran as its own statement
+ * or its own transaction, none sharing one across scan and core -- this
+ * function only needed the two connections threaded through, no logic
+ * change.
  */
 export async function reconcileScanConfirmation(
-  db: Database,
+  scanDb: ScanDatabase,
+  coreDb: CoreDatabase,
   input: { userId: string; scanId: string },
 ): Promise<ScanConfirmationSummary> {
-  const confirmation = await db.query.scanConfirmations.findFirst({
+  const confirmation = await scanDb.query.scanConfirmations.findFirst({
     where: and(
       eq(scanConfirmations.scanId, input.scanId),
       eq(scanConfirmations.userId, input.userId),
@@ -55,11 +61,11 @@ export async function reconcileScanConfirmation(
       confirmation.idempotencyKey,
     );
 
-    const receipt = await db.query.confirmationReceipts.findFirst({
+    const receipt = await coreDb.query.confirmationReceipts.findFirst({
       where: eq(confirmationReceipts.idempotencyKey, receiptKey),
     });
     if (!receipt) {
-      const [outboxRow] = await db
+      const [outboxRow] = await scanDb
         .select()
         .from(outboxMessages)
         .where(
@@ -78,14 +84,14 @@ export async function reconcileScanConfirmation(
       const event = SCAN_CONFIRMED_EVENT_CONTRACT.consumerSchema.parse(
         outboxRow.payload,
       );
-      await processScanConfirmation(db, event);
+      await processScanConfirmation(coreDb, event);
     }
 
-    const refreshed = await db.query.scanConfirmations.findFirst({
+    const refreshed = await scanDb.query.scanConfirmations.findFirst({
       where: eq(scanConfirmations.scanId, input.scanId),
     });
     if (refreshed?.status === "pending") {
-      const [nowReceipt] = await db
+      const [nowReceipt] = await coreDb
         .select()
         .from(confirmationReceipts)
         .where(eq(confirmationReceipts.idempotencyKey, receiptKey))
@@ -95,7 +101,7 @@ export async function reconcileScanConfirmation(
           CONFIRMATION_COMPLETED_EVENT_CONTRACT.consumerSchema.parse(
             nowReceipt.payload,
           );
-        await applyConfirmationCompletion(db, completion);
+        await applyConfirmationCompletion(scanDb, completion);
       }
     }
   }
@@ -105,7 +111,7 @@ export async function reconcileScanConfirmation(
   // `getScanConfirmationForUser` (also used by the polled `GET /scans/:id`
   // the UI reads) reports as "no confirmation" rather than as this
   // function's own row-existence check above; report it the same way.
-  const result = await getScanConfirmationForUser(db, input);
+  const result = await getScanConfirmationForUser(scanDb, coreDb, input);
   if (!result) {
     throw new DatabaseCommandError("not_found", "Scan confirmation not found.");
   }
@@ -123,7 +129,7 @@ export async function reconcileScanConfirmation(
  * correctness risk.
  */
 export async function listStalePendingConfirmations(
-  db: Database,
+  db: ScanDatabase,
   input: { olderThan: Date; limit: number },
 ): Promise<Array<{ scanId: string; userId: string }>> {
   const rows = await db

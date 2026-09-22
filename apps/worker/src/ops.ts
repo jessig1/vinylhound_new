@@ -1,9 +1,9 @@
 import { loadQueueWorkerConfig } from "@vinylhound/config";
 import {
-  createDatabase,
-  databaseOptionsFromConfig,
+  createScanDatabase,
   getOperationalDrainState,
   listRepublishableAnalysisJobs,
+  scanDatabaseOptionsFromConfig,
 } from "@vinylhound/database";
 import { createBullMqScanQueue, createSqsScanQueue } from "@vinylhound/queue";
 
@@ -13,7 +13,11 @@ if (command !== "drain-check" && command !== "reconcile-queue") {
 }
 
 const config = loadQueueWorkerConfig();
-const database = createDatabase(databaseOptionsFromConfig(config));
+// P4.2 Task 7 (ADR-0030): both commands only ever touch scan-owned tables
+// (outbox_messages, scans) -- see getOperationalDrainState/
+// listRepublishableAnalysisJobs, both ScanDatabase-typed -- so this needs no
+// core connection at all.
+const database = createScanDatabase(scanDatabaseOptionsFromConfig(config));
 const queue =
   config.QUEUE_DRIVER === "sqs"
     ? createSqsScanQueue({

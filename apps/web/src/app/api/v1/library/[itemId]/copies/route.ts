@@ -32,7 +32,7 @@ export const POST = withRoute(
     const idempotencyKey = requireIdempotencyKey(request);
     const params = await route.params;
     const context = getServerContext();
-    const result = await createLibraryCopy(context.database.db, {
+    const result = await createLibraryCopy(context.database.core, {
       userId: await requireUserId(context),
       itemId: parseUuid(params.itemId, "itemId"),
       idempotencyKey,

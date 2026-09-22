@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 export default async function PlaylistsPage() {
   const context = getServerContext();
   const userId = await requireUserId(context);
-  const { playlists } = await listPlaylistsForUser(context.database.db, {
+  const { playlists } = await listPlaylistsForUser(context.database.core, {
     userId,
   });
 

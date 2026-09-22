@@ -19,10 +19,11 @@ export const GET = withRoute(
     const scanId = parseUuid(rawScanId, "scanId");
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await getScanForUser(context.database.db, {
-      userId,
-      scanId,
-    });
+    const result = await getScanForUser(
+      context.database.scan,
+      context.database.core,
+      { userId, scanId },
+    );
 
     const response = jsonResponse(
       GetScanResponseSchema.parse(result),

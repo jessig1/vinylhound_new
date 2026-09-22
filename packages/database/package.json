@@ -8,7 +8,7 @@
     "./migrations": "./src/migrations.ts"
   },
   "scripts": {
-    "db:migrate": "node --env-file-if-exists=../../.env ../../node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir migrations --migrations-table vinylhound_migrations --single-transaction",
+    "db:migrate": "tsx --env-file-if-exists=../../.env scripts/migrate.ts",
     "db:migration:create": "node ../../node_modules/node-pg-migrate/bin/node-pg-migrate.js create --migrations-dir migrations --migration-filename-format index --migration-file-language sql",
     "test:integration": "node --env-file-if-exists=../../.env ../../node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts"
   },

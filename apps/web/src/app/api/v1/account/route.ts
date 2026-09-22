@@ -13,7 +13,13 @@ export const DELETE = withRoute(
     const context = getServerContext();
     const userId = await requireUserId(context);
 
-    const result = await deleteAccount(context.database.db, { userId });
+    const result = await deleteAccount(
+      context.database.scan,
+      context.database.core,
+      {
+        userId,
+      },
+    );
 
     await Promise.all(
       result.objectKeys.map(async (objectKey) => {

@@ -28,6 +28,12 @@ const InfrastructureConfigShape = {
     .enum(["disable", "require", "verify-full"])
     .default("disable"),
   DATABASE_SSL_CA_BASE64: OptionalNonEmptyStringSchema,
+  // P4.2 Task 7 (ADR-0030): the least-privilege `scan`/`core` role
+  // credentials every repository call site connects with; DATABASE_URL above
+  // stays the unrestricted master credential migrations and role bootstrap
+  // use (see @vinylhound/database's `roles.ts`), never a request path.
+  SCAN_DATABASE_URL: z.string().min(1),
+  CORE_DATABASE_URL: z.string().min(1),
   S3_ENDPOINT: z.url().optional(),
   S3_REGION: z.string().min(1),
   S3_BUCKET: z.string().min(1),
@@ -39,8 +45,11 @@ const InfrastructureConfigShape = {
 
 function validateInfrastructureConfig(
   value: {
+    NODE_ENV?: "development" | "test" | "production";
     DATABASE_SSL_MODE: "disable" | "require" | "verify-full";
     DATABASE_SSL_CA_BASE64?: string;
+    SCAN_DATABASE_URL: string;
+    CORE_DATABASE_URL: string;
     S3_ACCESS_KEY_ID?: string;
     S3_SECRET_ACCESS_KEY?: string;
   },
@@ -61,6 +70,22 @@ function validateInfrastructureConfig(
       code: "custom",
       path: ["DATABASE_SSL_CA_BASE64"],
       message: "A CA certificate is required for verify-full database TLS.",
+    });
+  }
+  // P4.2 Task 7 (ADR-0030): a mis-copied secret that points both roles at the
+  // same credential would silently re-merge the scan/core privilege boundary
+  // this task exists to create. Development is exempt: local Postgres often
+  // starts with a single superuser before `npm run db:migrate` has created
+  // the two least-privilege roles at all.
+  if (
+    value.NODE_ENV === "production" &&
+    value.SCAN_DATABASE_URL === value.CORE_DATABASE_URL
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["CORE_DATABASE_URL"],
+      message:
+        "SCAN_DATABASE_URL and CORE_DATABASE_URL must be different roles in production.",
     });
   }
 }
@@ -214,6 +239,11 @@ export const QueueWorkerConfigSchema = z
       .enum(["disable", "require", "verify-full"])
       .default("disable"),
     DATABASE_SSL_CA_BASE64: OptionalNonEmptyStringSchema,
+    // P4.2 Task 7 (ADR-0030): see the identical fields on
+    // InfrastructureConfigShape above -- duplicated here because
+    // QueueWorkerConfigSchema does not spread that shape.
+    SCAN_DATABASE_URL: z.string().min(1),
+    CORE_DATABASE_URL: z.string().min(1),
     QUEUE_DRIVER: z.enum(["bullmq", "sqs"]).default("bullmq"),
     REDIS_URL: OptionalNonEmptyStringSchema,
     SQS_QUEUE_URL: z.url().optional(),

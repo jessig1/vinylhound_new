@@ -29,7 +29,11 @@ import {
 } from "@vinylhound/contracts";
 import { resolveCopyAddition, resolveFavoritedAt } from "@vinylhound/domain";
 
-import type { Database } from "./database.ts";
+import type {
+  CoreDatabase,
+  CoreTransaction,
+  ScanDatabase,
+} from "./database.ts";
 import { decodeLibraryCursor, encodeLibraryCursor } from "./library-cursor.ts";
 import { hashJson } from "./release-resolution.ts";
 import { DatabaseCommandError } from "./scan-repository.ts";
@@ -63,10 +67,11 @@ export interface LibraryPageInput {
  * row that was already there.
  */
 export async function listLibraryItemsForUser(
-  db: Pick<Database, "select">,
+  db: Pick<CoreDatabase, "select">,
+  scanDb: Pick<ScanDatabase, "select">,
   input: LibraryPageInput & { list: LibraryList },
 ): Promise<GetLibraryResponse> {
-  const page = await selectLibraryItemPage(db, {
+  const page = await selectLibraryItemPage(db, scanDb, {
     ...input,
     recency: "updatedAt",
   });
@@ -81,10 +86,11 @@ export async function listLibraryItemsForUser(
  * when it last changed.
  */
 export async function listFavoriteLibraryItemsForUser(
-  db: Pick<Database, "select">,
+  db: Pick<CoreDatabase, "select">,
+  scanDb: Pick<ScanDatabase, "select">,
   input: LibraryPageInput,
 ): Promise<GetFavoritesResponse> {
-  return selectLibraryItemPage(db, {
+  return selectLibraryItemPage(db, scanDb, {
     ...input,
     favoritesOnly: true,
     recency: "favoritedAt",
@@ -98,7 +104,8 @@ export async function listFavoriteLibraryItemsForUser(
  * `listLibraryItemsForUser` directly.
  */
 export async function* iterateLibraryItemsForUser(
-  db: Pick<Database, "select">,
+  db: Pick<CoreDatabase, "select">,
+  scanDb: Pick<ScanDatabase, "select">,
   input: Omit<LibraryPageInput, "cursor" | "limit"> & {
     list: LibraryList;
     pageSize?: number;
@@ -106,7 +113,7 @@ export async function* iterateLibraryItemsForUser(
 ): AsyncGenerator<LibraryItemResult[], void, undefined> {
   let cursor: string | undefined;
   do {
-    const page = await listLibraryItemsForUser(db, {
+    const page = await listLibraryItemsForUser(db, scanDb, {
       ...input,
       cursor,
       limit: input.pageSize ?? LIBRARY_PAGE_SIZE_MAX,
@@ -117,7 +124,8 @@ export async function* iterateLibraryItemsForUser(
 }
 
 async function selectLibraryItemPage(
-  db: Pick<Database, "select">,
+  db: Pick<CoreDatabase, "select">,
+  scanDb: Pick<ScanDatabase, "select">,
   input: LibraryPageInput & {
     list?: LibraryList;
     favoritesOnly?: boolean;
@@ -145,7 +153,12 @@ async function selectLibraryItemPage(
   });
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
-  const items = await attachCopiesAndSerialize(db, input.userId, pageRows);
+  const items = await attachCopiesAndSerialize(
+    db,
+    scanDb,
+    input.userId,
+    pageRows,
+  );
   const last = pageRows[pageRows.length - 1];
   return {
     items,
@@ -160,7 +173,8 @@ async function selectLibraryItemPage(
  * the result rather than an error, so ownership never leaks by difference.
  */
 export async function getLibraryItemsByIdForUser(
-  db: Pick<Database, "select">,
+  db: Pick<CoreDatabase, "select">,
+  scanDb: Pick<ScanDatabase, "select">,
   input: { userId: string; itemIds: readonly string[] },
 ): Promise<Map<string, LibraryItemResult>> {
   if (!input.itemIds.length) return new Map();
@@ -169,12 +183,13 @@ export async function getLibraryItemsByIdForUser(
     itemIds: input.itemIds,
     limit: input.itemIds.length,
   });
-  const items = await attachCopiesAndSerialize(db, input.userId, rows);
+  const items = await attachCopiesAndSerialize(db, scanDb, input.userId, rows);
   return new Map(items.map((item) => [item.id, item]));
 }
 
 export async function getLibraryItemForUser(
-  db: Database,
+  db: CoreDatabase,
+  scanDb: ScanDatabase,
   input: { userId: string; itemId: string },
 ): Promise<LibraryItemResult> {
   const rows = await selectLibraryItemRows(db, {
@@ -182,7 +197,7 @@ export async function getLibraryItemForUser(
     itemId: input.itemId,
     limit: 1,
   });
-  const [item] = await attachCopiesAndSerialize(db, input.userId, rows);
+  const [item] = await attachCopiesAndSerialize(db, scanDb, input.userId, rows);
   if (!item) {
     throw new DatabaseCommandError("not_found", "Library item not found.");
   }
@@ -190,7 +205,7 @@ export async function getLibraryItemForUser(
 }
 
 export async function countLibraryItemsForUser(
-  db: Database,
+  db: CoreDatabase,
   input: { userId: string; list: LibraryList },
 ): Promise<number> {
   const [result] = await db
@@ -208,12 +223,16 @@ export async function countLibraryItemsForUser(
 /**
  * The artist and title a library item displays: the values the user
  * confirmed on the scan it came from when there was one, else the shared
- * album row (ADR-0012). Search and the name sorts evaluate these in SQL so
+ * album row (ADR-0012). Read from `libraryItems.confirmedRelease` -- a
+ * denormalized snapshot written at confirmation time (P4.2 Task 7,
+ * ADR-0030) -- rather than a live join into `scan.scan_confirmations`,
+ * which is no longer possible in one query once scan and core are separate
+ * roles/connections. Search and the name sorts evaluate these in SQL so
  * they see every row; `attachCopiesAndSerialize` resolves the same
  * preference in application code for the fields it returns.
  */
-const effectiveArtist = sql<string>`coalesce(${scanConfirmations.reviewedRelease}->>'artist', ${albums.artist})`;
-const effectiveTitle = sql<string>`coalesce(${scanConfirmations.reviewedRelease}->>'title', ${albums.title})`;
+const effectiveArtist = sql<string>`coalesce(${libraryItems.confirmedRelease}->>'artist', ${albums.artist})`;
+const effectiveTitle = sql<string>`coalesce(${libraryItems.confirmedRelease}->>'title', ${albums.title})`;
 const sortArtist = sql<string>`lower(${effectiveArtist})`;
 const sortTitle = sql<string>`lower(${effectiveTitle})`;
 
@@ -285,7 +304,8 @@ function searchCondition(query: string | undefined): SQL | undefined {
 }
 
 export async function updateLibraryItem(
-  db: Database,
+  db: CoreDatabase,
+  scanDb: ScanDatabase,
   input: { userId: string; itemId: string; update: UpdateLibraryItem },
 ): Promise<LibraryItemResult> {
   return db.transaction(async (transaction) => {
@@ -356,6 +376,7 @@ export async function updateLibraryItem(
     });
     const [result] = await attachCopiesAndSerialize(
       transaction,
+      scanDb,
       input.userId,
       rows,
     );
@@ -370,10 +391,11 @@ export async function updateLibraryItem(
 }
 
 export async function deleteLibraryItem(
-  db: Database,
+  db: CoreDatabase,
+  scanDb: ScanDatabase,
   input: { userId: string; itemId: string },
 ): Promise<{ id: string }> {
-  return db.transaction(async (transaction) => {
+  const deleted = await db.transaction(async (transaction) => {
     const [item] = await transaction
       .select({ id: libraryItems.id })
       .from(libraryItems)
@@ -391,15 +413,54 @@ export async function deleteLibraryItem(
     // Confirmations are not deleted with the item: their library_item_id
     // clears itself (ADR-0018) so the record of what was reviewed and when
     // survives, while the scan reads as reviewable again.
-    const [deleted] = await transaction
+    const [row] = await transaction
       .delete(libraryItems)
       .where(eq(libraryItems.id, item.id))
       .returning({ id: libraryItems.id });
-    if (!deleted) {
+    if (!row) {
       throw new DatabaseCommandError("not_found", "Library item not found.");
     }
-    return deleted;
+    return row;
   });
+
+  await bestEffortClearScanConfirmationReference(scanDb, {
+    libraryItemId: deleted.id,
+  });
+  return deleted;
+}
+
+/**
+ * P4.2 Task 7 (ADR-0030): `scan_confirmations.library_item_id`/`copy_id` are
+ * no longer foreign keys (the referenced tables are `core`, a different
+ * schema/role), so the `ON DELETE SET NULL` they used to provide is gone.
+ * This best-effort write on the `scan` connection replaces it; it is not
+ * atomic with the `core` delete above by construction -- a crash between the
+ * two leaves this row pointing at an id that no longer exists, which
+ * `readConfirmationResponse`/`getScanConfirmationForUser`
+ * (`confirmation-repository.ts`) already treat as "removed" on read and
+ * lazily self-heal, so a missed or failed call here is safe, not silently
+ * wrong.
+ */
+async function bestEffortClearScanConfirmationReference(
+  scanDb: ScanDatabase,
+  target: { libraryItemId: string } | { copyId: string },
+): Promise<void> {
+  try {
+    if ("libraryItemId" in target) {
+      await scanDb
+        .update(scanConfirmations)
+        .set({ libraryItemId: null })
+        .where(eq(scanConfirmations.libraryItemId, target.libraryItemId));
+    } else {
+      await scanDb
+        .update(scanConfirmations)
+        .set({ copyId: null })
+        .where(eq(scanConfirmations.copyId, target.copyId));
+    }
+  } catch {
+    // Best-effort: the read-path liveness check is the authoritative
+    // fallback (see the doc comment above).
+  }
 }
 
 /**
@@ -416,7 +477,7 @@ export async function deleteLibraryItem(
  * concurrent first uses of one key so exactly one of them inserts.
  */
 export async function createLibraryCopy(
-  db: Database,
+  db: CoreDatabase,
   input: {
     userId: string;
     itemId: string;
@@ -511,7 +572,7 @@ export async function createLibraryCopy(
  * `recent` sort surfaces a record whose inventory changed.
  */
 export async function updateLibraryCopy(
-  db: Database,
+  db: CoreDatabase,
   input: {
     userId: string;
     itemId: string;
@@ -559,12 +620,13 @@ export async function updateLibraryCopy(
  * like removing a record twice.
  */
 export async function deleteLibraryCopy(
-  db: Database,
+  db: CoreDatabase,
+  scanDb: ScanDatabase,
   input: { userId: string; itemId: string; copyId: string },
 ): Promise<{ id: string }> {
-  return db.transaction(async (transaction) => {
+  const deleted = await db.transaction(async (transaction) => {
     await lockLibraryItem(transaction, input.userId, input.itemId);
-    const [deleted] = await transaction
+    const [row] = await transaction
       .delete(libraryCopies)
       .where(
         and(
@@ -574,19 +636,24 @@ export async function deleteLibraryCopy(
         ),
       )
       .returning({ id: libraryCopies.id });
-    if (!deleted) {
+    if (!row) {
       throw new DatabaseCommandError("not_found", "Library copy not found.");
     }
     await transaction
       .update(libraryItems)
       .set({ updatedAt: new Date() })
       .where(eq(libraryItems.id, input.itemId));
-    return deleted;
+    return row;
   });
+
+  await bestEffortClearScanConfirmationReference(scanDb, {
+    copyId: deleted.id,
+  });
+  return deleted;
 }
 
 async function lockLibraryItem(
-  transaction: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  transaction: CoreTransaction,
   userId: string,
   itemId: string,
 ) {
@@ -606,7 +673,7 @@ async function lockLibraryItem(
 }
 
 async function selectLibraryItemRows(
-  db: Pick<Database, "select">,
+  db: Pick<CoreDatabase, "select">,
   input: {
     userId: string;
     list?: LibraryList;
@@ -649,15 +716,11 @@ async function selectLibraryItemRows(
       format: releases.format,
       packaging: releases.packaging,
       releaseStatus: releases.releaseStatus,
-      reviewedRelease: scanConfirmations.reviewedRelease,
+      confirmedRelease: libraryItems.confirmedRelease,
     })
     .from(libraryItems)
     .innerJoin(releases, eq(releases.id, libraryItems.releaseId))
     .innerJoin(albums, eq(albums.id, releases.albumId))
-    .leftJoin(
-      scanConfirmations,
-      eq(scanConfirmations.scanId, libraryItems.confirmedFromScanId),
-    )
     .where(
       and(
         eq(libraryItems.userId, input.userId),
@@ -681,7 +744,8 @@ async function selectLibraryItemRows(
 }
 
 async function attachCopiesAndSerialize(
-  db: Pick<Database, "select">,
+  db: Pick<CoreDatabase, "select">,
+  scanDb: Pick<ScanDatabase, "select">,
   userId: string,
   rows: Awaited<ReturnType<typeof selectLibraryItemRows>>,
 ): Promise<LibraryItemResult[]> {
@@ -705,12 +769,12 @@ async function attachCopiesAndSerialize(
     copiesByItem.set(copy.libraryItemId, itemCopies);
   }
   const coverByScanId = await selectCoverImages(
-    db,
+    scanDb,
     rows.map((row) => row.confirmedFromScanId),
   );
 
   return rows.map((row) => {
-    const reviewed = row.reviewedRelease;
+    const reviewed = row.confirmedRelease;
     const catalogReference = reviewed?.catalogReference ?? null;
     const itemCopies = copiesByItem.get(row.id) ?? [];
     return {
@@ -751,7 +815,7 @@ async function attachCopiesAndSerialize(
  * so a 100-item page does not issue 100 lookups.
  */
 async function selectCoverImages(
-  db: Pick<Database, "select">,
+  db: Pick<ScanDatabase, "select">,
   scanIds: readonly (string | null)[],
 ): Promise<Map<string, LibraryCoverImage>> {
   const ids = [...new Set(scanIds.filter((id): id is string => id !== null))];

@@ -16,9 +16,10 @@ import {
 import {
   cancelScan,
   completeImageUpload,
-  createDatabase,
+  createCoreDatabase,
   createOrGetImageUpload,
   createOrGetScan,
+  createScanDatabase,
   getScanForUser,
   submitScan,
   users,
@@ -27,21 +28,31 @@ import type { ObjectStorage } from "@vinylhound/storage";
 
 import { createScanAnalysisHandler } from "./analysis-handler.ts";
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  throw new Error("DATABASE_URL is required for worker integration tests.");
+const scanConnectionString = process.env.SCAN_DATABASE_URL;
+const coreConnectionString = process.env.CORE_DATABASE_URL;
+if (!scanConnectionString || !coreConnectionString) {
+  throw new Error(
+    "SCAN_DATABASE_URL and CORE_DATABASE_URL are required for worker integration tests.",
+  );
 }
 
-const database = createDatabase({ connectionString, maxConnections: 2 });
+const scanDatabase = createScanDatabase({
+  connectionString: scanConnectionString,
+  maxConnections: 2,
+});
+const coreDatabase = createCoreDatabase({
+  connectionString: coreConnectionString,
+  maxConnections: 2,
+});
 const userId = randomUUID();
 
 beforeAll(async () => {
-  await database.db.insert(users).values({ id: userId });
+  await coreDatabase.db.insert(users).values({ id: userId });
 });
 
 afterAll(async () => {
-  await database.db.delete(users).where(eq(users.id, userId));
-  await database.close();
+  await coreDatabase.db.delete(users).where(eq(users.id, userId));
+  await Promise.all([scanDatabase.close(), coreDatabase.close()]);
 });
 
 const storage: ObjectStorage = {
@@ -111,13 +122,13 @@ function successfulIdentifier(
 async function createQueuedScan(
   viewTypes: readonly ImageViewType[] = ["front"],
 ) {
-  const scan = await createOrGetScan(database.db, {
+  const scan = await createOrGetScan(scanDatabase.db, {
     userId,
     source: "single_upload",
     idempotencyKey: `worker-scan-${randomUUID()}`,
   });
   for (const viewType of viewTypes) {
-    const upload = await createOrGetImageUpload(database.db, {
+    const upload = await createOrGetImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `worker-upload-${randomUUID()}`,
@@ -128,7 +139,7 @@ async function createQueuedScan(
       checksumSha256: "d".repeat(64),
       maxImages: 12,
     });
-    await completeImageUpload(database.db, {
+    await completeImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       imageId: upload.record.id,
@@ -140,7 +151,7 @@ async function createQueuedScan(
       thumbnailSizeBytes: 1,
     });
   }
-  return submitScan(database.db, {
+  return submitScan(scanDatabase.db, {
     userId,
     scanId: scan.record.id,
     idempotencyKey: `worker-submit-${randomUUID()}`,
@@ -149,7 +160,7 @@ async function createQueuedScan(
 
 function handler(identifier: AlbumIdentifier) {
   return createScanAnalysisHandler({
-    database: database.db,
+    database: scanDatabase.db,
     storage,
     identifier,
     configuredModel: "integration-model",
@@ -178,7 +189,7 @@ describe("scan analysis handler", () => {
       { viewType: "back" },
       { viewType: "spine" },
     ]);
-    const status = await getScanForUser(database.db, {
+    const status = await getScanForUser(scanDatabase.db, coreDatabase.db, {
       userId,
       scanId: submitted.record.id,
     });
@@ -206,7 +217,7 @@ describe("scan analysis handler", () => {
     await analyze(submitted.job, delivery);
     await analyze(submitted.job, delivery);
 
-    const status = await getScanForUser(database.db, {
+    const status = await getScanForUser(scanDatabase.db, coreDatabase.db, {
       userId,
       scanId: submitted.record.id,
     });
@@ -242,7 +253,7 @@ describe("scan analysis handler", () => {
       maxAttempts: 5,
     });
 
-    const status = await getScanForUser(database.db, {
+    const status = await getScanForUser(scanDatabase.db, coreDatabase.db, {
       userId,
       scanId: submitted.record.id,
     });
@@ -280,7 +291,7 @@ describe("scan analysis handler", () => {
     ).rejects.toMatchObject({ category: "rate_limit", retryable: true });
     expect(
       (
-        await getScanForUser(database.db, {
+        await getScanForUser(scanDatabase.db, coreDatabase.db, {
           userId,
           scanId: submitted.record.id,
         })
@@ -292,7 +303,7 @@ describe("scan analysis handler", () => {
       deliveryAttempt: 2,
       maxAttempts: 2,
     });
-    const status = await getScanForUser(database.db, {
+    const status = await getScanForUser(scanDatabase.db, coreDatabase.db, {
       userId,
       scanId: submitted.record.id,
     });
@@ -302,7 +313,7 @@ describe("scan analysis handler", () => {
 
   it("skips analysis for a scan canceled after it was queued", async () => {
     const submitted = await createQueuedScan();
-    await cancelScan(database.db, { userId, scanId: submitted.record.id });
+    await cancelScan(scanDatabase.db, { userId, scanId: submitted.record.id });
     let identifyCalls = 0;
     const analyze = handler(
       successfulIdentifier(identification(), () => {
@@ -317,7 +328,7 @@ describe("scan analysis handler", () => {
     });
 
     expect(identifyCalls).toBe(0);
-    const status = await getScanForUser(database.db, {
+    const status = await getScanForUser(scanDatabase.db, coreDatabase.db, {
       userId,
       scanId: submitted.record.id,
     });
@@ -342,7 +353,7 @@ describe("scan analysis handler", () => {
       deliveryAttempt: 1,
       maxAttempts: 5,
     });
-    const status = await getScanForUser(database.db, {
+    const status = await getScanForUser(scanDatabase.db, coreDatabase.db, {
       userId,
       scanId: submitted.record.id,
     });

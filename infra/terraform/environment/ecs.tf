@@ -62,12 +62,16 @@ resource "aws_iam_role_policy" "execution_secrets" {
   for_each = {
     web = [
       aws_secretsmanager_secret.database_url.arn,
+      aws_secretsmanager_secret.scan_database_url.arn,
+      aws_secretsmanager_secret.core_database_url.arn,
       aws_secretsmanager_secret.clerk_secret_key.arn,
       aws_secretsmanager_secret.clerk_publishable_key.arn,
       aws_secretsmanager_secret.discovery_shared_secret.arn
     ]
     worker = [
       aws_secretsmanager_secret.database_url.arn,
+      aws_secretsmanager_secret.scan_database_url.arn,
+      aws_secretsmanager_secret.core_database_url.arn,
       aws_secretsmanager_secret.openai_api_key.arn
     ]
     discovery = [
@@ -228,6 +232,8 @@ resource "aws_ecs_task_definition" "web" {
     ])
     secrets = [
       { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url.arn },
+      { name = "SCAN_DATABASE_URL", valueFrom = aws_secretsmanager_secret.scan_database_url.arn },
+      { name = "CORE_DATABASE_URL", valueFrom = aws_secretsmanager_secret.core_database_url.arn },
       { name = "CLERK_SECRET_KEY", valueFrom = aws_secretsmanager_secret.clerk_secret_key.arn },
       { name = "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", valueFrom = aws_secretsmanager_secret.clerk_publishable_key.arn },
       { name = "DISCOVERY_SERVICE_SHARED_SECRET", valueFrom = aws_secretsmanager_secret.discovery_shared_secret.arn }
@@ -289,6 +295,8 @@ resource "aws_ecs_task_definition" "worker" {
     ])
     secrets = [
       { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url.arn },
+      { name = "SCAN_DATABASE_URL", valueFrom = aws_secretsmanager_secret.scan_database_url.arn },
+      { name = "CORE_DATABASE_URL", valueFrom = aws_secretsmanager_secret.core_database_url.arn },
       { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.openai_api_key.arn }
     ]
     healthCheck = {

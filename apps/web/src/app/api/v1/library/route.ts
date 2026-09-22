@@ -39,14 +39,18 @@ export const GET = withRoute("library.list", async (request, { requestId }) => {
   }
   const context = getServerContext();
   const userId = await requireUserId(context);
-  const result = await listLibraryItemsForUser(context.database.db, {
-    userId,
-    list: parsedQuery.data.list,
-    query: parsedQuery.data.q,
-    sort: parsedQuery.data.sort,
-    cursor: parsedQuery.data.cursor,
-    limit: parsedQuery.data.limit,
-  });
+  const result = await listLibraryItemsForUser(
+    context.database.core,
+    context.database.scan,
+    {
+      userId,
+      list: parsedQuery.data.list,
+      query: parsedQuery.data.q,
+      sort: parsedQuery.data.sort,
+      cursor: parsedQuery.data.cursor,
+      limit: parsedQuery.data.limit,
+    },
+  );
   const response = jsonResponse(
     GetLibraryResponseSchema.parse(result),
     200,
@@ -81,10 +85,13 @@ export const POST = withRoute(
           },
         }
       : parsed;
-    const { record, created } = await placeLibraryRelease(context.database.db, {
-      userId,
-      placement,
-    });
+    const { record, created } = await placeLibraryRelease(
+      context.database.core,
+      {
+        userId,
+        placement,
+      },
+    );
     return jsonResponse(
       PlaceLibraryReleaseResponseSchema.parse(record),
       created ? 201 : 200,

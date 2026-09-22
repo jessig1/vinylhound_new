@@ -20,7 +20,7 @@ export const PATCH = withRoute(
   ) => {
     const params = await route.params;
     const context = getServerContext();
-    const result = await updateLibraryCopy(context.database.db, {
+    const result = await updateLibraryCopy(context.database.core, {
       userId: await requireUserId(context),
       itemId: parseUuid(params.itemId, "itemId"),
       copyId: parseUuid(params.copyId, "copyId"),
@@ -45,11 +45,15 @@ export const DELETE = withRoute(
   ) => {
     const params = await route.params;
     const context = getServerContext();
-    const result = await deleteLibraryCopy(context.database.db, {
-      userId: await requireUserId(context),
-      itemId: parseUuid(params.itemId, "itemId"),
-      copyId: parseUuid(params.copyId, "copyId"),
-    });
+    const result = await deleteLibraryCopy(
+      context.database.core,
+      context.database.scan,
+      {
+        userId: await requireUserId(context),
+        itemId: parseUuid(params.itemId, "itemId"),
+        copyId: parseUuid(params.copyId, "copyId"),
+      },
+    );
     const response = jsonResponse(
       DeleteLibraryCopyResponseSchema.parse(result),
       200,

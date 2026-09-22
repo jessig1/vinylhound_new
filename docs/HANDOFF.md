@@ -13,7 +13,65 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-21
+## Current state — verified 2026-09-21/22
+
+- **P4.2 is complete. Task 7 (the final task) is done: `scan`/`core` are now
+  physically separate Postgres schemas and roles, not just a documented
+  logical boundary (new ADR-0030, completing ADR-0027).** Two migrations
+  (`021_scan_core_schema_split.sql`, additive/behavior-neutral;
+  `022_scan_core_writer_switch.sql`, drops all eight cross-schema FKs) plus a
+  full rewrite of every `packages/database/src` repository function to take
+  a compiler-branded `ScanDatabase`/`CoreDatabase` handle
+  (`packages/database/src/database.ts`) instead of one opaque connection.
+  `apps/web`'s `ServerContext.database` is now `{ scan, core, close }`;
+  `apps/worker`'s every entry point constructs both and routes each
+  handler/dispatch loop/sweep to the one matching its own tables — this is
+  where "never two authoritative writers" became physically enforced in
+  code, not just policy. Account deletion is now a two-phase, ordered,
+  idempotent workflow (`deleteScanDataForUser` then `deleteCoreDataForUser`,
+  `account-repository.ts`) replacing the FK-cascade the eight dropped FKs
+  used to provide; ADR-0018's "removed saved record means unconfirmed"
+  guarantee got a real liveness-check-and-self-heal replacement
+  (`confirmation-repository.ts`) since its automatic `ON DELETE SET NULL` is
+  gone; `library-repository.ts`'s main listing query (search/sort/keyset
+  pagination, ADR-0023) reads a new denormalized
+  `library_items.confirmed_release` column instead of a now-impossible
+  cross-schema join. `npm run db:migrate` now runs
+  `packages/database/scripts/migrate.ts` (bootstraps the two new Postgres
+  roles first) instead of invoking `node-pg-migrate`'s CLI directly — the
+  old direct-CLI invocation never created the roles migration 021's own
+  `GRANT`s need, a real gap found and fixed mid-session.
+  **Verified thoroughly, not just typechecked**: `npm run check`
+  (format/lint/typecheck/423 unit tests)/`build`/`check:contracts` all pass;
+  `test:integration` is 92/92 across every workspace (83 in
+  `@vinylhound/database` — the existing 74-test `schema.integration.ts`
+  migrated to the new handles, plus a new 9-test
+  `schema-boundary.integration.ts` that proves the GRANT boundary is real by
+  trying to cross it and watching Postgres refuse — plus storage 1/1, queue
+  2/2, worker 6/6); the real e2e suite (`scan-flow.e2e.ts`, 6/6,
+  mobile-chromium, confirm-and-save latency 234ms); and a real rollback
+  drill against the local dev database (seeded in-flight state, migrated
+  down through both migrations, zero data loss, all eight FKs restored `NOT
+VALID`, 6/8 validated cleanly against real data — the other 2 hit genuine
+  pre-existing orphaned rows from this session's own heavy local testing,
+  exactly the scenario `NOT VALID` exists to survive). **One real bug was
+  found only by running the actual e2e suite**: migration 021 originally
+  hardcoded `ALTER DATABASE vinylhound SET search_path = ...`, a silent
+  no-op against any differently-named database (the e2e suite's own
+  `vinylhound_e2e`) — fixed to resolve `current_database()` dynamically.
+  Staging/production Terraform (two new role credentials per environment,
+  mirroring `discovery_shared_secret`'s pattern) and workflow changes are
+  implementation-complete but **not deployed**, matching P4.1 Task 5's own
+  precedent exactly — the live staging rehearsal is
+  [issue #29](https://github.com/jessig1/vinylhound_new/issues/29).
+  Development's externally-supplied database needs the maintainer to
+  populate two new, currently-empty Secrets Manager placeholders
+  (`scan-database-url`/`core-database-url`) before its next
+  `deploy-development.yml` run, or that deploy's migration step will fail —
+  flagged explicitly in the issue and in ADR-0030's own "Consequences"
+  section so it isn't a silent surprise. Full detail:
+  `docs/roadmap/p4.2-scans-async-confirmation.md`'s Task 7 entry and
+  `docs/decisions/0030-scan-core-physical-split.md`.
 
 - **CI reliability repair is merged.** [PR #24](https://github.com/jessig1/vinylhound_new/pull/24)
   (`fix/ci-reliability`) merged to `main` at `d555988`; the first post-merge
@@ -2686,7 +2744,72 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-CI repair is done: [PR #24](https://github.com/jessig1/vinylhound_new/pull/24)
+**P4.2 is fully complete as of this session (2026-09-21/22): all seven tasks
+are checked in `docs/roadmap/p4.2-scans-async-confirmation.md`.** See
+"Current state" above for the full Task 7 summary. Everything code/migration/
+Terraform-side is implemented and locally verified (`npm run check`/`build`/
+`check:contracts`, 92/92 integration tests across every workspace, the real
+e2e suite, and an actually-executed rollback drill — not just a designed
+runbook). Left uncommitted, since this session was not asked to commit; the
+working tree was clean at session start (`160073a p4.2.6`), so every changed/
+new file belongs to this session alone.
+
+**Next session, pick one:**
+
+1. **[Issue #29](https://github.com/jessig1/vinylhound_new/issues/29)** — P4.2
+   Task 7's own live staging rehearsal (apply the new Terraform, trigger
+   `deploy-staging.yml`, verify the cutover and a rollback under real
+   traffic). Needs real AWS access and GitHub environment/Actions
+   permissions no agent session can use unilaterally, same constraint as
+   issue #19 below.
+2. **[Issue #19](https://github.com/jessig1/vinylhound_new/issues/19)** — P4.1's
+   own still-open live staging rehearsal, older and still unstarted. Same
+   access constraint.
+3. **Start P4.3** (`docs/roadmap/p4.3-platform-delivery.md`) — "follows a
+   working staging extraction" per `docs/ROADMAP.md`'s "Sequence and gates"
+   note, which per the roadmap's own precedent (Task 1 of both P4.1 and
+   P4.2 were started ahead of their sequence note's stated prerequisite, at
+   the maintainer's explicit direction, and recorded as such rather than
+   silently skipped) does not strictly block starting P4.3's own Task 1 if
+   the maintainer chooses to proceed without either rehearsal closed first —
+   read `docs/roadmap/p4.3-platform-delivery.md` and ADR-0027/ADR-0030 in
+   full before doing so, and record the decision explicitly if taken.
+4. Before starting new Phase 4 work, read `docs/decisions/0030-scan-core-physical-split.md`
+   (ADR-0030) and this session's Task 7 entry in
+   `docs/roadmap/p4.2-scans-async-confirmation.md` in full — the account-deletion
+   two-phase workflow, the ADR-0018 liveness/self-heal replacement, and the
+   denormalized `library_items.confirmed_release` column are all
+   load-bearing design decisions a future session should understand before
+   touching any of the files they span (`account-repository.ts`,
+   `confirmation-repository.ts`, `library-repository.ts`).
+
+**Known, non-blocking loose ends from this session:**
+
+- A pre-existing, independently-confirmed flake in 1-4 of four
+  dispatch-timing tests in `packages/database/src/schema.integration.ts`
+  under heavy repeated local runs (shared mutable `outbox_messages`/
+  `confirmation_receipts` state across tests) — always clean on retry,
+  confirmed unrelated to Task 7's own changes by a subagent's careful
+  isolation and reproduced once more directly. Not fixed; out of scope for
+  this task, same treatment as the pre-existing `live-camera.e2e.ts` flake
+  noted elsewhere in this file.
+- The local dev Postgres database has accumulated real orphaned rows (found
+  by the rollback drill: `scans`/`scan_confirmations` rows whose `users`
+  row was deleted while the now-dropped FKs were absent, from this
+  session's own extensive local testing) and general test-data volume from
+  many repeated `test:integration` runs. Harmless — local sandbox data only,
+  no production consequence — but `docker compose down -v` and a fresh
+  `npm run db:migrate` would give a clean slate if wanted.
+- The local `.env`'s `OPENAI_API_KEY` is live (non-empty), which
+  `CLAUDE.md`/this file's own convention says to leave empty for tests/CI
+  since a non-empty key makes the worker billable. Not modified this
+  session (an existing value, not something to overwrite without being
+  asked) — flagged here since a subagent independently noticed it this
+  session and it's worth the maintainer's own attention.
+
+---
+
+**Superseded, kept for the CI-repair record.** CI repair is done: [PR #24](https://github.com/jessig1/vinylhound_new/pull/24)
 merged to `main` at `d555988`; the first post-merge `main` CI/Security/Platform
 runs and the development deployment are green (checked 2026-09-21). This
 session merged `origin/main` (`d555988`) into the local branch (previously at
@@ -2696,8 +2819,8 @@ commit-timestamp order; no other file conflicted. The existing TypeScript 7 PR
 #6 remains unmerged until a compatible compiler/lint migration is prepared;
 the new Dependabot policy does not modify that branch.
 
-<!-- The next session starts here. Replace this section when the task
-     completes or is re-scoped. -->
+<!-- The next session starts here (see the resume point at the top of this
+     section). Replace this section when the task completes or is re-scoped. -->
 
 **Latest task, 2026-09-19: continuous-capture research and planning only** (superseded
 context, kept below). Read `docs/CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md` before
@@ -6206,3 +6329,157 @@ scan-flow.e2e.ts` against `mobile-chromium` (6/6), whose log output is
   since this session was not asked to commit; the working tree was clean at
   session start (`c32d61d p4.2.4`), so every changed file belongs to this
   session alone.
+
+- **2026-09-21/22 - Claude. P4.2 Task 7 — the final task of P4.2 — is done**
+  (new ADR-0030, completing ADR-0027), resumed at the maintainer's direction
+  ("work on p4.2 task 7") from Task 6 (a separate prior session, committed as
+  `160073a p4.2.6`; working tree was clean at this session's start). Given
+  the size — genuinely the largest single task in this roadmap file, larger
+  than ADR-0027's own text implied once actually designed — used
+  `EnterPlanMode` with three parallel Explore agents (DB/migration/
+  connection layer; confirmation-pipeline cross-boundary code; P4.1's
+  staging-deploy precedent) and then a Plan agent that read every touched
+  file in full and corrected several errors in this session's own first
+  draft before any code was written, per the maintainer's explicit approval
+  of that plan. **What the research corrected that ADR-0027 itself got
+  wrong or left incomplete**: `confirmation_receipts` is a sixteenth table
+  (added by Task 3, after ADR-0027); two cross-schema reads existed with no
+  room in a hard boundary (`confirmScan`'s `users.deletion_requested_at FOR
+SHARE` check, and `library-repository.ts`'s main listing query's join for
+  sort/search, ADR-0012/ADR-0023); and Postgres does not stop enforcing a
+  cross-schema FK when the two sides become different roles (referential-
+  integrity checks run with the referenced table's owner rights, not the
+  connecting role's) — the eight named FKs would have kept silently working
+  through a naive split. See ADR-0030 and this session's
+  `docs/roadmap/p4.2-scans-async-confirmation.md` Task 7 entry for the full
+  design; this entry covers what was distinctive about executing it.
+
+  **Migration 021** (additive, behavior-neutral by construction) creates
+  `scan`/`core` schemas and `vinylhound_scan_app`/`vinylhound_core_app`
+  roles, moves all sixteen tables via `ALTER TABLE ... SET SCHEMA`, sets
+  per-connection `search_path` via a new `DatabaseOptions.searchPath`
+  forwarded as each pool's startup `options` (chosen over `ALTER ROLE ...
+SET search_path` alone, which only affects new connections — production's
+  rolling deploy keeps old/new pods live together), and backfills
+  `core.library_items.confirmed_release` (denormalizing the scan
+  confirmation snapshot library reads need, since their SQL `ORDER BY`/
+  keyset pagination/`ILIKE` cannot span two connections) and
+  `scan.account_deletions` (a scan-local tombstone replacing `confirmScan`'s
+  now-impossible read of `core.users`). **Migration 022**, the writer
+  switch, drops all eight FKs: three `→ users` cascades become plain UUID
+  attributes, replaced by a new two-phase `deleteScanDataForUser`/
+  `deleteCoreDataForUser` sequence in `account-repository.ts` (scan first,
+  locks every existing scan row `FOR UPDATE` before rechecking zero
+  `pending` confirmations — this is what serializes against a concurrent
+  `confirmScan`, replacing the old `users`-row-lock coupling); the three
+  `scan_confirmations` FKs into `core` become soft references with explicit
+  liveness checks and best-effort self-healing writes, since ADR-0018's
+  "removed means unconfirmed" rule lost its automatic `ON DELETE SET NULL`
+  trigger. Roles are created by a new `ensureDatabaseRoles`
+  (`packages/database/src/roles.ts`, parses the role name/password out of
+  `SCAN_DATABASE_URL`/`CORE_DATABASE_URL` so there is no separate secret to
+  keep in sync), called from `runDatabaseMigrations`
+  (`packages/database/src/migrations.ts`) before the migration runner
+  itself.
+
+  **Two real, previously-undetected bugs were found and fixed while
+  building this, neither by inspection alone:**
+  1. Dropping `scans.user_id`'s FK silently removed an incidental
+     protection a concurrent new-scan-creation used to get for free (an
+     INSERT needing a `FOR KEY SHARE` lock on the referenced `users` row,
+     which blocked behind `deleteAccount`'s `FOR UPDATE` and then failed
+     once the row was gone). Found on a self-review pass after the main
+     implementation was typechecking clean; fixed by adding the same
+     `scan.account_deletions` tombstone check `confirmScan` already has to
+     `createOrGetScan`.
+  2. **`npm run db:migrate` never bootstrapped the two new roles** — it
+     invoked `node-pg-migrate`'s CLI directly (reading `DATABASE_URL` only),
+     never the `ensureDatabaseRoles`-wrapping `runDatabaseMigrations`
+     function `apps/worker/src/migrate.ts` already called for staging/
+     production. Found by a delegated subagent hitting `role
+"vinylhound_scan_app" does not exist` on a fresh migrate; fixed by
+     replacing the npm script with a new `packages/database/scripts/
+migrate.ts` (run via `tsx`) that calls `runDatabaseMigrations` directly, so
+     every migration path in the repo (local dev, staging, production) now
+     goes through the same role-bootstrapping function.
+  3. **Migration 021 hardcoded `ALTER DATABASE vinylhound SET search_path`**,
+     a silent no-op against any differently-named database — found only by
+     actually running the real e2e suite (`scan-flow.e2e.ts`), whose own
+     `vinylhound_e2e` database surfaced `relation "users" does not exist`
+     immediately. Fixed to resolve `current_database()` dynamically inside a
+     `DO` block, in both the up and down migration sections.
+
+  **Delegation**: the large, purely mechanical work of migrating the
+  existing 4372-line `packages/database/src/schema.integration.ts` (74
+  tests) to the new two-handle call signatures was delegated to a
+  background subagent with an exact, verified signature list for every
+  changed function — not "figure it out," since the mapping was already
+  fully known from writing the production code. It converted 436 call
+  sites, verified the change was purely mechanical via a normalized diff,
+  fixed a stale test teardown that had been silently leaking scan data
+  every run since the account-`user_id` FK (which used to cascade-clean it)
+  was dropped, rewrote two tests whose premise genuinely changed (documented
+  in its own report and independently sanity-checked here — in particular,
+  the release-deletion protection test, where dropping the FK removes not
+  just the `restrict` semantics ADR-0029 already replaced but the `SET
+NULL` action that used to trigger the status-consistency check at all;
+  this session corrected the migration/ADR comments to state that
+  precisely rather than leave the subagent's more-accurate finding
+  undocumented), and flagged the pre-existing dispatch-timing flakiness
+  (independently reproduced once by this session directly) as unrelated to
+  this task rather than silently loosening those assertions.
+
+  **Verification, in order, all run directly by this session (not just
+  trusted from the subagent's own report):** `npm run check`
+  (format/lint/typecheck/423 unit tests — fixed three `packages/config`
+  test fixtures missing the two new required env vars, and added one new
+  test proving the production-only `SCAN_DATABASE_URL !== CORE_DATABASE_URL`
+  guard); `npm run build` (all workspaces, `next-env.d.ts` reverted); `npm
+run check:contracts` (passes, no wire contract changed); `terraform fmt
+-check`/`validate -backend=false` on all four roots (`bootstrap`,
+  `development`, `environment`, `production`); `npm run test:integration`
+  across every workspace (92/92: `@vinylhound/database` 83/83 — including
+  the new `schema-boundary.integration.ts`, 9 tests proving the GRANT
+  boundary is real by trying to cross it and asserting Postgres refuses
+  with `42501`/`42P01`, whose own two bugs this session fixed directly —
+  `pgErrorCode` reading `error.cause.code` the way drizzle actually surfaces
+  it, and the `search_path` assertion's exact string format; `@vinylhound/
+storage` 1/1, `@vinylhound/queue` 2/2, `@vinylhound/worker` 6/6, the last
+  including `analysis-handler.integration.ts` converted directly by this
+  session as the worked example the subagent then followed); the real
+  `apps/web/e2e/scan-flow.e2e.ts` suite against `mobile-chromium` (6/6,
+  including the confirm-and-save test, `confirmationToLibraryLatencyMs:
+234`); and **an actually-executed rollback drill**, not just a designed
+  runbook — seeded a `pending` confirmation, an undelivered
+  `scan.confirmed.v1` outbox row, an undelivered `confirmation_receipts`
+  row, and a `deletion_requested` account directly against the local dev
+  database; ran `node-pg-migrate down --count 1` twice (022 then 021);
+  confirmed zero data loss and all eight FKs restored `NOT VALID`; ran
+  `VALIDATE CONSTRAINT` for all eight and found 6 validated cleanly while 2
+  failed against real, pre-existing orphaned rows from this session's own
+  heavy local testing — proof the `NOT VALID` design choice was load-
+  bearing, not defensive-programming theater, since a plain `ADD CONSTRAINT`
+  would have failed the rollback outright; re-applied migrations forward
+  and confirmed the backfill re-runs idempotently.
+
+  **Staging/production**: implementation-complete, not deployed, matching
+  P4.1 Task 5's own precedent exactly — new Terraform-generated `scan`/
+  `core` role passwords per environment (mirroring `discovery_shared_secret`'s
+  pattern) threaded into the existing ECS task definitions/Kubernetes
+  secrets in `environment` and `production`; `development`'s externally-
+  supplied database gets two new, currently-empty Secrets Manager
+  placeholders the maintainer must populate before its next
+  `deploy-development.yml` run. Opened
+  [issue #29](https://github.com/jessig1/vinylhound_new/issues/29) for the
+  staging live rehearsal, matching issue #19's precedent exactly. Updated
+  `docs/decisions/0030-scan-core-physical-split.md` (new),
+  `docs/decisions/README.md` (added both ADR-0029 and ADR-0030, the former
+  had been missed by its own session), `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`
+  (P4.2 now complete in both status tables), `docs/OPERATIONS.md` (new
+  rollback runbook, corrected a stale "migrations are forward-only" claim),
+  `.env.example`, `apps/web/e2e/env.ts` (the two new URLs, e2e-isolated by
+  database name like `DATABASE_URL` already was), and this file's "Current
+  state"/"Resume point" to match. Left uncommitted, since this session was
+  not asked to commit; the working tree was clean at session start
+  (`160073a p4.2.6`), so every changed/new file belongs to this session
+  alone.

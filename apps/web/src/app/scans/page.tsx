@@ -14,10 +14,11 @@ export const dynamic = "force-dynamic";
 export default async function ScansPage() {
   const context = getServerContext();
   const userId = await requireUserId(context);
-  const { summaries } = await listScansForUser(context.database.db, {
-    userId,
-    limit: MAX_SCANS_PER_PAGE,
-  });
+  const { summaries } = await listScansForUser(
+    context.database.scan,
+    context.database.core,
+    { userId, limit: MAX_SCANS_PER_PAGE },
+  );
 
   return (
     <main className="content-page library-page">

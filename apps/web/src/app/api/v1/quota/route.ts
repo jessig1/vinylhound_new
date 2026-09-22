@@ -15,7 +15,7 @@ export const GET = withRoute("quota.get", async (_request, { requestId }) => {
   const context = getServerContext();
   const userId = await requireUserId(context);
 
-  const headroom = await getScanQuotaHeadroomForUser(context.database.db, {
+  const headroom = await getScanQuotaHeadroomForUser(context.database.scan, {
     userId,
     limits: {
       dailyAnalysisLimit: context.config.USER_DAILY_ANALYSIS_LIMIT,

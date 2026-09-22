@@ -36,5 +36,7 @@ output "runtime_secret_arns" {
     clerk_publishable_key   = aws_secretsmanager_secret.clerk_publishable_key.arn
     openai_api_key          = aws_secretsmanager_secret.openai_api_key.arn
     discovery_shared_secret = aws_secretsmanager_secret.discovery_shared_secret.arn
+    scan_database_url       = aws_secretsmanager_secret.scan_database_url.arn
+    core_database_url       = aws_secretsmanager_secret.core_database_url.arn
   }
 }

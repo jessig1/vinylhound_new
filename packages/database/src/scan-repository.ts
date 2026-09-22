@@ -15,15 +15,15 @@ import {
 } from "@vinylhound/contracts";
 import { estimateTokenUsageCostUsd } from "@vinylhound/domain";
 
-import type { Database } from "./database.ts";
+import type { ScanDatabase } from "./database.ts";
 import {
+  accountDeletions,
   batches,
   imageAssets,
   outboxMessages,
   scanAttempts,
   scanConfirmations,
   scans,
-  users,
 } from "./schema.ts";
 
 export type DatabaseCommandErrorCode =
@@ -49,42 +49,6 @@ export class DatabaseCommandError extends Error {
   }
 }
 
-export async function ensureDevelopmentUser(db: Database, userId: string) {
-  await db.insert(users).values({ id: userId }).onConflictDoNothing();
-}
-
-export async function getOrCreateUserIdByClerkId(
-  db: Database,
-  clerkUserId: string,
-): Promise<string> {
-  const existing = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.clerkUserId, clerkUserId))
-    .limit(1);
-  if (existing[0]) {
-    return existing[0].id;
-  }
-
-  await db
-    .insert(users)
-    .values({ clerkUserId })
-    .onConflictDoNothing({ target: users.clerkUserId });
-
-  const row = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.clerkUserId, clerkUserId))
-    .limit(1);
-  if (!row[0]) {
-    throw new DatabaseCommandError(
-      "conflict",
-      "Failed to resolve or provision a user for the authenticated identity.",
-    );
-  }
-  return row[0].id;
-}
-
 export type ImageObjectVariant = "original" | "analysis" | "thumbnail";
 
 export function deriveImageObjectKey(
@@ -95,7 +59,7 @@ export function deriveImageObjectKey(
 }
 
 export async function createOrGetScan(
-  db: Database,
+  db: ScanDatabase,
   input: {
     userId: string;
     source: IngestionSource;
@@ -110,6 +74,25 @@ export async function createOrGetScan(
   },
 ) {
   return db.transaction(async (transaction) => {
+    // P4.2 Task 7 (ADR-0030): before the FK from scans.user_id into
+    // core.users existed, dropping it (migration 022) also removed an
+    // incidental protection -- a new scan row for a user mid-deletion used
+    // to need a FOR KEY SHARE lock on that user's row to satisfy the FK,
+    // which blocked behind deleteAccount's own FOR UPDATE lock and then
+    // failed once the row was gone. That is gone now that user_id is a
+    // plain attribute, so this checks the same scan-local tombstone
+    // confirmScan already checks (confirmation-repository.ts), refusing a
+    // brand new scan for an account whose deletion has been requested.
+    const deletionFlag = await transaction.query.accountDeletions.findFirst({
+      where: eq(accountDeletions.userId, input.userId),
+    });
+    if (deletionFlag) {
+      throw new DatabaseCommandError(
+        "account_deleting",
+        "This account is being deleted and can no longer create scans.",
+      );
+    }
+
     if (input.batchId) {
       const [batch] = await transaction
         .select({ id: batches.id })
@@ -224,7 +207,7 @@ export interface CreateImageUploadInput {
 }
 
 export async function createOrGetImageUpload(
-  db: Database,
+  db: ScanDatabase,
   input: CreateImageUploadInput,
 ) {
   return db.transaction(async (transaction) => {
@@ -304,7 +287,7 @@ export async function createOrGetImageUpload(
 }
 
 export async function getImageUploadForUser(
-  db: Database,
+  db: ScanDatabase,
   input: { userId: string; scanId: string; imageId: string },
 ) {
   const [result] = await db
@@ -326,7 +309,7 @@ export async function getImageUploadForUser(
 }
 
 export async function completeImageUpload(
-  db: Database,
+  db: ScanDatabase,
   input: {
     userId: string;
     scanId: string;
@@ -402,7 +385,7 @@ export interface QuotaHeadroomSnapshot {
 }
 
 type Queryable =
-  Database | Parameters<Parameters<Database["transaction"]>[0]>[0];
+  ScanDatabase | Parameters<Parameters<ScanDatabase["transaction"]>[0]>[0];
 
 /**
  * Reads the same three usage signals `enforceScanQuota` enforces, without
@@ -533,7 +516,7 @@ function quotaHeadroomBlockedMessage(reason: QuotaHeadroomReason | null) {
  * under concurrency; never treat `admissible: true` as a submit guarantee.
  */
 export async function getScanQuotaHeadroomForUser(
-  db: Database,
+  db: ScanDatabase,
   input: { userId: string; limits?: ScanQuotaLimits; now?: Date },
 ): Promise<QuotaHeadroomSnapshot> {
   return computeQuotaHeadroom(db, {
@@ -544,7 +527,7 @@ export async function getScanQuotaHeadroomForUser(
 }
 
 async function enforceScanQuota(
-  transaction: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  transaction: Parameters<Parameters<ScanDatabase["transaction"]>[0]>[0],
   input: { userId: string; limits: ScanQuotaLimits; now: Date },
 ) {
   // Serializing quota checks per user makes concurrent browser tabs/batch
@@ -569,7 +552,7 @@ function analyzeScanJobId(scanId: string, attemptNumber: number) {
 }
 
 export async function submitScan(
-  db: Database,
+  db: ScanDatabase,
   input: {
     userId: string;
     scanId: string;
@@ -689,7 +672,7 @@ export async function submitScan(
 }
 
 export async function retryScan(
-  db: Database,
+  db: ScanDatabase,
   input: {
     userId: string;
     scanId: string;
@@ -809,7 +792,7 @@ const DISMISSIBLE_RESULT_STATUSES = new Set([
 ]);
 
 export async function cancelScan(
-  db: Database,
+  db: ScanDatabase,
   input: { userId: string; scanId: string },
 ) {
   return db.transaction(async (transaction) => {
@@ -882,7 +865,7 @@ export interface AbandonedScanCleanupResult {
  * variants per image, mirroring `deleteAccount`'s cleanup).
  */
 export async function cleanupAbandonedScans(
-  db: Database,
+  db: ScanDatabase,
   input: { olderThan: Date; limit: number },
 ): Promise<AbandonedScanCleanupResult[]> {
   const candidates = await db
@@ -952,7 +935,7 @@ export async function cleanupAbandonedScans(
 }
 
 export async function createOrGetBatch(
-  db: Database,
+  db: ScanDatabase,
   input: { userId: string; idempotencyKey: string },
 ) {
   const [created] = await db
@@ -984,7 +967,7 @@ export async function createOrGetBatch(
 }
 
 export async function getBatchForUser(
-  db: Database,
+  db: ScanDatabase,
   input: { userId: string; batchId: string },
 ) {
   const batch = await db.query.batches.findFirst({

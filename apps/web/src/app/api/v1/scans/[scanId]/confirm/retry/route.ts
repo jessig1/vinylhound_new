@@ -32,10 +32,11 @@ export const POST = withRoute(
     const context = getServerContext();
     const userId = await requireUserId(context);
 
-    const record = await reconcileScanConfirmation(context.database.db, {
-      userId,
-      scanId,
-    });
+    const record = await reconcileScanConfirmation(
+      context.database.scan,
+      context.database.core,
+      { userId, scanId },
+    );
 
     return jsonResponse(
       ConfirmScanResponseSchema.parse({ ...record, scanId }),

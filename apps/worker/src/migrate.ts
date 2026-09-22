@@ -12,11 +12,16 @@ import { runDatabaseMigrations } from "@vinylhound/database/migrations";
 const MAX_ATTEMPTS = 5;
 const RETRY_DELAY_MS = 15_000;
 
-const options = databaseOptionsFromConfig(loadQueueWorkerConfig());
+const config = loadQueueWorkerConfig();
+const options = databaseOptionsFromConfig(config);
+const roles = {
+  scanUrl: config.SCAN_DATABASE_URL,
+  coreUrl: config.CORE_DATABASE_URL,
+};
 
 for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
   try {
-    await runDatabaseMigrations(options);
+    await runDatabaseMigrations(options, roles);
     break;
   } catch (error) {
     if (attempt === MAX_ATTEMPTS) {

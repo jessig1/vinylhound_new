@@ -11,7 +11,7 @@ import type {
 } from "@vinylhound/contracts";
 import { estimateTokenUsageCostUsd } from "@vinylhound/domain";
 
-import type { Database } from "./database.ts";
+import type { CoreDatabase, ScanDatabase } from "./database.ts";
 import { getScanConfirmationForUser } from "./confirmation-repository.ts";
 import {
   DatabaseCommandError,
@@ -50,7 +50,7 @@ export type PrepareScanAnalysisResult =
     };
 
 export async function prepareScanAnalysis(
-  db: Database,
+  db: ScanDatabase,
   input: PrepareScanAnalysisInput,
 ): Promise<PrepareScanAnalysisResult> {
   return db.transaction(async (transaction) => {
@@ -219,7 +219,7 @@ export interface CompleteScanAnalysisInput {
 }
 
 export async function completeScanAnalysis(
-  db: Database,
+  db: ScanDatabase,
   input: CompleteScanAnalysisInput,
 ) {
   return db.transaction(async (transaction) => {
@@ -289,7 +289,7 @@ export async function completeScanAnalysis(
 }
 
 export async function failScanAnalysis(
-  db: Database,
+  db: ScanDatabase,
   input: {
     scanId: string;
     attemptId: string;
@@ -337,7 +337,8 @@ export async function failScanAnalysis(
 }
 
 export async function getScanForUser(
-  db: Database,
+  db: ScanDatabase,
+  coreDb: CoreDatabase,
   input: { userId: string; scanId: string },
 ): Promise<GetScanResponse> {
   const scan = await db.query.scans.findFirst({
@@ -373,7 +374,7 @@ export async function getScanForUser(
     .from(imageAssets)
     .where(eq(imageAssets.scanId, scan.id))
     .orderBy(asc(imageAssets.createdAt), asc(imageAssets.id));
-  const confirmation = await getScanConfirmationForUser(db, input);
+  const confirmation = await getScanConfirmationForUser(db, coreDb, input);
 
   return {
     scanId: scan.id,
@@ -437,7 +438,7 @@ function toCandidateResult(candidate: typeof scanCandidates.$inferSelect) {
   };
 }
 
-async function getTopCandidateForScan(db: Database, scanId: string) {
+async function getTopCandidateForScan(db: ScanDatabase, scanId: string) {
   const [attempt] = await db
     .select({ id: scanAttempts.id })
     .from(scanAttempts)
@@ -466,26 +467,51 @@ async function getTopCandidateForScan(db: Database, scanId: string) {
 }
 
 export async function listScanSummariesForUser(
-  db: Database,
+  db: ScanDatabase,
+  coreDb: CoreDatabase,
   input: { userId: string; scanIds: readonly string[] },
 ) {
+  // P4.2 Task 7 (ADR-0030): was one innerJoin of scan.scan_confirmations
+  // against core.library_items; scan and core are separate connections now,
+  // so this composes the same result from two queries instead.
   const confirmedListByScanId = new Map<string, LibraryList>();
   if (input.scanIds.length) {
     const confirmedRows = await db
-      .select({ scanId: scanConfirmations.scanId, list: libraryItems.list })
+      .select({
+        scanId: scanConfirmations.scanId,
+        libraryItemId: scanConfirmations.libraryItemId,
+      })
       .from(scanConfirmations)
-      .innerJoin(
-        libraryItems,
-        eq(libraryItems.id, scanConfirmations.libraryItemId),
-      )
       .where(
         and(
           eq(scanConfirmations.userId, input.userId),
           inArray(scanConfirmations.scanId, [...input.scanIds]),
         ),
       );
+    const libraryItemIds = confirmedRows
+      .map((row) => row.libraryItemId)
+      .filter((id): id is string => id !== null);
+    const listByLibraryItemId = new Map<string, LibraryList>();
+    if (libraryItemIds.length) {
+      const items = await coreDb
+        .select({ id: libraryItems.id, list: libraryItems.list })
+        .from(libraryItems)
+        .where(inArray(libraryItems.id, libraryItemIds));
+      for (const item of items) {
+        listByLibraryItemId.set(item.id, item.list);
+      }
+    }
     for (const row of confirmedRows) {
-      confirmedListByScanId.set(row.scanId, row.list);
+      const list = row.libraryItemId
+        ? listByLibraryItemId.get(row.libraryItemId)
+        : undefined;
+      // A dangling libraryItemId (the saved record was removed, ADR-0018,
+      // and the best-effort null-back hasn't landed yet) reads as
+      // unconfirmed here, same as `getScanConfirmationForUser`'s own
+      // liveness check.
+      if (list) {
+        confirmedListByScanId.set(row.scanId, list);
+      }
     }
   }
 
@@ -520,7 +546,8 @@ export async function listScanSummariesForUser(
 }
 
 export async function listScansForUser(
-  db: Database,
+  db: ScanDatabase,
+  coreDb: CoreDatabase,
   input: { userId: string; limit: number; before?: Date },
 ) {
   const rows = await db
@@ -534,7 +561,7 @@ export async function listScansForUser(
     .orderBy(desc(scans.createdAt), desc(scans.id))
     .limit(input.limit);
 
-  const summaries = await listScanSummariesForUser(db, {
+  const summaries = await listScanSummariesForUser(db, coreDb, {
     userId: input.userId,
     scanIds: rows.map((row) => row.id),
   });
@@ -592,7 +619,7 @@ function sumOrZero(values: readonly (number | null)[]): number {
 }
 
 export async function getBatchCostSummary(
-  db: Database,
+  db: ScanDatabase,
   input: { batchId: string; scanIds: readonly string[] },
 ): Promise<UsageCostSummary> {
   if (input.scanIds.length === 0) {
@@ -633,7 +660,7 @@ export interface UsageSummary {
 }
 
 export async function getUsageSummaryForUser(
-  db: Database,
+  db: ScanDatabase,
   input: { userId: string; since: Date },
 ): Promise<UsageSummary> {
   const scanRows = await db

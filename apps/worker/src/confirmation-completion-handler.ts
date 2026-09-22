@@ -1,7 +1,7 @@
 import type { ConfirmationCompletedEvent } from "@vinylhound/contracts";
 import {
   applyConfirmationCompletion,
-  type Database,
+  type ScanDatabase,
 } from "@vinylhound/database";
 
 export interface ConfirmationCompletionDelivery {
@@ -11,7 +11,7 @@ export interface ConfirmationCompletionDelivery {
 }
 
 export interface ConfirmationCompletionHandlerOptions {
-  database: Database;
+  database: ScanDatabase;
 }
 
 /**

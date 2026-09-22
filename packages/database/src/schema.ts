@@ -99,6 +99,68 @@ export const confirmationStatusEnum = pgEnum("confirmation_status", [
   "completed",
 ]);
 
+/**
+ * Everything a user submits when confirming a scan (P4.2 Task 3, widened by
+ * ADR-0028) or that P4.2 Task 7 denormalizes onto a saved library item, so a
+ * library read never needs to join back into scan.scan_confirmations across
+ * the schema boundary (ADR-0027) for the values it displays, sorts, and
+ * searches by. Shared verbatim by `scanConfirmations.reviewedRelease` and
+ * `libraryItems.confirmedRelease` so the two columns cannot drift in shape;
+ * `processScanConfirmation` (`confirmation-processing-repository.ts`) builds
+ * the latter directly from the `scan.confirmed.v1` event payload, which
+ * already carries every one of these fields (`ScanConfirmedEventSchema`
+ * spreads the identical `ReviewedReleaseShape`), so no cross-schema read is
+ * needed at write time either.
+ */
+export interface ReviewedRelease {
+  artist: string;
+  title: string;
+  releaseYear: number | null;
+  label: string | null;
+  catalogNumber: string | null;
+  barcode: string | null;
+  releaseDate: string | null;
+  country: string | null;
+  format: string | null;
+  packaging: string | null;
+  releaseStatus: string | null;
+  catalogReference: {
+    provider: "musicbrainz" | "spotify";
+    // Null when the provider models no pressing entity (Spotify).
+    releaseId: string | null;
+    releaseGroupId: string;
+    sourceUrl: string;
+    fetchedAt: string;
+  } | null;
+  list: "collection" | "wishlist";
+  notes: string | null;
+  copy: {
+    mediaCondition:
+      | "mint"
+      | "near_mint"
+      | "very_good_plus"
+      | "very_good"
+      | "good_plus"
+      | "good"
+      | "fair"
+      | "poor"
+      | null;
+    sleeveCondition:
+      | "mint"
+      | "near_mint"
+      | "very_good_plus"
+      | "very_good"
+      | "good_plus"
+      | "good"
+      | "fair"
+      | "poor"
+      | null;
+    location: string | null;
+    notes: string | null;
+    acquiredAt: string | null;
+  } | null;
+}
+
 export const users = pgTable(
   "users",
   {
@@ -126,9 +188,12 @@ export const batches = pgTable(
   "batches",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    // P4.2 Task 7 (ADR-0030): plain UUID attribute, not a foreign key --
+    // `core.users` is a different schema/role after migration 022's writer
+    // switch. Validity is guaranteed by the authenticated request path that
+    // writes it; deleting a user's scan data is `deleteScanDataForUser`'s
+    // explicit delete (account-repository.ts), not a database cascade.
+    userId: uuid("user_id").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -150,9 +215,9 @@ export const scans = pgTable(
   "scans",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    // P4.2 Task 7 (ADR-0030): plain UUID attribute, not a foreign key --
+    // see the identical note on `batches.userId` above.
+    userId: uuid("user_id").notNull(),
     batchId: uuid("batch_id").references(() => batches.id, {
       onDelete: "cascade",
     }),
@@ -584,10 +649,20 @@ export const libraryItems = pgTable(
       .references(() => releases.id, { onDelete: "cascade" }),
     list: libraryListEnum("list").notNull(),
     notes: text("notes"),
-    confirmedFromScanId: uuid("confirmed_from_scan_id").references(
-      () => scans.id,
-      { onDelete: "set null" },
-    ),
+    // Not a foreign key (P4.2 Task 7, ADR-0030): `scans` is a `scan` table, a
+    // different schema/role after migration 022. A fixed audit reference now
+    // -- deleting the scan no longer nulls this column the way the old
+    // `ON DELETE SET NULL` FK did, so a library item keeps naming the scan it
+    // came from for as long as the item exists. Display is unaffected: reads
+    // use `confirmedRelease` below, not a live join through this id.
+    confirmedFromScanId: uuid("confirmed_from_scan_id"),
+    // P4.2 Task 7 (new ADR): denormalized snapshot of the scan confirmation
+    // that produced or last updated this item -- see `ReviewedRelease` above.
+    // Null for an item placed with no scan (ADR-0019's /discover path).
+    // Reads (sorting, search, serialization) use this instead of joining into
+    // scan.scan_confirmations, which is no longer possible in one query once
+    // scan and core are separate roles/connections (Task 7's writer switch).
+    confirmedRelease: jsonb("confirmed_release").$type<ReviewedRelease>(),
     // A favorite is an attribute of this saved relationship, not a third
     // list (ADR-0021): set in either list, cleared with the row.
     favoritedAt: timestamp("favorited_at", { withTimezone: true }),
@@ -615,6 +690,10 @@ export const libraryItems = pgTable(
       "library_items_notes_length_check",
       sql`${table.notes} is null or char_length(${table.notes}) <= 2000`,
     ),
+    check(
+      "library_items_confirmed_release_check",
+      sql`${table.confirmedRelease} is null or jsonb_typeof(${table.confirmedRelease}) = 'object'`,
+    ),
   ],
 );
 
@@ -631,10 +710,9 @@ export const libraryCopies = pgTable(
     releaseId: uuid("release_id")
       .notNull()
       .references(() => releases.id, { onDelete: "cascade" }),
-    confirmedFromScanId: uuid("confirmed_from_scan_id").references(
-      () => scans.id,
-      { onDelete: "set null" },
-    ),
+    // Not a foreign key (P4.2 Task 7, ADR-0030): see the identical note on
+    // `libraryItems.confirmedFromScanId` above.
+    confirmedFromScanId: uuid("confirmed_from_scan_id"),
     mediaCondition: recordConditionEnum("media_condition"),
     sleeveCondition: recordConditionEnum("sleeve_condition"),
     location: varchar("location", { length: 255 }),
@@ -749,38 +827,40 @@ export const scanConfirmations = pgTable(
     scanId: uuid("scan_id")
       .primaryKey()
       .references(() => scans.id, { onDelete: "cascade" }),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    // P4.2 Task 7 (ADR-0030): plain UUID attribute, not a foreign key --
+    // see the identical note on `batches.userId` above.
+    userId: uuid("user_id").notNull(),
     selectedCandidateId: uuid("selected_candidate_id").references(
       () => scanCandidates.id,
       { onDelete: "set null" },
     ),
     // Nullable (P4.2 Task 3): unknown until the core consumer resolves a
-    // release. `set null`, not `restrict` (P4.2 Task 6, new ADR): the
-    // cross-schema `restrict` FK does not survive Task 7's physical
-    // schema/role split, so protection moves to the application layer --
-    // this row's own `reviewedRelease` jsonb is already a durable audit
-    // projection of everything that was confirmed, independent of
-    // `releaseId`'s value. A `completed` row's `release_id` still cannot
-    // actually go null in practice: `scan_confirmations_status_consistency_check`
-    // below requires it non-null whenever `status = 'completed'`, so it
-    // rejects the same `DELETE FROM releases` the old `restrict` FK used to
-    // reject, just via a different constraint -- protected-history behavior
-    // for a completed confirmation is unchanged.
-    releaseId: uuid("release_id").references(() => releases.id, {
-      onDelete: "set null",
-    }),
+    // release. Not a foreign key (P4.2 Task 7, ADR-0030): `releases` is a
+    // `core` table, a different schema/role after migration 022, so no
+    // cross-schema constraint can exist at all -- this row's own
+    // `reviewedRelease` jsonb is already a durable audit projection of
+    // everything that was confirmed, independent of `releaseId`'s value. A
+    // `completed` row's `release_id` still cannot actually go null in
+    // practice: `scan_confirmations_status_consistency_check` below requires
+    // it non-null whenever `status = 'completed'`, and application code never
+    // nulls it (nothing deletes a `releases` row) -- protected-history
+    // behavior for a completed confirmation is unchanged from ADR-0029.
+    releaseId: uuid("release_id"),
     // Nullable so removing a saved record keeps this audit row (ADR-0018);
     // scan_id, release_id, reviewed_release, and confirmed_at still record
     // exactly what was confirmed. Also null, distinguishably, while `status`
     // is `pending` (P4.2 Task 3) -- see the status-consistency check below.
-    libraryItemId: uuid("library_item_id").references(() => libraryItems.id, {
-      onDelete: "set null",
-    }),
-    copyId: uuid("copy_id").references(() => libraryCopies.id, {
-      onDelete: "set null",
-    }),
+    // Not a foreign key (P4.2 Task 7, ADR-0030): `library_items`/
+    // `library_copies` are `core` tables. `deleteLibraryItem`/
+    // `deleteLibraryCopy` (`library-repository.ts`) now best-effort null
+    // these directly after their own `core` transaction commits, replacing
+    // the `ON DELETE SET NULL` this FK used to provide;
+    // `readConfirmationResponse` (`confirmation-repository.ts`) checks
+    // liveness on `coreDb` and lazily self-heals a stale reference on read,
+    // so a crash between the two writes cannot leave this row permanently
+    // wrong.
+    libraryItemId: uuid("library_item_id"),
+    copyId: uuid("copy_id"),
     idempotencyKey: text("idempotency_key").notNull(),
     requestFingerprint: char("request_fingerprint", { length: 64 }).notNull(),
     // P4.2 Task 3: widened from release-identity fields only to also carry
@@ -789,54 +869,7 @@ export const scanConfirmations = pgTable(
     // the user submitted from this one durable row, not just the parts
     // `confirmScan` itself used to resolve a release.
     reviewedRelease: jsonb("reviewed_release")
-      .$type<{
-        artist: string;
-        title: string;
-        releaseYear: number | null;
-        label: string | null;
-        catalogNumber: string | null;
-        barcode: string | null;
-        releaseDate: string | null;
-        country: string | null;
-        format: string | null;
-        packaging: string | null;
-        releaseStatus: string | null;
-        catalogReference: {
-          provider: "musicbrainz" | "spotify";
-          releaseGroupId: string;
-          // Null when the provider models no pressing entity (Spotify).
-          releaseId: string | null;
-          sourceUrl: string;
-          fetchedAt: string;
-        } | null;
-        list: "collection" | "wishlist";
-        notes: string | null;
-        copy: {
-          mediaCondition:
-            | "mint"
-            | "near_mint"
-            | "very_good_plus"
-            | "very_good"
-            | "good_plus"
-            | "good"
-            | "fair"
-            | "poor"
-            | null;
-          sleeveCondition:
-            | "mint"
-            | "near_mint"
-            | "very_good_plus"
-            | "very_good"
-            | "good_plus"
-            | "good"
-            | "fair"
-            | "poor"
-            | null;
-          location: string | null;
-          notes: string | null;
-          acquiredAt: string | null;
-        } | null;
-      }>()
+      .$type<ReviewedRelease>()
       .notNull(),
     // P4.2 Task 3: `status` records where in the async pipeline this
     // confirmation is. `pending` is set by `confirmScan`'s own transaction;
@@ -882,9 +915,27 @@ export const scanConfirmations = pgTable(
   ],
 );
 
-// P4.2 Task 3 (ADR-0028): logically `core`-owned per ADR-0027, physically
-// still alongside every other table until Task 7's schema/role cutover. One
-// row per confirmation, completed at most once, so this single table plays
+// P4.2 Task 7 (new ADR): scan's own local mirror of
+// `core.users.deletion_requested_at`. `confirmScan` used to read that column
+// live (`FOR SHARE`, ADR-0029) to refuse a new confirmation once an account's
+// deletion was requested; once scan and core are separate roles with no
+// cross-schema GRANT, scan can no longer read core's table at all. `DELETE
+// /api/v1/account` writes a row here (via the scan connection) before
+// marking `core.users` (via the core connection), so the fail-safe direction
+// is "confirmations are refused slightly before the account is actually
+// gone," never the reverse.
+export const accountDeletions = pgTable("account_deletions", {
+  userId: uuid("user_id").primaryKey(),
+  requestedAt: timestamp("requested_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export type AccountDeletionRow = typeof accountDeletions.$inferSelect;
+
+// P4.2 Task 3 (ADR-0028): core-owned per ADR-0027 (moved to the `core`
+// schema by P4.2 Task 7's migration 021). One row per confirmation,
+// completed at most once, so this single table plays
 // both the "inbox dedupe receipt" role (the unique `idempotencyKey` is the
 // duplicate-delivery guard for `processScanConfirmation`) and the
 // "completion event to dispatch" role (`payload`/`publishAttempts`/

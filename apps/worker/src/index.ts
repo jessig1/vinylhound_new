@@ -12,14 +12,16 @@ import {
 } from "@vinylhound/contracts";
 import {
   cleanupAbandonedScans,
-  createDatabase,
-  databaseOptionsFromConfig,
+  coreDatabaseOptionsFromConfig,
+  createCoreDatabase,
+  createScanDatabase,
   dispatchNextConfirmationReceipt,
   dispatchNextOutboxMessage,
   finalizeAccountDeletion,
-  listAccountsReadyForDeletion,
+  listAccountsPendingDeletion,
   listStalePendingConfirmations,
   reconcileScanConfirmation,
+  scanDatabaseOptionsFromConfig,
 } from "@vinylhound/database";
 import {
   createAnalyzeScanWorker,
@@ -47,7 +49,10 @@ import { requireOpenAiApiKey } from "./require-openai-key.ts";
 const shutdownSignals = ["SIGINT", "SIGTERM"] as const;
 const config = loadQueueWorkerConfig();
 requireOpenAiApiKey(config.OPENAI_API_KEY);
-const database = createDatabase(databaseOptionsFromConfig(config));
+// P4.2 Task 7 (ADR-0030): two role-scoped connections, never one shared
+// pool -- see the same note on apps/web/src/server/context.ts.
+const scanDatabase = createScanDatabase(scanDatabaseOptionsFromConfig(config));
+const coreDatabase = createCoreDatabase(coreDatabaseOptionsFromConfig(config));
 const queue =
   config.QUEUE_DRIVER === "sqs"
     ? createSqsScanQueue({
@@ -68,7 +73,7 @@ const storage = createS3ObjectStorage({
   forcePathStyle: config.S3_FORCE_PATH_STYLE,
 });
 const onAnalyzeScan = createScanAnalysisHandler({
-  database: database.db,
+  database: scanDatabase.db,
   storage,
   identifier: createOpenAIAlbumIdentifier({
     apiKey: config.OPENAI_API_KEY,
@@ -122,7 +127,7 @@ const confirmationProcessingQueue =
         queueName: config.CONFIRMATION_PROCESSING_QUEUE_NAME,
       });
 const onScanConfirmed = createConfirmationProcessingHandler({
-  database: database.db,
+  database: coreDatabase.db,
 });
 const confirmationProcessingWorker =
   config.QUEUE_DRIVER === "sqs"
@@ -161,7 +166,7 @@ const confirmationCompletionQueue =
         queueName: config.CONFIRMATION_COMPLETION_QUEUE_NAME,
       });
 const onConfirmationCompleted = createConfirmationCompletionHandler({
-  database: database.db,
+  database: scanDatabase.db,
 });
 const confirmationCompletionWorker =
   config.QUEUE_DRIVER === "sqs"
@@ -216,7 +221,7 @@ async function recordHeartbeat() {
  */
 async function dispatchAvailableAnalysisJobs() {
   while (!stopping) {
-    const result = await dispatchNextOutboxMessage(database.db, {
+    const result = await dispatchNextOutboxMessage(scanDatabase.db, {
       [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
         await queue.enqueueAnalyzeScan(
           payload as AnalyzeScanJob,
@@ -272,7 +277,7 @@ let activeConfirmedEventPoll: Promise<void> | undefined;
  */
 async function dispatchAvailableConfirmedEvents() {
   while (!stopping) {
-    const result = await dispatchNextOutboxMessage(database.db, {
+    const result = await dispatchNextOutboxMessage(scanDatabase.db, {
       [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
         await confirmationProcessingQueue.enqueue(
           payload as ScanConfirmedEvent,
@@ -333,7 +338,7 @@ let activeConfirmationReceiptPoll: Promise<void> | undefined;
 async function dispatchAvailableConfirmationReceipts() {
   while (!stopping) {
     const result = await dispatchNextConfirmationReceipt(
-      database.db,
+      coreDatabase.db,
       async (payload, idempotencyKey) => {
         await confirmationCompletionQueue.enqueue(
           payload as ConfirmationCompletedEvent,
@@ -383,7 +388,7 @@ async function cleanupAbandonedUploads() {
   const olderThan = new Date(
     Date.now() - config.ABANDONED_UPLOAD_TTL_HOURS * 60 * 60 * 1_000,
   );
-  const canceled = await cleanupAbandonedScans(database.db, {
+  const canceled = await cleanupAbandonedScans(scanDatabase.db, {
     olderThan,
     limit: config.ABANDONED_UPLOAD_CLEANUP_BATCH_SIZE,
   });
@@ -452,13 +457,17 @@ async function reconcileStaleConfirmations() {
   const olderThan = new Date(
     Date.now() - config.CONFIRMATION_RECONCILIATION_STALE_AFTER_MS,
   );
-  const stale = await listStalePendingConfirmations(database.db, {
+  const stale = await listStalePendingConfirmations(scanDatabase.db, {
     olderThan,
     limit: config.CONFIRMATION_RECONCILIATION_BATCH_SIZE,
   });
   for (const candidate of stale) {
     try {
-      await reconcileScanConfirmation(database.db, candidate);
+      await reconcileScanConfirmation(
+        scanDatabase.db,
+        coreDatabase.db,
+        candidate,
+      );
       console.info("[worker] confirmation_reconciled", {
         scanId: candidate.scanId,
       });
@@ -508,12 +517,16 @@ let activeAccountDeletionPoll: Promise<void> | undefined;
  * retried inline, and does not undo the already-committed database delete.
  */
 async function finalizeReadyAccountDeletions() {
-  const ready = await listAccountsReadyForDeletion(database.db, {
+  const ready = await listAccountsPendingDeletion(coreDatabase.db, {
     limit: config.ACCOUNT_DELETION_BATCH_SIZE,
   });
   for (const userId of ready) {
     try {
-      const result = await finalizeAccountDeletion(database.db, { userId });
+      const result = await finalizeAccountDeletion(
+        scanDatabase.db,
+        coreDatabase.db,
+        { userId },
+      );
       if (!result) {
         continue;
       }
@@ -606,7 +619,7 @@ async function shutdown(signal: (typeof shutdownSignals)[number]) {
   await queue.close();
   await confirmationProcessingQueue.close();
   await confirmationCompletionQueue.close();
-  await database.close();
+  await Promise.all([scanDatabase.close(), coreDatabase.close()]);
   console.info("[worker] shutdown complete");
 }
 

@@ -16,12 +16,12 @@ import {
   type LibraryItemResult,
 } from "@vinylhound/contracts";
 
-import { createDatabase } from "./database.ts";
+import { createCoreDatabase, createScanDatabase } from "./database.ts";
 import {
   deleteAccount,
   finalizeAccountDeletion,
   getAccountExportForUser,
-  listAccountsReadyForDeletion,
+  listAccountsPendingDeletion,
 } from "./account-repository.ts";
 import {
   getBatchCostSummary,
@@ -72,13 +72,15 @@ import {
   createOrGetImageUpload,
   createOrGetScan,
   getBatchForUser,
-  getOrCreateUserIdByClerkId,
   getScanQuotaHeadroomForUser,
   retryScan,
   submitScan,
 } from "./scan-repository.ts";
+import { getOrCreateUserIdByClerkId } from "./user-repository.ts";
 import {
+  accountDeletions,
   albums,
+  batches,
   catalogReferences,
   confirmationReceipts,
   imageAssets,
@@ -95,17 +97,27 @@ import {
   users,
 } from "./schema.ts";
 
-const connectionString = process.env.DATABASE_URL;
+const scanConnectionString = process.env.SCAN_DATABASE_URL;
+const coreConnectionString = process.env.CORE_DATABASE_URL;
 
-if (!connectionString) {
-  throw new Error("DATABASE_URL is required for database integration tests.");
+if (!scanConnectionString || !coreConnectionString) {
+  throw new Error(
+    "SCAN_DATABASE_URL and CORE_DATABASE_URL are required for database integration tests.",
+  );
 }
 
-const database = createDatabase({ connectionString, maxConnections: 2 });
+const scanDatabase = createScanDatabase({
+  connectionString: scanConnectionString,
+  maxConnections: 2,
+});
+const coreDatabase = createCoreDatabase({
+  connectionString: coreConnectionString,
+  maxConnections: 2,
+});
 const userId = randomUUID();
 
 beforeAll(async () => {
-  await database.db.insert(users).values({ id: userId });
+  await coreDatabase.db.insert(users).values({ id: userId });
 });
 
 /**
@@ -120,7 +132,7 @@ async function dispatchUntil(
 ) {
   for (let attempts = 0; attempts < 50; attempts += 1) {
     const result = await dispatchNextOutboxMessage(
-      database.db,
+      scanDatabase.db,
       {
         [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
           if (idempotencyKey === targetJobId) {
@@ -140,9 +152,36 @@ async function dispatchUntil(
   throw new Error(`Target job ${targetJobId} was not reached in time.`);
 }
 
+/**
+ * P4.2 Task 7 (ADR-0030): deleting a `core.users` row no longer removes that
+ * user's `scan` rows. Migration 022 dropped `scans`/`batches`/
+ * `scan_confirmations`'s `user_id` foreign keys -- no cross-schema
+ * constraint can survive the split -- and production replaces that cascade
+ * with `deleteScanDataForUser`'s explicit, ordered delete inside the
+ * account-deletion workflow (`account-repository.ts`). Tests that tear an
+ * account down directly, rather than through `deleteAccount`, need the same
+ * scan-side delete: without it every run leaves its scans and pending
+ * confirmations behind forever, and the next run's
+ * `listStalePendingConfirmations` assertions -- which query the whole table,
+ * not one user's rows -- see the previous run's. Unconditional, unlike the
+ * production version, which refuses while a confirmation is still pending:
+ * test cleanup must always clear, including mid-drain.
+ */
+async function deleteTestAccount(accountId: string) {
+  await scanDatabase.db
+    .delete(scanConfirmations)
+    .where(eq(scanConfirmations.userId, accountId));
+  await scanDatabase.db.delete(scans).where(eq(scans.userId, accountId));
+  await scanDatabase.db.delete(batches).where(eq(batches.userId, accountId));
+  await scanDatabase.db
+    .delete(accountDeletions)
+    .where(eq(accountDeletions.userId, accountId));
+  await coreDatabase.db.delete(users).where(eq(users.id, accountId));
+}
+
 afterAll(async () => {
-  await database.db.delete(users).where(eq(users.id, userId));
-  await database.close();
+  await deleteTestAccount(userId);
+  await Promise.all([scanDatabase.close(), coreDatabase.close()]);
 });
 
 /**
@@ -158,9 +197,9 @@ afterAll(async () => {
  * shape `confirmScan` itself used to return synchronously before this task.
  */
 async function confirmScanAndComplete(
-  input: Parameters<typeof confirmScan>[1],
+  input: Parameters<typeof confirmScan>[2],
 ): ReturnType<typeof confirmScan> {
-  const result = await confirmScan(database.db, input);
+  const result = await confirmScan(scanDatabase.db, coreDatabase.db, input);
   if (result.record.status === "completed") {
     return result;
   }
@@ -170,7 +209,7 @@ async function confirmScanAndComplete(
   // and reconfirmed more than once), so filtering on the exact composite key
   // finds this specific attempt's row even if the scan has older ones.
   const eventKey = confirmationEventId(input.scanId, input.idempotencyKey);
-  const [outboxRow] = await database.db
+  const [outboxRow] = await scanDatabase.db
     .select()
     .from(outboxMessages)
     .where(
@@ -188,9 +227,9 @@ async function confirmScanAndComplete(
   const confirmedEvent = SCAN_CONFIRMED_EVENT_CONTRACT.consumerSchema.parse(
     outboxRow.payload,
   );
-  await processScanConfirmation(database.db, confirmedEvent);
+  await processScanConfirmation(coreDatabase.db, confirmedEvent);
 
-  const [receipt] = await database.db
+  const [receipt] = await coreDatabase.db
     .select()
     .from(confirmationReceipts)
     .where(eq(confirmationReceipts.idempotencyKey, eventKey))
@@ -202,9 +241,9 @@ async function confirmScanAndComplete(
   }
   const completedEvent =
     CONFIRMATION_COMPLETED_EVENT_CONTRACT.consumerSchema.parse(receipt.payload);
-  await applyConfirmationCompletion(database.db, completedEvent);
+  await applyConfirmationCompletion(scanDatabase.db, completedEvent);
 
-  const final = await confirmScan(database.db, input);
+  const final = await confirmScan(scanDatabase.db, coreDatabase.db, input);
   return { record: final.record, created: result.created };
 }
 
@@ -215,8 +254,8 @@ describe("initial scan persistence schema", () => {
       source: "single_upload" as const,
       idempotencyKey: `repository-scan-${randomUUID()}`,
     };
-    const createdScan = await createOrGetScan(database.db, scanInput);
-    const replayedScan = await createOrGetScan(database.db, scanInput);
+    const createdScan = await createOrGetScan(scanDatabase.db, scanInput);
+    const replayedScan = await createOrGetScan(scanDatabase.db, scanInput);
 
     expect(createdScan.created).toBe(true);
     expect(replayedScan.created).toBe(false);
@@ -233,11 +272,11 @@ describe("initial scan persistence schema", () => {
       maxImages: 12,
     };
     const createdUpload = await createOrGetImageUpload(
-      database.db,
+      scanDatabase.db,
       uploadInput,
     );
     const replayedUpload = await createOrGetImageUpload(
-      database.db,
+      scanDatabase.db,
       uploadInput,
     );
 
@@ -247,7 +286,7 @@ describe("initial scan persistence schema", () => {
   });
 
   it("stores a scan, completed image, and attempt audit row", async () => {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -258,7 +297,7 @@ describe("initial scan persistence schema", () => {
 
     expect(scan?.status).toBe("awaiting_upload");
 
-    await database.db.insert(imageAssets).values({
+    await scanDatabase.db.insert(imageAssets).values({
       scanId: scan!.id,
       idempotencyKey: `image-${randomUUID()}`,
       objectKey: `${userId}/${scan!.id}/${randomUUID()}`,
@@ -276,7 +315,7 @@ describe("initial scan persistence schema", () => {
       thumbnailSizeBytes: 40,
     });
 
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -290,7 +329,7 @@ describe("initial scan persistence schema", () => {
       completedAt: new Date(),
     });
 
-    const stored = await database.db.query.scans.findFirst({
+    const stored = await scanDatabase.db.query.scans.findFirst({
       where: eq(scans.id, scan!.id),
     });
 
@@ -303,12 +342,12 @@ describe("initial scan persistence schema", () => {
   });
 
   it("submits atomically, replays safely, and dispatches the outbox", async () => {
-    const scan = await createOrGetScan(database.db, {
+    const scan = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `submit-scan-${randomUUID()}`,
     });
-    const upload = await createOrGetImageUpload(database.db, {
+    const upload = await createOrGetImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `submit-upload-${randomUUID()}`,
@@ -318,7 +357,7 @@ describe("initial scan persistence schema", () => {
       checksumSha256: "c".repeat(64),
       maxImages: 12,
     });
-    await completeImageUpload(database.db, {
+    await completeImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       imageId: upload.record.id,
@@ -331,12 +370,12 @@ describe("initial scan persistence schema", () => {
     });
 
     const idempotencyKey = `submit-${randomUUID()}`;
-    const submitted = await submitScan(database.db, {
+    const submitted = await submitScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey,
     });
-    const replayed = await submitScan(database.db, {
+    const replayed = await submitScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey,
@@ -355,7 +394,7 @@ describe("initial scan persistence schema", () => {
       jobId: submitted.jobId,
     });
 
-    const storedMessages = await database.db
+    const storedMessages = await scanDatabase.db
       .select()
       .from(outboxMessages)
       .where(eq(outboxMessages.aggregateId, scan.record.id));
@@ -368,7 +407,7 @@ describe("initial scan persistence schema", () => {
 
     const firstDispatchAt = new Date(Date.now() + 1_000);
     const deferred = await dispatchNextOutboxMessage(
-      database.db,
+      scanDatabase.db,
       {
         [ANALYZE_SCAN_JOB]: async () => {
           throw new Error("synthetic Redis outage");
@@ -383,7 +422,7 @@ describe("initial scan persistence schema", () => {
 
     const publishedJobs: Array<{ jobId: string; scanId: string }> = [];
     const published = await dispatchNextOutboxMessage(
-      database.db,
+      scanDatabase.db,
       {
         [ANALYZE_SCAN_JOB]: async (payload, jobId) => {
           const job = payload as AnalyzeScanJob;
@@ -400,7 +439,7 @@ describe("initial scan persistence schema", () => {
       { jobId: submitted.jobId, scanId: scan.record.id },
     ]);
 
-    const [publishedMessage] = await database.db
+    const [publishedMessage] = await scanDatabase.db
       .select()
       .from(outboxMessages)
       .where(eq(outboxMessages.aggregateId, scan.record.id));
@@ -412,12 +451,12 @@ describe("initial scan persistence schema", () => {
   });
 
   it("forwards a caller-supplied correlationId onto the outbox row and the worker attempt it produces", async () => {
-    const scan = await createOrGetScan(database.db, {
+    const scan = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `correlation-scan-${randomUUID()}`,
     });
-    const upload = await createOrGetImageUpload(database.db, {
+    const upload = await createOrGetImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `correlation-upload-${randomUUID()}`,
@@ -427,7 +466,7 @@ describe("initial scan persistence schema", () => {
       checksumSha256: "d".repeat(64),
       maxImages: 12,
     });
-    await completeImageUpload(database.db, {
+    await completeImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       imageId: upload.record.id,
@@ -440,7 +479,7 @@ describe("initial scan persistence schema", () => {
     });
 
     const correlationId = `trace-${randomUUID()}`;
-    const submitted = await submitScan(database.db, {
+    const submitted = await submitScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `correlation-submit-${randomUUID()}`,
@@ -448,13 +487,13 @@ describe("initial scan persistence schema", () => {
     });
     expect(submitted.job.correlationId).toBe(correlationId);
 
-    const [storedMessage] = await database.db
+    const [storedMessage] = await scanDatabase.db
       .select()
       .from(outboxMessages)
       .where(eq(outboxMessages.aggregateId, scan.record.id));
     expect(storedMessage).toMatchObject({ correlationId });
 
-    const prepared = await prepareScanAnalysis(database.db, {
+    const prepared = await prepareScanAnalysis(scanDatabase.db, {
       job: submitted.job,
       deliveryAttempt: 1,
       model: "integration-test-model",
@@ -466,7 +505,7 @@ describe("initial scan persistence schema", () => {
       );
     }
 
-    const [attemptRow] = await database.db
+    const [attemptRow] = await scanDatabase.db
       .select()
       .from(scanAttempts)
       .where(eq(scanAttempts.id, prepared.attemptId));
@@ -475,14 +514,14 @@ describe("initial scan persistence schema", () => {
 
   it("rejects a submission that exceeds the per-user daily analysis quota", async () => {
     const quotaUserId = randomUUID();
-    await database.db.insert(users).values({ id: quotaUserId });
+    await coreDatabase.db.insert(users).values({ id: quotaUserId });
     const createCompletedScan = async () => {
-      const scan = await createOrGetScan(database.db, {
+      const scan = await createOrGetScan(scanDatabase.db, {
         userId: quotaUserId,
         source: "single_upload",
         idempotencyKey: `quota-scan-${randomUUID()}`,
       });
-      const upload = await createOrGetImageUpload(database.db, {
+      const upload = await createOrGetImageUpload(scanDatabase.db, {
         userId: quotaUserId,
         scanId: scan.record.id,
         idempotencyKey: `quota-upload-${randomUUID()}`,
@@ -492,7 +531,7 @@ describe("initial scan persistence schema", () => {
         checksumSha256: "b".repeat(64),
         maxImages: 12,
       });
-      await completeImageUpload(database.db, {
+      await completeImageUpload(scanDatabase.db, {
         userId: quotaUserId,
         scanId: scan.record.id,
         imageId: upload.record.id,
@@ -507,7 +546,7 @@ describe("initial scan persistence schema", () => {
     };
 
     const first = await createCompletedScan();
-    await submitScan(database.db, {
+    await submitScan(scanDatabase.db, {
       userId: quotaUserId,
       scanId: first,
       idempotencyKey: `quota-submit-${randomUUID()}`,
@@ -515,7 +554,7 @@ describe("initial scan persistence schema", () => {
     const second = await createCompletedScan();
 
     await expect(
-      submitScan(database.db, {
+      submitScan(scanDatabase.db, {
         userId: quotaUserId,
         scanId: second,
         idempotencyKey: `quota-submit-${randomUUID()}`,
@@ -528,14 +567,14 @@ describe("initial scan persistence schema", () => {
       }),
     ).rejects.toMatchObject({ code: "quota_exceeded" });
 
-    await database.db.delete(users).where(eq(users.id, quotaUserId));
+    await deleteTestAccount(quotaUserId);
   });
 
   it("reports advisory quota headroom that reflects active scans", async () => {
     const headroomUserId = randomUUID();
-    await database.db.insert(users).values({ id: headroomUserId });
+    await coreDatabase.db.insert(users).values({ id: headroomUserId });
 
-    const fresh = await getScanQuotaHeadroomForUser(database.db, {
+    const fresh = await getScanQuotaHeadroomForUser(scanDatabase.db, {
       userId: headroomUserId,
       limits: {
         dailyAnalysisLimit: 100,
@@ -550,12 +589,12 @@ describe("initial scan persistence schema", () => {
       activeScans: { used: 0, limit: 1, remaining: 1 },
     });
 
-    const scan = await createOrGetScan(database.db, {
+    const scan = await createOrGetScan(scanDatabase.db, {
       userId: headroomUserId,
       source: "single_upload",
       idempotencyKey: `headroom-scan-${randomUUID()}`,
     });
-    const upload = await createOrGetImageUpload(database.db, {
+    const upload = await createOrGetImageUpload(scanDatabase.db, {
       userId: headroomUserId,
       scanId: scan.record.id,
       idempotencyKey: `headroom-upload-${randomUUID()}`,
@@ -565,7 +604,7 @@ describe("initial scan persistence schema", () => {
       checksumSha256: "c".repeat(64),
       maxImages: 12,
     });
-    await completeImageUpload(database.db, {
+    await completeImageUpload(scanDatabase.db, {
       userId: headroomUserId,
       scanId: scan.record.id,
       imageId: upload.record.id,
@@ -576,13 +615,13 @@ describe("initial scan persistence schema", () => {
       analysisHeight: 800,
       thumbnailSizeBytes: 40,
     });
-    await submitScan(database.db, {
+    await submitScan(scanDatabase.db, {
       userId: headroomUserId,
       scanId: scan.record.id,
       idempotencyKey: `headroom-submit-${randomUUID()}`,
     });
 
-    const afterSubmit = await getScanQuotaHeadroomForUser(database.db, {
+    const afterSubmit = await getScanQuotaHeadroomForUser(scanDatabase.db, {
       userId: headroomUserId,
       limits: {
         dailyAnalysisLimit: 100,
@@ -597,19 +636,19 @@ describe("initial scan persistence schema", () => {
       activeScans: { used: 1, limit: 1, remaining: 0 },
     });
 
-    await database.db.delete(users).where(eq(users.id, headroomUserId));
+    await deleteTestAccount(headroomUserId);
   });
 
   it("rejects creating a new scan before any upload work when the active-scan limit is already exhausted", async () => {
     const admissionUserId = randomUUID();
-    await database.db.insert(users).values({ id: admissionUserId });
+    await coreDatabase.db.insert(users).values({ id: admissionUserId });
 
-    const active = await createOrGetScan(database.db, {
+    const active = await createOrGetScan(scanDatabase.db, {
       userId: admissionUserId,
       source: "single_upload",
       idempotencyKey: `admission-scan-active-${randomUUID()}`,
     });
-    const activeUpload = await createOrGetImageUpload(database.db, {
+    const activeUpload = await createOrGetImageUpload(scanDatabase.db, {
       userId: admissionUserId,
       scanId: active.record.id,
       idempotencyKey: `admission-upload-${randomUUID()}`,
@@ -619,7 +658,7 @@ describe("initial scan persistence schema", () => {
       checksumSha256: "d".repeat(64),
       maxImages: 12,
     });
-    await completeImageUpload(database.db, {
+    await completeImageUpload(scanDatabase.db, {
       userId: admissionUserId,
       scanId: active.record.id,
       imageId: activeUpload.record.id,
@@ -630,7 +669,7 @@ describe("initial scan persistence schema", () => {
       analysisHeight: 800,
       thumbnailSizeBytes: 40,
     });
-    await submitScan(database.db, {
+    await submitScan(scanDatabase.db, {
       userId: admissionUserId,
       scanId: active.record.id,
       idempotencyKey: `admission-submit-${randomUUID()}`,
@@ -638,7 +677,7 @@ describe("initial scan persistence schema", () => {
 
     const blockedIdempotencyKey = `admission-scan-blocked-${randomUUID()}`;
     await expect(
-      createOrGetScan(database.db, {
+      createOrGetScan(scanDatabase.db, {
         userId: admissionUserId,
         source: "single_upload",
         idempotencyKey: blockedIdempotencyKey,
@@ -651,24 +690,24 @@ describe("initial scan persistence schema", () => {
       }),
     ).rejects.toMatchObject({ code: "quota_exceeded" });
 
-    const blockedScan = await database.db.query.scans.findFirst({
+    const blockedScan = await scanDatabase.db.query.scans.findFirst({
       where: eq(scans.idempotencyKey, blockedIdempotencyKey),
     });
     expect(blockedScan).toBeUndefined();
 
-    await database.db.delete(users).where(eq(users.id, admissionUserId));
+    await deleteTestAccount(admissionUserId);
   });
 
   it("cancels an abandoned awaiting_upload scan and leaves a recent one untouched", async () => {
     const cleanupUserId = randomUUID();
-    await database.db.insert(users).values({ id: cleanupUserId });
+    await coreDatabase.db.insert(users).values({ id: cleanupUserId });
 
-    const abandoned = await createOrGetScan(database.db, {
+    const abandoned = await createOrGetScan(scanDatabase.db, {
       userId: cleanupUserId,
       source: "single_upload",
       idempotencyKey: `cleanup-scan-abandoned-${randomUUID()}`,
     });
-    const abandonedUpload = await createOrGetImageUpload(database.db, {
+    const abandonedUpload = await createOrGetImageUpload(scanDatabase.db, {
       userId: cleanupUserId,
       scanId: abandoned.record.id,
       idempotencyKey: `cleanup-upload-${randomUUID()}`,
@@ -679,23 +718,23 @@ describe("initial scan persistence schema", () => {
       maxImages: 12,
     });
     const staleTimestamp = new Date(Date.now() - 48 * 60 * 60 * 1_000);
-    await database.db
+    await scanDatabase.db
       .update(scans)
       .set({ createdAt: staleTimestamp, updatedAt: staleTimestamp })
       .where(eq(scans.id, abandoned.record.id));
-    await database.db
+    await scanDatabase.db
       .update(imageAssets)
       .set({ createdAt: staleTimestamp })
       .where(eq(imageAssets.id, abandonedUpload.record.id));
 
-    const recent = await createOrGetScan(database.db, {
+    const recent = await createOrGetScan(scanDatabase.db, {
       userId: cleanupUserId,
       source: "single_upload",
       idempotencyKey: `cleanup-scan-recent-${randomUUID()}`,
     });
 
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1_000);
-    const canceled = await cleanupAbandonedScans(database.db, {
+    const canceled = await cleanupAbandonedScans(scanDatabase.db, {
       olderThan: cutoff,
       limit: 50,
     });
@@ -714,29 +753,29 @@ describe("initial scan persistence schema", () => {
     );
 
     const [abandonedStatus, recentStatus] = await Promise.all([
-      database.db.query.scans.findFirst({
+      scanDatabase.db.query.scans.findFirst({
         where: eq(scans.id, abandoned.record.id),
       }),
-      database.db.query.scans.findFirst({
+      scanDatabase.db.query.scans.findFirst({
         where: eq(scans.id, recent.record.id),
       }),
     ]);
     expect(abandonedStatus?.status).toBe("canceled");
     expect(recentStatus?.status).toBe("awaiting_upload");
 
-    await database.db.delete(users).where(eq(users.id, cleanupUserId));
+    await deleteTestAccount(cleanupUserId);
   });
 
   it("enforces per-user idempotency keys", async () => {
     const idempotencyKey = `duplicate-${randomUUID()}`;
-    await database.db.insert(scans).values({
+    await scanDatabase.db.insert(scans).values({
       userId,
       source: "single_upload",
       idempotencyKey,
     });
 
     await expect(
-      database.db.insert(scans).values({
+      scanDatabase.db.insert(scans).values({
         userId,
         source: "single_upload",
         idempotencyKey,
@@ -745,7 +784,7 @@ describe("initial scan persistence schema", () => {
   });
 
   it("rejects malformed checksums and invalid attempt numbers", async () => {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -755,7 +794,7 @@ describe("initial scan persistence schema", () => {
       .returning();
 
     await expect(
-      database.db.insert(imageAssets).values({
+      scanDatabase.db.insert(imageAssets).values({
         scanId: scan!.id,
         idempotencyKey: `bad-image-${randomUUID()}`,
         objectKey: `${userId}/${scan!.id}/${randomUUID()}`,
@@ -768,7 +807,7 @@ describe("initial scan persistence schema", () => {
     ).rejects.toMatchObject({ cause: { code: "23514" } });
 
     await expect(
-      database.db.insert(scanAttempts).values({
+      scanDatabase.db.insert(scanAttempts).values({
         scanId: scan!.id,
         attemptNumber: 0,
         status: "processing",
@@ -779,7 +818,7 @@ describe("initial scan persistence schema", () => {
   });
 
   it("confirms a reviewed result idempotently and converts a wishlist item", async () => {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -789,7 +828,7 @@ describe("initial scan persistence schema", () => {
         completedAt: new Date(),
       })
       .returning();
-    const [attempt] = await database.db
+    const [attempt] = await scanDatabase.db
       .insert(scanAttempts)
       .values({
         scanId: scan!.id,
@@ -802,7 +841,7 @@ describe("initial scan persistence schema", () => {
         completedAt: new Date(),
       })
       .returning();
-    const [candidate] = await database.db
+    const [candidate] = await scanDatabase.db
       .insert(scanCandidates)
       .values({
         scanAttemptId: attempt!.id,
@@ -851,7 +890,11 @@ describe("initial scan persistence schema", () => {
       },
     };
     const created = await confirmScanAndComplete(confirmation);
-    const replayed = await confirmScan(database.db, confirmation);
+    const replayed = await confirmScan(
+      scanDatabase.db,
+      coreDatabase.db,
+      confirmation,
+    );
 
     expect(created.created).toBe(true);
     expect(replayed.created).toBe(false);
@@ -863,7 +906,7 @@ describe("initial scan persistence schema", () => {
       release: { artist: "Miles Davis", title: "Kind of Blue" },
     });
 
-    const [secondScan] = await database.db
+    const [secondScan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -873,7 +916,7 @@ describe("initial scan persistence schema", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: secondScan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -901,7 +944,7 @@ describe("initial scan persistence schema", () => {
         },
       },
     });
-    const [thirdScan] = await database.db
+    const [thirdScan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -911,7 +954,7 @@ describe("initial scan persistence schema", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: thirdScan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -952,7 +995,10 @@ describe("initial scan persistence schema", () => {
       copy: { location: "Shelf A" },
     });
     await expect(
-      getScanForUser(database.db, { userId, scanId: secondScan!.id }),
+      getScanForUser(scanDatabase.db, coreDatabase.db, {
+        userId,
+        scanId: secondScan!.id,
+      }),
     ).resolves.toMatchObject({
       confirmation: {
         release: { artist: "MILES DAVIS", title: "Kind of Blue" },
@@ -960,7 +1006,10 @@ describe("initial scan persistence schema", () => {
       },
     });
     await expect(
-      listLibraryItemsForUser(database.db, { userId, list: "collection" }),
+      listLibraryItemsForUser(coreDatabase.db, scanDatabase.db, {
+        userId,
+        list: "collection",
+      }),
     ).resolves.toMatchObject({
       list: "collection",
       items: [
@@ -973,7 +1022,7 @@ describe("initial scan persistence schema", () => {
       ],
     });
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(albums)
         .where(
@@ -984,32 +1033,32 @@ describe("initial scan persistence schema", () => {
         ),
     ).toHaveLength(1);
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(catalogReferences)
         .where(eq(catalogReferences.provider, "musicbrainz")),
     ).toHaveLength(2);
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(libraryCopies)
         .where(eq(libraryCopies.libraryItemId, created.record.libraryItem!.id)),
     ).toHaveLength(2);
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(libraryItems)
         .where(eq(libraryItems.userId, userId)),
     ).toHaveLength(1);
     expect(
-      await database.db
+      await scanDatabase.db
         .select()
         .from(scanConfirmations)
         .where(eq(scanConfirmations.userId, userId)),
     ).toHaveLength(3);
 
     await expect(
-      confirmScan(database.db, {
+      confirmScan(scanDatabase.db, coreDatabase.db, {
         ...confirmation,
         confirmation: {
           ...confirmation.confirmation,
@@ -1025,7 +1074,7 @@ describe("direct library item management", () => {
     list: "collection" | "wishlist",
     release?: { artist?: string; title?: string },
   ) {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -1035,7 +1084,7 @@ describe("direct library item management", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -1074,7 +1123,7 @@ describe("direct library item management", () => {
   it("converts a wishlist item to collection, creating one blank copy", async () => {
     const itemId = await confirmWishlistItem("wishlist");
 
-    const updated = await updateLibraryItem(database.db, {
+    const updated = await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId,
       update: { list: "collection" },
@@ -1090,7 +1139,7 @@ describe("direct library item management", () => {
   it("updates notes without changing list", async () => {
     const itemId = await confirmWishlistItem("wishlist");
 
-    const updated = await updateLibraryItem(database.db, {
+    const updated = await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId,
       update: { notes: "Keep an eye out for a clean pressing" },
@@ -1107,7 +1156,7 @@ describe("direct library item management", () => {
     const itemId = await confirmWishlistItem("collection");
 
     await expect(
-      updateLibraryItem(database.db, {
+      updateLibraryItem(coreDatabase.db, scanDatabase.db, {
         userId,
         itemId,
         update: { list: "wishlist" },
@@ -1119,7 +1168,7 @@ describe("direct library item management", () => {
     const itemId = await confirmWishlistItem("wishlist");
 
     await expect(
-      updateLibraryItem(database.db, {
+      updateLibraryItem(coreDatabase.db, scanDatabase.db, {
         userId: randomUUID(),
         itemId,
         update: { notes: "not mine" },
@@ -1129,17 +1178,20 @@ describe("direct library item management", () => {
 
   it("deletes an item with scan history while keeping its confirmation audit row", async () => {
     const itemId = await confirmWishlistItem("collection");
-    const [confirmationBefore] = await database.db
+    const [confirmationBefore] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.libraryItemId, itemId));
     expect(confirmationBefore).toBeDefined();
     const scanId = confirmationBefore!.scanId;
 
-    const deleted = await deleteLibraryItem(database.db, { userId, itemId });
+    const deleted = await deleteLibraryItem(coreDatabase.db, scanDatabase.db, {
+      userId,
+      itemId,
+    });
     expect(deleted).toEqual({ id: itemId });
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(libraryItems)
         .where(eq(libraryItems.id, itemId)),
@@ -1147,7 +1199,7 @@ describe("direct library item management", () => {
 
     // The decision survives with its reviewed snapshot; only the pointer to the
     // removed item is cleared (ADR-0018).
-    const [confirmationAfter] = await database.db
+    const [confirmationAfter] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.scanId, scanId));
@@ -1161,12 +1213,15 @@ describe("direct library item management", () => {
 
     // The scan reads as reviewable again, so the record can be saved anew.
     expect(
-      await getScanConfirmationForUser(database.db, { userId, scanId }),
+      await getScanConfirmationForUser(scanDatabase.db, coreDatabase.db, {
+        userId,
+        scanId,
+      }),
     ).toBeNull();
   });
 
   it("deletes a library item with no confirmation history and cascades its copies", async () => {
-    const [album] = await database.db
+    const [album] = await coreDatabase.db
       .insert(albums)
       .values({
         artist: `Directly Added Artist ${randomUUID()}`,
@@ -1175,14 +1230,14 @@ describe("direct library item management", () => {
         normalizedTitle: "directly added title",
       })
       .returning();
-    const [directRelease] = await database.db
+    const [directRelease] = await coreDatabase.db
       .insert(releases)
       .values({
         albumId: album!.id,
         identityKey: randomUUID().replace(/-/g, "").padEnd(64, "0"),
       })
       .returning();
-    const [item] = await database.db
+    const [item] = await coreDatabase.db
       .insert(libraryItems)
       .values({
         userId,
@@ -1191,25 +1246,31 @@ describe("direct library item management", () => {
       })
       .returning();
 
-    const deleted = await deleteLibraryItem(database.db, {
+    const deleted = await deleteLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId: item!.id,
     });
     expect(deleted).toEqual({ id: item!.id });
 
     await expect(
-      deleteLibraryItem(database.db, { userId, itemId: item!.id }),
+      deleteLibraryItem(coreDatabase.db, scanDatabase.db, {
+        userId,
+        itemId: item!.id,
+      }),
     ).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("saves a scan again after its item was removed, replacing the old decision", async () => {
     const itemId = await confirmWishlistItem("wishlist");
-    const [confirmation] = await database.db
+    const [confirmation] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.libraryItemId, itemId));
     const scanId = confirmation!.scanId;
-    await deleteLibraryItem(database.db, { userId, itemId });
+    await deleteLibraryItem(coreDatabase.db, scanDatabase.db, {
+      userId,
+      itemId,
+    });
 
     const resaved = await confirmScanAndComplete({
       userId,
@@ -1241,7 +1302,7 @@ describe("direct library item management", () => {
   });
 
   it("exposes the confirming scan's first completed image as the item cover", async () => {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -1251,7 +1312,7 @@ describe("direct library item management", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -1261,7 +1322,7 @@ describe("direct library item management", () => {
       durationMs: 20,
       completedAt: new Date(),
     });
-    const [cover] = await database.db
+    const [cover] = await scanDatabase.db
       .insert(imageAssets)
       .values({
         scanId: scan!.id,
@@ -1306,7 +1367,7 @@ describe("direct library item management", () => {
       },
     });
 
-    const item = await getLibraryItemForUser(database.db, {
+    const item = await getLibraryItemForUser(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId: confirmed.record.libraryItem!.id,
     });
@@ -1316,7 +1377,10 @@ describe("direct library item management", () => {
     });
 
     await expect(
-      getLibraryItemForUser(database.db, { userId, itemId: randomUUID() }),
+      getLibraryItemForUser(coreDatabase.db, scanDatabase.db, {
+        userId,
+        itemId: randomUUID(),
+      }),
     ).rejects.toMatchObject({ code: "not_found" });
   });
 
@@ -1331,36 +1395,52 @@ describe("direct library item management", () => {
       title: `A Love Supreme ${suffix}`,
     });
 
-    const matched = await listLibraryItemsForUser(database.db, {
-      userId,
-      list: "wishlist",
-      query: `miles davis search test ${suffix}`,
-    });
+    const matched = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        list: "wishlist",
+        query: `miles davis search test ${suffix}`,
+      },
+    );
     expect(matched.items.map((item) => item.id)).toEqual([milesId]);
 
-    const byTitle = await listLibraryItemsForUser(database.db, {
-      userId,
-      list: "wishlist",
-      query: `love supreme ${suffix}`,
-    });
+    const byTitle = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        list: "wishlist",
+        query: `love supreme ${suffix}`,
+      },
+    );
     expect(byTitle.items.map((item) => item.id)).toEqual([johnId]);
 
-    const sortedByArtist = await listLibraryItemsForUser(database.db, {
-      userId,
-      list: "wishlist",
-      query: `search test ${suffix}`,
-      sort: "artist",
-    });
+    const sortedByArtist = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        list: "wishlist",
+        query: `search test ${suffix}`,
+        sort: "artist",
+      },
+    );
     expect(sortedByArtist.items.map((item) => item.id)).toEqual([
       johnId,
       milesId,
     ]);
 
-    const noMatches = await listLibraryItemsForUser(database.db, {
-      userId,
-      list: "wishlist",
-      query: `no such artist ${suffix}`,
-    });
+    const noMatches = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        list: "wishlist",
+        query: `no such artist ${suffix}`,
+      },
+    );
     expect(noMatches.items).toEqual([]);
   });
 });
@@ -1376,7 +1456,7 @@ describe("per-copy editing and last-copy rules", () => {
 
   /** Confirms a scan into the collection, which records the first copy. */
   async function confirmOwnedRecord(owner = userId) {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId: owner,
@@ -1386,7 +1466,7 @@ describe("per-copy editing and last-copy rules", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -1428,10 +1508,14 @@ describe("per-copy editing and last-copy rules", () => {
 
   it("edits every copy field, converges when replayed, and reads back through the record", async () => {
     const { itemId, copyId } = await confirmOwnedRecord();
-    const before = await getLibraryItemForUser(database.db, {
-      userId,
-      itemId,
-    });
+    const before = await getLibraryItemForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        itemId,
+      },
+    );
     const update = {
       mediaCondition: "very_good_plus" as const,
       sleeveCondition: "very_good" as const,
@@ -1440,7 +1524,7 @@ describe("per-copy editing and last-copy rules", () => {
       acquiredAt: "2026-08-30",
     };
 
-    const edited = await updateLibraryCopy(database.db, {
+    const edited = await updateLibraryCopy(coreDatabase.db, {
       userId,
       itemId,
       copyId,
@@ -1449,7 +1533,7 @@ describe("per-copy editing and last-copy rules", () => {
     expect(edited).toMatchObject({ id: copyId, ...update });
 
     // Idempotent by identity: the same body again changes nothing.
-    const replayed = await updateLibraryCopy(database.db, {
+    const replayed = await updateLibraryCopy(coreDatabase.db, {
       userId,
       itemId,
       copyId,
@@ -1458,7 +1542,7 @@ describe("per-copy editing and last-copy rules", () => {
     expect(replayed).toMatchObject({ id: copyId, ...update });
 
     // A partial update touches only the named field.
-    const cleared = await updateLibraryCopy(database.db, {
+    const cleared = await updateLibraryCopy(coreDatabase.db, {
       userId,
       itemId,
       copyId,
@@ -1466,7 +1550,11 @@ describe("per-copy editing and last-copy rules", () => {
     });
     expect(cleared).toMatchObject({ ...update, location: null });
 
-    const after = await getLibraryItemForUser(database.db, { userId, itemId });
+    const after = await getLibraryItemForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      { userId, itemId },
+    );
     expect(after.copies).toHaveLength(1);
     expect(after.copies[0]).toMatchObject({ ...update, location: null });
     expect(after.copyCount).toBe(1);
@@ -1480,12 +1568,12 @@ describe("per-copy editing and last-copy rules", () => {
     const mine = await confirmOwnedRecord();
     const other = await confirmOwnedRecord();
     const strangerId = randomUUID();
-    await database.db.insert(users).values({ id: strangerId });
+    await coreDatabase.db.insert(users).values({ id: strangerId });
     const stranger = await confirmOwnedRecord(strangerId);
 
     // Another user's copy, named with its own record: not found, unchanged.
     await expect(
-      updateLibraryCopy(database.db, {
+      updateLibraryCopy(coreDatabase.db, {
         userId,
         itemId: stranger.itemId,
         copyId: stranger.copyId,
@@ -1493,7 +1581,7 @@ describe("per-copy editing and last-copy rules", () => {
       }),
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(
-      deleteLibraryCopy(database.db, {
+      deleteLibraryCopy(coreDatabase.db, scanDatabase.db, {
         userId,
         itemId: stranger.itemId,
         copyId: stranger.copyId,
@@ -1503,7 +1591,7 @@ describe("per-copy editing and last-copy rules", () => {
     // My own copy addressed through a different record of mine: the copy
     // belongs to exactly one record, so the pair does not resolve.
     await expect(
-      updateLibraryCopy(database.db, {
+      updateLibraryCopy(coreDatabase.db, {
         userId,
         itemId: other.itemId,
         copyId: mine.copyId,
@@ -1511,7 +1599,7 @@ describe("per-copy editing and last-copy rules", () => {
       }),
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(
-      deleteLibraryCopy(database.db, {
+      deleteLibraryCopy(coreDatabase.db, scanDatabase.db, {
         userId,
         itemId: other.itemId,
         copyId: mine.copyId,
@@ -1520,7 +1608,7 @@ describe("per-copy editing and last-copy rules", () => {
 
     // A stranger addressing my record and copy correctly still gets nothing.
     await expect(
-      createLibraryCopy(database.db, {
+      createLibraryCopy(coreDatabase.db, {
         userId: strangerId,
         itemId: mine.itemId,
         idempotencyKey: `stranger-${randomUUID()}`,
@@ -1528,37 +1616,41 @@ describe("per-copy editing and last-copy rules", () => {
       }),
     ).rejects.toMatchObject({ code: "not_found" });
 
-    const [untouched] = await database.db
+    const [untouched] = await coreDatabase.db
       .select()
       .from(libraryCopies)
       .where(eq(libraryCopies.id, stranger.copyId));
     expect(untouched).toMatchObject({ id: stranger.copyId, location: null });
     expect(
       (
-        await getLibraryItemForUser(database.db, {
+        await getLibraryItemForUser(coreDatabase.db, scanDatabase.db, {
           userId,
           itemId: mine.itemId,
         })
       ).copies,
     ).toHaveLength(1);
-    await database.db.delete(users).where(eq(users.id, strangerId));
+    await deleteTestAccount(strangerId);
   });
 
   it("removes a copy while its confirmation keeps every audit field", async () => {
     const { scanId, itemId, copyId } = await confirmOwnedRecord();
-    const [before] = await database.db
+    const [before] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.scanId, scanId));
     expect(before).toMatchObject({ libraryItemId: itemId, copyId });
 
     expect(
-      await deleteLibraryCopy(database.db, { userId, itemId, copyId }),
+      await deleteLibraryCopy(coreDatabase.db, scanDatabase.db, {
+        userId,
+        itemId,
+        copyId,
+      }),
     ).toEqual({ id: copyId });
 
     // The decision survives intact; only the pointer to the removed copy
     // clears, and the scan still reads as confirmed into this record.
-    const [after] = await database.db
+    const [after] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.scanId, scanId));
@@ -1571,47 +1663,67 @@ describe("per-copy editing and last-copy rules", () => {
       confirmedAt: before!.confirmedAt,
     });
     expect(after!.reviewedRelease).toEqual(before!.reviewedRelease);
-    const summary = await getScanConfirmationForUser(database.db, {
-      userId,
-      scanId,
-    });
+    const summary = await getScanConfirmationForUser(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId,
+        scanId,
+      },
+    );
     expect(summary).toMatchObject({
       libraryItem: { id: itemId, list: "collection", copy: null },
     });
 
     // Removing it again is not found, like removing a record twice.
     await expect(
-      deleteLibraryCopy(database.db, { userId, itemId, copyId }),
+      deleteLibraryCopy(coreDatabase.db, scanDatabase.db, {
+        userId,
+        itemId,
+        copyId,
+      }),
     ).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("keeps a record in the collection with no copies after its last copy is removed, until the user moves it", async () => {
     const { itemId, copyId } = await confirmOwnedRecord();
-    await deleteLibraryCopy(database.db, { userId, itemId, copyId });
-
-    // The list is the user's statement; clearing inventory does not change it.
-    const emptied = await getLibraryItemForUser(database.db, {
+    await deleteLibraryCopy(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId,
+      copyId,
     });
+
+    // The list is the user's statement; clearing inventory does not change it.
+    const emptied = await getLibraryItemForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        itemId,
+      },
+    );
     expect(emptied).toMatchObject({ list: "collection", copyCount: 0 });
     expect(emptied.copies).toEqual([]);
-    const page = await listLibraryItemsForUser(database.db, {
-      userId,
-      list: "collection",
-      query: emptied.release.artist,
-    });
+    const page = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        list: "collection",
+        query: emptied.release.artist,
+      },
+    );
     expect(page.items.map((item) => item.id)).toEqual([itemId]);
 
     // From here the ADR-0011 move applies with nothing to orphan, and moving
     // back records a first copy again.
-    const wished = await updateLibraryItem(database.db, {
+    const wished = await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId,
       update: { list: "wishlist" },
     });
     expect(wished).toMatchObject({ list: "wishlist", copyCount: 0 });
-    const owned = await updateLibraryItem(database.db, {
+    const owned = await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId,
       update: { list: "collection" },
@@ -1623,10 +1735,14 @@ describe("per-copy editing and last-copy rules", () => {
   it("records another copy once per idempotency key", async () => {
     const { itemId } = await confirmOwnedRecord();
     const other = await confirmOwnedRecord();
-    const before = await getLibraryItemForUser(database.db, {
-      userId,
-      itemId,
-    });
+    const before = await getLibraryItemForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        itemId,
+      },
+    );
     const key = `copy-${randomUUID()}`;
     const details = {
       ...blankCopy,
@@ -1634,7 +1750,7 @@ describe("per-copy editing and last-copy rules", () => {
       location: "Shelf C",
     };
 
-    const first = await createLibraryCopy(database.db, {
+    const first = await createLibraryCopy(coreDatabase.db, {
       userId,
       itemId,
       idempotencyKey: key,
@@ -1647,7 +1763,7 @@ describe("per-copy editing and last-copy rules", () => {
     });
 
     // The same key with the same body returns the copy already recorded.
-    const replay = await createLibraryCopy(database.db, {
+    const replay = await createLibraryCopy(coreDatabase.db, {
       userId,
       itemId,
       idempotencyKey: key,
@@ -1658,7 +1774,7 @@ describe("per-copy editing and last-copy rules", () => {
     // The same key with a different body, or for a different record, is a
     // conflict rather than a silent second copy.
     await expect(
-      createLibraryCopy(database.db, {
+      createLibraryCopy(coreDatabase.db, {
         userId,
         itemId,
         idempotencyKey: key,
@@ -1666,7 +1782,7 @@ describe("per-copy editing and last-copy rules", () => {
       }),
     ).rejects.toMatchObject({ code: "conflict" });
     await expect(
-      createLibraryCopy(database.db, {
+      createLibraryCopy(coreDatabase.db, {
         userId,
         itemId: other.itemId,
         idempotencyKey: key,
@@ -1675,7 +1791,7 @@ describe("per-copy editing and last-copy rules", () => {
     ).rejects.toMatchObject({ code: "conflict" });
 
     // A different key records a genuinely distinct copy, blank or not.
-    const second = await createLibraryCopy(database.db, {
+    const second = await createLibraryCopy(coreDatabase.db, {
       userId,
       itemId,
       idempotencyKey: `copy-${randomUUID()}`,
@@ -1684,7 +1800,11 @@ describe("per-copy editing and last-copy rules", () => {
     expect(second.created).toBe(true);
     expect(second.copy.id).not.toBe(first.copy.id);
 
-    const after = await getLibraryItemForUser(database.db, { userId, itemId });
+    const after = await getLibraryItemForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      { userId, itemId },
+    );
     expect(after.copyCount).toBe(3);
     expect(after.copies.map((copy) => copy.id)).toEqual([
       before.copies[0]!.id,
@@ -1696,7 +1816,7 @@ describe("per-copy editing and last-copy rules", () => {
     );
     expect(
       (
-        await getLibraryItemForUser(database.db, {
+        await getLibraryItemForUser(coreDatabase.db, scanDatabase.db, {
           userId,
           itemId: other.itemId,
         })
@@ -1706,14 +1826,18 @@ describe("per-copy editing and last-copy rules", () => {
 
   it("rejects a copy on a wishlist record and past the per-record cap", async () => {
     const { itemId, copyId } = await confirmOwnedRecord();
-    await deleteLibraryCopy(database.db, { userId, itemId, copyId });
-    await updateLibraryItem(database.db, {
+    await deleteLibraryCopy(coreDatabase.db, scanDatabase.db, {
+      userId,
+      itemId,
+      copyId,
+    });
+    await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId,
       update: { list: "wishlist" },
     });
     await expect(
-      createLibraryCopy(database.db, {
+      createLibraryCopy(coreDatabase.db, {
         userId,
         itemId,
         idempotencyKey: `copy-${randomUUID()}`,
@@ -1721,12 +1845,12 @@ describe("per-copy editing and last-copy rules", () => {
       }),
     ).rejects.toMatchObject({ code: "invalid_state" });
 
-    const owned = await updateLibraryItem(database.db, {
+    const owned = await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId,
       update: { list: "collection" },
     });
-    await database.db.insert(libraryCopies).values(
+    await coreDatabase.db.insert(libraryCopies).values(
       Array.from({ length: MAX_LIBRARY_COPIES_PER_ITEM - 1 }, () => ({
         userId,
         libraryItemId: itemId,
@@ -1734,14 +1858,17 @@ describe("per-copy editing and last-copy rules", () => {
       })),
     );
     await expect(
-      createLibraryCopy(database.db, {
+      createLibraryCopy(coreDatabase.db, {
         userId,
         itemId,
         idempotencyKey: `copy-${randomUUID()}`,
         copy: blankCopy,
       }),
     ).rejects.toMatchObject({ code: "library_copy_limit" });
-    const full = await getLibraryItemForUser(database.db, { userId, itemId });
+    const full = await getLibraryItemForUser(coreDatabase.db, scanDatabase.db, {
+      userId,
+      itemId,
+    });
     expect(full.copyCount).toBe(MAX_LIBRARY_COPIES_PER_ITEM);
     expect(full.copies).toHaveLength(MAX_LIBRARY_COPIES_PER_ITEM);
   });
@@ -1749,11 +1876,11 @@ describe("per-copy editing and last-copy rules", () => {
 
 describe("batch grouping and scan lifecycle", () => {
   it("groups independent scans under one batch and projects their status", async () => {
-    const batch = await createOrGetBatch(database.db, {
+    const batch = await createOrGetBatch(scanDatabase.db, {
       userId,
       idempotencyKey: `batch-${randomUUID()}`,
     });
-    const replayedBatch = await createOrGetBatch(database.db, {
+    const replayedBatch = await createOrGetBatch(scanDatabase.db, {
       userId,
       idempotencyKey: batch.record.idempotencyKey,
     });
@@ -1761,13 +1888,13 @@ describe("batch grouping and scan lifecycle", () => {
     expect(replayedBatch.created).toBe(false);
     expect(replayedBatch.record.id).toBe(batch.record.id);
 
-    const first = await createOrGetScan(database.db, {
+    const first = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `batch-scan-1-${randomUUID()}`,
       batchId: batch.record.id,
     });
-    const second = await createOrGetScan(database.db, {
+    const second = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `batch-scan-2-${randomUUID()}`,
@@ -1776,24 +1903,31 @@ describe("batch grouping and scan lifecycle", () => {
     expect(first.record.batchId).toBe(batch.record.id);
     expect(second.record.batchId).toBe(batch.record.id);
 
-    const { batch: loadedBatch, scanIds } = await getBatchForUser(database.db, {
-      userId,
-      batchId: batch.record.id,
-    });
+    const { batch: loadedBatch, scanIds } = await getBatchForUser(
+      scanDatabase.db,
+      {
+        userId,
+        batchId: batch.record.id,
+      },
+    );
     expect(loadedBatch.id).toBe(batch.record.id);
     expect(scanIds).toEqual([first.record.id, second.record.id]);
 
-    const summaries = await listScanSummariesForUser(database.db, {
-      userId,
-      scanIds,
-    });
+    const summaries = await listScanSummariesForUser(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId,
+        scanIds,
+      },
+    );
     expect(summaries.map((summary) => summary.status)).toEqual([
       "awaiting_upload",
       "awaiting_upload",
     ]);
 
     await expect(
-      createOrGetScan(database.db, {
+      createOrGetScan(scanDatabase.db, {
         userId,
         source: "single_upload",
         idempotencyKey: `batch-scan-missing-${randomUUID()}`,
@@ -1803,7 +1937,7 @@ describe("batch grouping and scan lifecycle", () => {
   });
 
   it("enforces the server-side batch limit while allowing idempotent replay", async () => {
-    const batch = await createOrGetBatch(database.db, {
+    const batch = await createOrGetBatch(scanDatabase.db, {
       userId,
       idempotencyKey: `limited-batch-${randomUUID()}`,
     });
@@ -1813,7 +1947,7 @@ describe("batch grouping and scan lifecycle", () => {
     );
 
     for (const idempotencyKey of scanKeys) {
-      await createOrGetScan(database.db, {
+      await createOrGetScan(scanDatabase.db, {
         userId,
         source: "batch_upload",
         idempotencyKey,
@@ -1822,7 +1956,7 @@ describe("batch grouping and scan lifecycle", () => {
     }
 
     await expect(
-      createOrGetScan(database.db, {
+      createOrGetScan(scanDatabase.db, {
         userId,
         source: "batch_upload",
         idempotencyKey: scanKeys[0]!,
@@ -1830,7 +1964,7 @@ describe("batch grouping and scan lifecycle", () => {
       }),
     ).resolves.toMatchObject({ created: false });
     await expect(
-      createOrGetScan(database.db, {
+      createOrGetScan(scanDatabase.db, {
         userId,
         source: "batch_upload",
         idempotencyKey: `over-limit-${randomUUID()}`,
@@ -1840,12 +1974,12 @@ describe("batch grouping and scan lifecycle", () => {
   });
 
   it("falls back to the original object for images completed before normalization", async () => {
-    const scan = await createOrGetScan(database.db, {
+    const scan = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `legacy-scan-${randomUUID()}`,
     });
-    const upload = await createOrGetImageUpload(database.db, {
+    const upload = await createOrGetImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `legacy-upload-${randomUUID()}`,
@@ -1855,17 +1989,17 @@ describe("batch grouping and scan lifecycle", () => {
       checksumSha256: "9".repeat(64),
       maxImages: 12,
     });
-    await database.db
+    await scanDatabase.db
       .update(imageAssets)
       .set({ completedAt: new Date(), width: 800, height: 600 })
       .where(eq(imageAssets.id, upload.record.id));
-    const submitted = await submitScan(database.db, {
+    const submitted = await submitScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `legacy-submit-${randomUUID()}`,
     });
 
-    const prepared = await prepareScanAnalysis(database.db, {
+    const prepared = await prepareScanAnalysis(scanDatabase.db, {
       job: submitted.job,
       deliveryAttempt: 1,
       model: "integration-test-model",
@@ -1886,35 +2020,35 @@ describe("batch grouping and scan lifecycle", () => {
 
   it("aggregates token usage and estimated cost across a batch and account usage window", async () => {
     const usageUserId = randomUUID();
-    await database.db.insert(users).values({ id: usageUserId });
+    await coreDatabase.db.insert(users).values({ id: usageUserId });
 
-    const batch = await createOrGetBatch(database.db, {
+    const batch = await createOrGetBatch(scanDatabase.db, {
       userId: usageUserId,
       idempotencyKey: `usage-batch-${randomUUID()}`,
     });
-    const succeededScan = await createOrGetScan(database.db, {
+    const succeededScan = await createOrGetScan(scanDatabase.db, {
       userId: usageUserId,
       source: "single_upload",
       idempotencyKey: `usage-scan-succeeded-${randomUUID()}`,
       batchId: batch.record.id,
     });
-    const failedScan = await createOrGetScan(database.db, {
+    const failedScan = await createOrGetScan(scanDatabase.db, {
       userId: usageUserId,
       source: "single_upload",
       idempotencyKey: `usage-scan-failed-${randomUUID()}`,
       batchId: batch.record.id,
     });
-    const otherScan = await createOrGetScan(database.db, {
+    const otherScan = await createOrGetScan(scanDatabase.db, {
       userId: usageUserId,
       source: "single_upload",
       idempotencyKey: `usage-scan-other-${randomUUID()}`,
     });
 
-    await database.db
+    await scanDatabase.db
       .update(scans)
       .set({ status: "identified", completedAt: new Date() })
       .where(eq(scans.id, succeededScan.record.id));
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: succeededScan.record.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -1928,11 +2062,11 @@ describe("batch grouping and scan lifecycle", () => {
       completedAt: new Date(),
     });
 
-    await database.db
+    await scanDatabase.db
       .update(scans)
       .set({ status: "failed", completedAt: new Date() })
       .where(eq(scans.id, failedScan.record.id));
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: failedScan.record.id,
       attemptNumber: 1,
       status: "failed",
@@ -1944,11 +2078,11 @@ describe("batch grouping and scan lifecycle", () => {
       completedAt: new Date(),
     });
 
-    await database.db
+    await scanDatabase.db
       .update(scans)
       .set({ status: "identified", completedAt: new Date() })
       .where(eq(scans.id, otherScan.record.id));
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: otherScan.record.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -1962,7 +2096,7 @@ describe("batch grouping and scan lifecycle", () => {
       completedAt: new Date(),
     });
 
-    const batchCost = await getBatchCostSummary(database.db, {
+    const batchCost = await getBatchCostSummary(scanDatabase.db, {
       batchId: batch.record.id,
       scanIds: [succeededScan.record.id, failedScan.record.id],
     });
@@ -1978,7 +2112,7 @@ describe("batch grouping and scan lifecycle", () => {
       10,
     );
 
-    const usage = await getUsageSummaryForUser(database.db, {
+    const usage = await getUsageSummaryForUser(scanDatabase.db, {
       userId: usageUserId,
       since: new Date(Date.now() - 24 * 60 * 60 * 1_000),
     });
@@ -1998,16 +2132,16 @@ describe("batch grouping and scan lifecycle", () => {
       10,
     );
 
-    await database.db.delete(users).where(eq(users.id, usageUserId));
+    await deleteTestAccount(usageUserId);
   });
 
   it("retries a failed scan as a new attempt and rejects retrying an active scan", async () => {
-    const scan = await createOrGetScan(database.db, {
+    const scan = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `retry-scan-${randomUUID()}`,
     });
-    const upload = await createOrGetImageUpload(database.db, {
+    const upload = await createOrGetImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `retry-upload-${randomUUID()}`,
@@ -2017,7 +2151,7 @@ describe("batch grouping and scan lifecycle", () => {
       checksumSha256: "e".repeat(64),
       maxImages: 12,
     });
-    await completeImageUpload(database.db, {
+    await completeImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       imageId: upload.record.id,
@@ -2030,14 +2164,14 @@ describe("batch grouping and scan lifecycle", () => {
     });
 
     await expect(
-      retryScan(database.db, { userId, scanId: scan.record.id }),
+      retryScan(scanDatabase.db, { userId, scanId: scan.record.id }),
     ).rejects.toMatchObject({ code: "invalid_state" });
 
-    await database.db
+    await scanDatabase.db
       .update(scans)
       .set({ status: "failed", completedAt: new Date() })
       .where(eq(scans.id, scan.record.id));
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan.record.id,
       attemptNumber: 1,
       status: "failed",
@@ -2049,7 +2183,7 @@ describe("batch grouping and scan lifecycle", () => {
       completedAt: new Date(),
     });
 
-    const retried = await retryScan(database.db, {
+    const retried = await retryScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
     });
@@ -2057,7 +2191,7 @@ describe("batch grouping and scan lifecycle", () => {
     expect(retried.job.attemptNumber).toBe(2);
     expect(retried.record.status).toBe("queued");
 
-    const replayedRetry = await retryScan(database.db, {
+    const replayedRetry = await retryScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
     });
@@ -2066,12 +2200,12 @@ describe("batch grouping and scan lifecycle", () => {
   });
 
   it("cancels a queued scan and skips its outbox dispatch", async () => {
-    const scan = await createOrGetScan(database.db, {
+    const scan = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `cancel-scan-${randomUUID()}`,
     });
-    const upload = await createOrGetImageUpload(database.db, {
+    const upload = await createOrGetImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `cancel-upload-${randomUUID()}`,
@@ -2081,7 +2215,7 @@ describe("batch grouping and scan lifecycle", () => {
       checksumSha256: "f".repeat(64),
       maxImages: 12,
     });
-    await completeImageUpload(database.db, {
+    await completeImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       imageId: upload.record.id,
@@ -2092,20 +2226,20 @@ describe("batch grouping and scan lifecycle", () => {
       analysisHeight: 800,
       thumbnailSizeBytes: 40,
     });
-    const submitted = await submitScan(database.db, {
+    const submitted = await submitScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `cancel-submit-${randomUUID()}`,
     });
 
-    const canceled = await cancelScan(database.db, {
+    const canceled = await cancelScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
     });
     expect(canceled.created).toBe(true);
     expect(canceled.record.status).toBe("canceled");
 
-    const replayedCancel = await cancelScan(database.db, {
+    const replayedCancel = await cancelScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
     });
@@ -2121,7 +2255,7 @@ describe("batch grouping and scan lifecycle", () => {
     });
 
     await expect(
-      cancelScan(database.db, { userId, scanId: scan.record.id }),
+      cancelScan(scanDatabase.db, { userId, scanId: scan.record.id }),
     ).resolves.toMatchObject({ created: false });
   });
 
@@ -2129,12 +2263,15 @@ describe("batch grouping and scan lifecycle", () => {
     // A canceled scan proves the cancellation skip is scoped to
     // scan.analyze.v1: a different topic naming this same canceled scan as
     // its aggregate must still be delivered normally.
-    const canceledScan = await createOrGetScan(database.db, {
+    const canceledScan = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `generalized-outbox-scan-${randomUUID()}`,
     });
-    await cancelScan(database.db, { userId, scanId: canceledScan.record.id });
+    await cancelScan(scanDatabase.db, {
+      userId,
+      scanId: canceledScan.record.id,
+    });
 
     const genericTopic = "core.library_export.v1";
     const scanAggregateKey = `generalized-outbox-scan-aggregate-${randomUUID()}`;
@@ -2144,7 +2281,7 @@ describe("batch grouping and scan lifecycle", () => {
     // No FK on aggregate_id: this second row's aggregate_id matches no row
     // in any table at all, which the old scans(id) foreign key would have
     // rejected outright.
-    await database.db.insert(outboxMessages).values([
+    await scanDatabase.db.insert(outboxMessages).values([
       {
         topic: genericTopic,
         aggregateType: "library_export",
@@ -2161,7 +2298,7 @@ describe("batch grouping and scan lifecycle", () => {
       },
     ]);
     // Neither row was given an attempt_number, proving it is now optional.
-    const stored = await database.db
+    const stored = await scanDatabase.db
       .select({ attemptNumber: outboxMessages.attemptNumber })
       .from(outboxMessages)
       .where(eq(outboxMessages.idempotencyKey, scanAggregateKey));
@@ -2177,7 +2314,7 @@ describe("batch grouping and scan lifecycle", () => {
           return;
         }
         const result = await dispatchNextOutboxMessage(
-          database.db,
+          scanDatabase.db,
           {
             // Drains any other test's unrelated, still-pending scan.analyze.v1
             // rows (schema.integration.ts's shared-table convention), same as
@@ -2206,7 +2343,7 @@ describe("batch grouping and scan lifecycle", () => {
   });
 
   it("dismisses a reviewable scan result idempotently", async () => {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -2216,7 +2353,7 @@ describe("batch grouping and scan lifecycle", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -2227,23 +2364,27 @@ describe("batch grouping and scan lifecycle", () => {
       completedAt: new Date(),
     });
 
-    const summariesBeforeDismiss = await listScanSummariesForUser(database.db, {
-      userId,
-      scanIds: [scan!.id],
-    });
+    const summariesBeforeDismiss = await listScanSummariesForUser(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId,
+        scanIds: [scan!.id],
+      },
+    );
     expect(summariesBeforeDismiss[0]).toMatchObject({
       status: "needs_review",
       confirmedList: null,
     });
 
-    const dismissed = await cancelScan(database.db, {
+    const dismissed = await cancelScan(scanDatabase.db, {
       userId,
       scanId: scan!.id,
     });
     expect(dismissed.created).toBe(true);
     expect(dismissed.record.status).toBe("canceled");
 
-    const replayedDismiss = await cancelScan(database.db, {
+    const replayedDismiss = await cancelScan(scanDatabase.db, {
       userId,
       scanId: scan!.id,
     });
@@ -2252,7 +2393,7 @@ describe("batch grouping and scan lifecycle", () => {
   });
 
   it("rejects dismissing a scan that has already been confirmed", async () => {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -2262,7 +2403,7 @@ describe("batch grouping and scan lifecycle", () => {
         completedAt: new Date(),
       })
       .returning();
-    const [attempt] = await database.db
+    const [attempt] = await scanDatabase.db
       .insert(scanAttempts)
       .values({
         scanId: scan!.id,
@@ -2275,7 +2416,7 @@ describe("batch grouping and scan lifecycle", () => {
         completedAt: new Date(),
       })
       .returning();
-    const [candidate] = await database.db
+    const [candidate] = await scanDatabase.db
       .insert(scanCandidates)
       .values({
         scanAttemptId: attempt!.id,
@@ -2316,14 +2457,18 @@ describe("batch grouping and scan lifecycle", () => {
       },
     });
 
-    const summaries = await listScanSummariesForUser(database.db, {
-      userId,
-      scanIds: [scan!.id],
-    });
+    const summaries = await listScanSummariesForUser(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId,
+        scanIds: [scan!.id],
+      },
+    );
     expect(summaries[0]).toMatchObject({ confirmedList: "wishlist" });
 
     await expect(
-      cancelScan(database.db, { userId, scanId: scan!.id }),
+      cancelScan(scanDatabase.db, { userId, scanId: scan!.id }),
     ).rejects.toMatchObject({ code: "invalid_state" });
   });
 });
@@ -2333,27 +2478,30 @@ describe("Clerk user identity resolution", () => {
     const clerkUserId = `user_${randomUUID()}`;
 
     const provisionedId = await getOrCreateUserIdByClerkId(
-      database.db,
+      coreDatabase.db,
       clerkUserId,
     );
-    const reusedId = await getOrCreateUserIdByClerkId(database.db, clerkUserId);
+    const reusedId = await getOrCreateUserIdByClerkId(
+      coreDatabase.db,
+      clerkUserId,
+    );
 
     expect(reusedId).toBe(provisionedId);
 
-    await database.db.delete(users).where(eq(users.id, provisionedId));
+    await deleteTestAccount(provisionedId);
   });
 
   it("resolves concurrent lookups for the same Clerk identity to one user", async () => {
     const clerkUserId = `user_${randomUUID()}`;
 
     const [first, second] = await Promise.all([
-      getOrCreateUserIdByClerkId(database.db, clerkUserId),
-      getOrCreateUserIdByClerkId(database.db, clerkUserId),
+      getOrCreateUserIdByClerkId(coreDatabase.db, clerkUserId),
+      getOrCreateUserIdByClerkId(coreDatabase.db, clerkUserId),
     ]);
 
     expect(second).toBe(first);
 
-    await database.db.delete(users).where(eq(users.id, first));
+    await deleteTestAccount(first);
   });
 });
 
@@ -2363,7 +2511,7 @@ describe("favorites and playlists", () => {
     ownerId: string = userId,
     title = `Saved Music ${randomUUID()}`,
   ) {
-    const { record } = await placeLibraryRelease(database.db, {
+    const { record } = await placeLibraryRelease(coreDatabase.db, {
       userId: ownerId,
       placement: {
         artist: "Saved Music Test",
@@ -2390,13 +2538,13 @@ describe("favorites and playlists", () => {
     const owned = await saveRecord("collection");
     const wanted = await saveRecord("wishlist");
 
-    const first = await updateLibraryItem(database.db, {
+    const first = await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId: owned,
       update: { favorite: true },
     });
     expect(first.favoritedAt).not.toBeNull();
-    const repeated = await updateLibraryItem(database.db, {
+    const repeated = await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId: owned,
       update: { favorite: true },
@@ -2404,15 +2552,19 @@ describe("favorites and playlists", () => {
     // A repeated favorite keeps the original moment rather than resetting it.
     expect(repeated.favoritedAt).toBe(first.favoritedAt);
 
-    await updateLibraryItem(database.db, {
+    await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId: wanted,
       update: { favorite: true },
     });
 
-    const favorites = await listFavoriteLibraryItemsForUser(database.db, {
-      userId,
-    });
+    const favorites = await listFavoriteLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+      },
+    );
     const favoriteIds = favorites.items.map((item) => item.id);
     expect(favoriteIds).toContain(owned);
     expect(favoriteIds).toContain(wanted);
@@ -2424,35 +2576,43 @@ describe("favorites and playlists", () => {
       expect.arrayContaining(["collection", "wishlist"]),
     );
 
-    const cleared = await updateLibraryItem(database.db, {
+    const cleared = await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
       itemId: owned,
       update: { favorite: false },
     });
     expect(cleared.favoritedAt).toBeNull();
-    const clearedAgain = await updateLibraryItem(database.db, {
-      userId,
-      itemId: owned,
-      update: { favorite: false },
-    });
+    const clearedAgain = await updateLibraryItem(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        itemId: owned,
+        update: { favorite: false },
+      },
+    );
     expect(clearedAgain.favoritedAt).toBeNull();
     expect(
       (
-        await listFavoriteLibraryItemsForUser(database.db, { userId })
+        await listFavoriteLibraryItemsForUser(
+          coreDatabase.db,
+          scanDatabase.db,
+          { userId },
+        )
       ).items.map((item) => item.id),
     ).not.toContain(owned);
   });
 
   it("creates a playlist once per normalized name and rejects renaming onto another", async () => {
     const suffix = randomUUID();
-    const created = await createPlaylist(database.db, {
+    const created = await createPlaylist(coreDatabase.db, scanDatabase.db, {
       userId,
       name: `Road Trip ${suffix}`,
     });
     expect(created.created).toBe(true);
     expect(created.playlist.entries).toEqual([]);
 
-    const replayed = await createPlaylist(database.db, {
+    const replayed = await createPlaylist(coreDatabase.db, scanDatabase.db, {
       userId,
       name: `  road   trip ${suffix} `,
     });
@@ -2461,19 +2621,19 @@ describe("favorites and playlists", () => {
     // The display name is the one first given, not the replay's spelling.
     expect(replayed.playlist.name).toBe(`Road Trip ${suffix}`);
 
-    const other = await createPlaylist(database.db, {
+    const other = await createPlaylist(coreDatabase.db, scanDatabase.db, {
       userId,
       name: `Sunday ${suffix}`,
     });
     await expect(
-      updatePlaylist(database.db, {
+      updatePlaylist(coreDatabase.db, scanDatabase.db, {
         userId,
         playlistId: other.playlist.id,
         update: { name: `ROAD TRIP ${suffix}` },
       }),
     ).rejects.toMatchObject({ code: "conflict" });
 
-    const renamed = await updatePlaylist(database.db, {
+    const renamed = await updatePlaylist(coreDatabase.db, scanDatabase.db, {
       userId,
       playlistId: other.playlist.id,
       update: { name: `Sunday morning ${suffix}` },
@@ -2481,28 +2641,32 @@ describe("favorites and playlists", () => {
     expect(renamed.name).toBe(`Sunday morning ${suffix}`);
     // Renaming to its own current name is a harmless replay.
     await expect(
-      updatePlaylist(database.db, {
+      updatePlaylist(coreDatabase.db, scanDatabase.db, {
         userId,
         playlistId: other.playlist.id,
         update: { name: `Sunday morning ${suffix}` },
       }),
     ).resolves.toMatchObject({ name: `Sunday morning ${suffix}` });
 
-    const listed = await listPlaylistsForUser(database.db, { userId });
+    const listed = await listPlaylistsForUser(coreDatabase.db, { userId });
     expect(listed.playlists.map((playlist) => playlist.id)).toEqual(
       expect.arrayContaining([created.playlist.id, other.playlist.id]),
     );
   });
 
   it("adds each saved record once, in append order, and never someone else's", async () => {
-    const { playlist } = await createPlaylist(database.db, {
-      userId,
-      name: `Append ${randomUUID()}`,
-    });
+    const { playlist } = await createPlaylist(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        name: `Append ${randomUUID()}`,
+      },
+    );
     const first = await saveRecord("collection");
     const second = await saveRecord("wishlist");
 
-    const added = await addPlaylistEntry(database.db, {
+    const added = await addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
       userId,
       playlistId: playlist.id,
       libraryItemId: first,
@@ -2514,7 +2678,7 @@ describe("favorites and playlists", () => {
       item: { id: first, list: "collection" },
     });
 
-    const replayed = await addPlaylistEntry(database.db, {
+    const replayed = await addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
       userId,
       playlistId: playlist.id,
       libraryItemId: first,
@@ -2522,7 +2686,7 @@ describe("favorites and playlists", () => {
     expect(replayed.created).toBe(false);
     expect(replayed.playlist.entries).toHaveLength(1);
 
-    const appended = await addPlaylistEntry(database.db, {
+    const appended = await addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
       userId,
       playlistId: playlist.id,
       libraryItemId: second,
@@ -2535,66 +2699,73 @@ describe("favorites and playlists", () => {
 
     // Ownership: another user's saved record cannot be referenced, and
     // another user's playlist cannot be read or changed — both read as absent.
-    const [stranger] = await database.db.insert(users).values({}).returning();
+    const [stranger] = await coreDatabase.db
+      .insert(users)
+      .values({})
+      .returning();
     const strangerItem = await saveRecord("collection", stranger!.id);
     await expect(
-      addPlaylistEntry(database.db, {
+      addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
         userId,
         playlistId: playlist.id,
         libraryItemId: strangerItem,
       }),
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(
-      getPlaylistForUser(database.db, {
+      getPlaylistForUser(coreDatabase.db, scanDatabase.db, {
         userId: stranger!.id,
         playlistId: playlist.id,
       }),
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(
-      addPlaylistEntry(database.db, {
+      addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
         userId: stranger!.id,
         playlistId: playlist.id,
         libraryItemId: strangerItem,
       }),
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(
-      updatePlaylist(database.db, {
+      updatePlaylist(coreDatabase.db, scanDatabase.db, {
         userId: stranger!.id,
         playlistId: playlist.id,
         update: { name: "Hijacked" },
       }),
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(
-      deletePlaylist(database.db, {
+      deletePlaylist(coreDatabase.db, {
         userId: stranger!.id,
         playlistId: playlist.id,
       }),
     ).rejects.toMatchObject({ code: "not_found" });
     expect(
-      (await listPlaylistsForUser(database.db, { userId: stranger!.id }))
+      (await listPlaylistsForUser(coreDatabase.db, { userId: stranger!.id }))
         .playlists,
     ).toEqual([]);
-    await database.db.delete(users).where(eq(users.id, stranger!.id));
+    await deleteTestAccount(stranger!.id);
   });
 
   it("reorders with a complete permutation and rejects a stale or partial order", async () => {
-    const { playlist } = await createPlaylist(database.db, {
-      userId,
-      name: `Reorder ${randomUUID()}`,
-    });
+    const { playlist } = await createPlaylist(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        name: `Reorder ${randomUUID()}`,
+      },
+    );
     const items = [
       await saveRecord("collection"),
       await saveRecord("collection"),
       await saveRecord("wishlist"),
     ];
     for (const libraryItemId of items) {
-      await addPlaylistEntry(database.db, {
+      await addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
         userId,
         playlistId: playlist.id,
         libraryItemId,
       });
     }
-    const before = await getPlaylistForUser(database.db, {
+    const before = await getPlaylistForUser(coreDatabase.db, scanDatabase.db, {
       userId,
       playlistId: playlist.id,
     });
@@ -2604,7 +2775,7 @@ describe("favorites and playlists", () => {
       string,
     ];
 
-    const reordered = await updatePlaylist(database.db, {
+    const reordered = await updatePlaylist(coreDatabase.db, scanDatabase.db, {
       userId,
       playlistId: playlist.id,
       update: { entryIds: [c, a, b] },
@@ -2614,7 +2785,7 @@ describe("favorites and playlists", () => {
 
     // Replaying the same order converges.
     await expect(
-      updatePlaylist(database.db, {
+      updatePlaylist(coreDatabase.db, scanDatabase.db, {
         userId,
         playlistId: playlist.id,
         update: { entryIds: [c, a, b] },
@@ -2624,68 +2795,80 @@ describe("favorites and playlists", () => {
     // A partial order (an entry left out) and an unknown entry are both
     // stale views and are refused rather than partially applied.
     await expect(
-      updatePlaylist(database.db, {
+      updatePlaylist(coreDatabase.db, scanDatabase.db, {
         userId,
         playlistId: playlist.id,
         update: { entryIds: [c, a] },
       }),
     ).rejects.toMatchObject({ code: "conflict" });
     await expect(
-      updatePlaylist(database.db, {
+      updatePlaylist(coreDatabase.db, scanDatabase.db, {
         userId,
         playlistId: playlist.id,
         update: { entryIds: [c, a, b, randomUUID()] },
       }),
     ).rejects.toMatchObject({ code: "conflict" });
-    const unchanged = await getPlaylistForUser(database.db, {
-      userId,
-      playlistId: playlist.id,
-    });
+    const unchanged = await getPlaylistForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        playlistId: playlist.id,
+      },
+    );
     expect(unchanged.entries.map((entry) => entry.id)).toEqual([c, a, b]);
   });
 
   it("removes an entry without renumbering and drops entries when the saved record is removed", async () => {
-    const { playlist } = await createPlaylist(database.db, {
-      userId,
-      name: `Remove ${randomUUID()}`,
-    });
+    const { playlist } = await createPlaylist(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        name: `Remove ${randomUUID()}`,
+      },
+    );
     const first = await saveRecord("collection");
     const second = await saveRecord("wishlist");
     const third = await saveRecord("wishlist");
     for (const libraryItemId of [first, second, third]) {
-      await addPlaylistEntry(database.db, {
+      await addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
         userId,
         playlistId: playlist.id,
         libraryItemId,
       });
     }
-    const detail = await getPlaylistForUser(database.db, {
+    const detail = await getPlaylistForUser(coreDatabase.db, scanDatabase.db, {
       userId,
       playlistId: playlist.id,
     });
     const secondEntry = detail.entries[1]!;
 
-    const removed = await removePlaylistEntry(database.db, {
+    const removed = await removePlaylistEntry(coreDatabase.db, {
       userId,
       playlistId: playlist.id,
       entryId: secondEntry.id,
     });
     expect(removed.id).toBe(secondEntry.id);
     await expect(
-      removePlaylistEntry(database.db, {
+      removePlaylistEntry(coreDatabase.db, {
         userId,
         playlistId: playlist.id,
         entryId: secondEntry.id,
       }),
     ).rejects.toMatchObject({ code: "not_found" });
 
-    const afterRemove = await getPlaylistForUser(database.db, {
-      userId,
-      playlistId: playlist.id,
-    });
+    const afterRemove = await getPlaylistForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        playlistId: playlist.id,
+      },
+    );
     // The gap is kept and the next append goes after the old maximum.
     expect(afterRemove.entries.map((entry) => entry.position)).toEqual([1, 3]);
-    const appended = await addPlaylistEntry(database.db, {
+    const appended = await addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
       userId,
       playlistId: playlist.id,
       libraryItemId: second,
@@ -2695,37 +2878,53 @@ describe("favorites and playlists", () => {
     ]);
 
     // Removing the saved record removes it from the playlist by cascade.
-    await deleteLibraryItem(database.db, { userId, itemId: third });
-    const afterItemDelete = await getPlaylistForUser(database.db, {
+    await deleteLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId,
-      playlistId: playlist.id,
+      itemId: third,
     });
+    const afterItemDelete = await getPlaylistForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId,
+        playlistId: playlist.id,
+      },
+    );
     expect(afterItemDelete.entries.map((entry) => entry.item.id)).toEqual([
       first,
       second,
     ]);
 
     // Deleting the playlist removes its entries but never the saved records.
-    await deletePlaylist(database.db, { userId, playlistId: playlist.id });
+    await deletePlaylist(coreDatabase.db, { userId, playlistId: playlist.id });
     await expect(
-      getPlaylistForUser(database.db, { userId, playlistId: playlist.id }),
+      getPlaylistForUser(coreDatabase.db, scanDatabase.db, {
+        userId,
+        playlistId: playlist.id,
+      }),
     ).rejects.toMatchObject({ code: "not_found" });
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(playlistEntries)
         .where(eq(playlistEntries.playlistId, playlist.id)),
     ).toHaveLength(0);
     await expect(
-      getLibraryItemForUser(database.db, { userId, itemId: first }),
+      getLibraryItemForUser(coreDatabase.db, scanDatabase.db, {
+        userId,
+        itemId: first,
+      }),
     ).resolves.toMatchObject({ id: first });
   });
 
   it("enforces the per-user playlist and per-playlist entry limits", async () => {
-    const [account] = await database.db.insert(users).values({}).returning();
+    const [account] = await coreDatabase.db
+      .insert(users)
+      .values({})
+      .returning();
     const ownerId = account!.id;
 
-    await database.db.insert(playlists).values(
+    await coreDatabase.db.insert(playlists).values(
       Array.from({ length: MAX_PLAYLISTS_PER_USER }, (_, index) => ({
         userId: ownerId,
         name: `Filler ${index}`,
@@ -2733,14 +2932,20 @@ describe("favorites and playlists", () => {
       })),
     );
     await expect(
-      createPlaylist(database.db, { userId: ownerId, name: "One too many" }),
+      createPlaylist(coreDatabase.db, scanDatabase.db, {
+        userId: ownerId,
+        name: "One too many",
+      }),
     ).rejects.toMatchObject({ code: "playlist_limit" });
     // Converging on an existing name is still allowed at the limit.
     await expect(
-      createPlaylist(database.db, { userId: ownerId, name: "filler 0" }),
+      createPlaylist(coreDatabase.db, scanDatabase.db, {
+        userId: ownerId,
+        name: "filler 0",
+      }),
     ).resolves.toMatchObject({ created: false });
 
-    const [playlist] = await database.db
+    const [playlist] = await coreDatabase.db
       .select()
       .from(playlists)
       .where(
@@ -2751,7 +2956,7 @@ describe("favorites and playlists", () => {
       );
     // Bulk-seed distinct saved records so the entry limit can be reached
     // without hundreds of round trips.
-    const [album] = await database.db
+    const [album] = await coreDatabase.db
       .insert(albums)
       .values({
         artist: "Limit Test",
@@ -2760,7 +2965,7 @@ describe("favorites and playlists", () => {
         normalizedTitle: `limit ${ownerId}`,
       })
       .returning();
-    const seededReleases = await database.db
+    const seededReleases = await coreDatabase.db
       .insert(releases)
       .values(
         Array.from({ length: MAX_PLAYLIST_ENTRIES }, () => ({
@@ -2769,7 +2974,7 @@ describe("favorites and playlists", () => {
         })),
       )
       .returning({ id: releases.id });
-    const seededItems = await database.db
+    const seededItems = await coreDatabase.db
       .insert(libraryItems)
       .values(
         seededReleases.map((release) => ({
@@ -2779,7 +2984,7 @@ describe("favorites and playlists", () => {
         })),
       )
       .returning({ id: libraryItems.id });
-    await database.db.insert(playlistEntries).values(
+    await coreDatabase.db.insert(playlistEntries).values(
       seededItems.slice(0, MAX_PLAYLIST_ENTRIES - 1).map((item, index) => ({
         playlistId: playlist!.id,
         userId: ownerId,
@@ -2789,7 +2994,7 @@ describe("favorites and playlists", () => {
     );
 
     const last = seededItems[MAX_PLAYLIST_ENTRIES - 1]!.id;
-    const full = await addPlaylistEntry(database.db, {
+    const full = await addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
       userId: ownerId,
       playlistId: playlist!.id,
       libraryItemId: last,
@@ -2799,7 +3004,7 @@ describe("favorites and playlists", () => {
 
     const extra = await saveRecord("wishlist", ownerId);
     await expect(
-      addPlaylistEntry(database.db, {
+      addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
         userId: ownerId,
         playlistId: playlist!.id,
         libraryItemId: extra,
@@ -2807,15 +3012,15 @@ describe("favorites and playlists", () => {
     ).rejects.toMatchObject({ code: "playlist_entry_limit" });
     // Re-adding a record already present converges even when full.
     await expect(
-      addPlaylistEntry(database.db, {
+      addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
         userId: ownerId,
         playlistId: playlist!.id,
         libraryItemId: last,
       }),
     ).resolves.toMatchObject({ created: false });
 
-    await database.db.delete(users).where(eq(users.id, ownerId));
-    await database.db.delete(albums).where(eq(albums.id, album!.id));
+    await deleteTestAccount(ownerId);
+    await coreDatabase.db.delete(albums).where(eq(albums.id, album!.id));
   });
 });
 
@@ -2833,7 +3038,7 @@ describe("full-library search and keyset pagination", () => {
     list?: "collection" | "wishlist";
     ownerId?: string;
   }) {
-    const { record } = await placeLibraryRelease(database.db, {
+    const { record } = await placeLibraryRelease(coreDatabase.db, {
       userId: input.ownerId ?? ownerId,
       placement: {
         artist: input.artist,
@@ -2870,14 +3075,18 @@ describe("full-library search and keyset pagination", () => {
     let cursor: string | undefined;
     do {
       const page = input.favorites
-        ? await listFavoriteLibraryItemsForUser(database.db, {
-            userId: ownerId,
-            query: input.query,
-            sort: input.sort,
-            cursor,
-            limit: input.limit,
-          })
-        : await listLibraryItemsForUser(database.db, {
+        ? await listFavoriteLibraryItemsForUser(
+            coreDatabase.db,
+            scanDatabase.db,
+            {
+              userId: ownerId,
+              query: input.query,
+              sort: input.sort,
+              cursor,
+              limit: input.limit,
+            },
+          )
+        : await listLibraryItemsForUser(coreDatabase.db, scanDatabase.db, {
             userId: ownerId,
             list: input.list ?? "wishlist",
             query: input.query,
@@ -2897,7 +3106,10 @@ describe("full-library search and keyset pagination", () => {
   }
 
   beforeAll(async () => {
-    const [account] = await database.db.insert(users).values({}).returning();
+    const [account] = await coreDatabase.db
+      .insert(users)
+      .values({})
+      .returning();
     ownerId = account!.id;
     // Titles are zero-padded so their alphabetical order is the seed order
     // and the 110th record is provably past the old 100-row fetch.
@@ -2910,26 +3122,38 @@ describe("full-library search and keyset pagination", () => {
 
   it("finds a record past the first hundred rows and reports no false matches", async () => {
     const target = seeded[110]!;
-    const found = await listLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "wishlist",
-      query: "pagination RECORD 110",
-    });
+    const found = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "wishlist",
+        query: "pagination RECORD 110",
+      },
+    );
     expect(found.items.map((item) => item.id)).toEqual([target.id]);
     expect(found.nextCursor).toBeNull();
 
     // LIKE wildcards in the query are literal characters, not patterns.
-    const wildcard = await listLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "wishlist",
-      query: "Pagination Record 1__",
-    });
+    const wildcard = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "wishlist",
+        query: "Pagination Record 1__",
+      },
+    );
     expect(wildcard.items).toEqual([]);
-    const percent = await listLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "wishlist",
-      query: "%",
-    });
+    const percent = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "wishlist",
+        query: "%",
+      },
+    );
     expect(percent.items).toEqual([]);
   });
 
@@ -2937,7 +3161,7 @@ describe("full-library search and keyset pagination", () => {
     // A scan confirmation carries corrected values that differ from the
     // shared album row the release was resolved to; search and sort must
     // follow what the user confirmed and sees (ADR-0012).
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId: ownerId,
@@ -2947,7 +3171,7 @@ describe("full-library search and keyset pagination", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -2983,29 +3207,37 @@ describe("full-library search and keyset pagination", () => {
     const itemId = confirmed.record.libraryItem!.id;
     // Change the album row underneath so it no longer matches what was
     // confirmed — the equivalent of another user's copy sharing the row.
-    const [release] = await database.db
+    const [release] = await coreDatabase.db
       .select({ albumId: releases.albumId })
       .from(releases)
       .where(eq(releases.id, confirmed.record.release!.id));
-    await database.db
+    await coreDatabase.db
       .update(albums)
       .set({ artist: "Zzz Album Row Artist", title: "Album Row Title" })
       .where(eq(albums.id, release!.albumId));
 
-    const byConfirmed = await listLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "wishlist",
-      query: "aardvark corrected",
-    });
+    const byConfirmed = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "wishlist",
+        query: "aardvark corrected",
+      },
+    );
     expect(byConfirmed.items.map((item) => item.id)).toEqual([itemId]);
     expect(byConfirmed.items[0]!.release.artist).toBe(
       "Aardvark Corrected Artist",
     );
-    const byAlbumRow = await listLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "wishlist",
-      query: "album row",
-    });
+    const byAlbumRow = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "wishlist",
+        query: "album row",
+      },
+    );
     expect(byAlbumRow.items).toEqual([]);
 
     // Sorted by artist the corrected name comes first of everything; sorted
@@ -3015,7 +3247,10 @@ describe("full-library search and keyset pagination", () => {
     const byTitle = await walk({ sort: "title", limit: 100 });
     expect(byTitle.ids[byTitle.ids.length - 1]).toBe(itemId);
 
-    await deleteLibraryItem(database.db, { userId: ownerId, itemId });
+    await deleteLibraryItem(coreDatabase.db, scanDatabase.db, {
+      userId: ownerId,
+      itemId,
+    });
   });
 
   it("pages every sort without duplicates or gaps, in a total order", async () => {
@@ -3065,12 +3300,16 @@ describe("full-library search and keyset pagination", () => {
   });
 
   it("keeps a page sequence stable while records are added and edited between pages", async () => {
-    const firstPage = await listLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "wishlist",
-      sort: "recent",
-      limit: 10,
-    });
+    const firstPage = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "wishlist",
+        sort: "recent",
+        limit: 10,
+      },
+    );
     expect(firstPage.nextCursor).not.toBeNull();
     const seen = new Set(firstPage.items.map((item) => item.id));
 
@@ -3082,7 +3321,7 @@ describe("full-library search and keyset pagination", () => {
       title: "Arrived Between Pages",
     });
     const edited = firstPage.items[3]!.id;
-    await updateLibraryItem(database.db, {
+    await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId: ownerId,
       itemId: edited,
       update: { notes: "edited mid-walk" },
@@ -3091,13 +3330,17 @@ describe("full-library search and keyset pagination", () => {
     const rest: string[] = [];
     let cursor = firstPage.nextCursor ?? undefined;
     while (cursor) {
-      const page = await listLibraryItemsForUser(database.db, {
-        userId: ownerId,
-        list: "wishlist",
-        sort: "recent",
-        cursor,
-        limit: 10,
-      });
+      const page = await listLibraryItemsForUser(
+        coreDatabase.db,
+        scanDatabase.db,
+        {
+          userId: ownerId,
+          list: "wishlist",
+          sort: "recent",
+          cursor,
+          limit: 10,
+        },
+      );
       rest.push(...page.items.map((item) => item.id));
       cursor = page.nextCursor ?? undefined;
     }
@@ -3106,7 +3349,10 @@ describe("full-library search and keyset pagination", () => {
     for (const id of rest) expect(seen.has(id), id).toBe(false);
     expect(seen.size + rest.length).toBe(SEED_COUNT);
 
-    await deleteLibraryItem(database.db, { userId: ownerId, itemId: added });
+    await deleteLibraryItem(coreDatabase.db, scanDatabase.db, {
+      userId: ownerId,
+      itemId: added,
+    });
   });
 
   it("orders ties on the same millisecond deterministically", async () => {
@@ -3123,7 +3369,7 @@ describe("full-library search and keyset pagination", () => {
   it("pages favorites by when they were starred", async () => {
     const starred = seeded.slice(20, 35);
     for (const record of starred) {
-      await updateLibraryItem(database.db, {
+      await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
         userId: ownerId,
         itemId: record.id,
         update: { favorite: true },
@@ -3157,12 +3403,16 @@ describe("full-library search and keyset pagination", () => {
   it("iterates every matching record for an export across page boundaries", async () => {
     const pages: number[] = [];
     const ids: string[] = [];
-    for await (const page of iterateLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "wishlist",
-      sort: "artist",
-      pageSize: 100,
-    })) {
+    for await (const page of iterateLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "wishlist",
+        sort: "artist",
+        pageSize: 100,
+      },
+    )) {
       pages.push(page.length);
       ids.push(...page.map((item) => item.id));
     }
@@ -3170,24 +3420,32 @@ describe("full-library search and keyset pagination", () => {
     expect(new Set(ids).size).toBe(SEED_COUNT);
 
     const none: unknown[] = [];
-    for await (const page of iterateLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "collection",
-    })) {
+    for await (const page of iterateLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "collection",
+      },
+    )) {
       none.push(page);
     }
     expect(none).toEqual([]);
   });
 
   it("rejects a cursor it cannot read or that belongs to another sort", async () => {
-    const page = await listLibraryItemsForUser(database.db, {
-      userId: ownerId,
-      list: "wishlist",
-      sort: "artist",
-      limit: 5,
-    });
+    const page = await listLibraryItemsForUser(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: ownerId,
+        list: "wishlist",
+        sort: "artist",
+        limit: 5,
+      },
+    );
     await expect(
-      listLibraryItemsForUser(database.db, {
+      listLibraryItemsForUser(coreDatabase.db, scanDatabase.db, {
         userId: ownerId,
         list: "wishlist",
         sort: "title",
@@ -3195,7 +3453,7 @@ describe("full-library search and keyset pagination", () => {
       }),
     ).rejects.toMatchObject({ code: "invalid_cursor" });
     await expect(
-      listLibraryItemsForUser(database.db, {
+      listLibraryItemsForUser(coreDatabase.db, scanDatabase.db, {
         userId: ownerId,
         list: "wishlist",
         cursor: "not-a-cursor",
@@ -3212,7 +3470,10 @@ describe("full-library search and keyset pagination", () => {
     const { ids } = await walk({ sort: "artist", limit: 50 });
     expect(ids).not.toContain(other);
     expect(ids).toHaveLength(SEED_COUNT);
-    await deleteLibraryItem(database.db, { userId, itemId: other });
+    await deleteLibraryItem(coreDatabase.db, scanDatabase.db, {
+      userId,
+      itemId: other,
+    });
   });
 
   function compare(a: string, b: string) {
@@ -3224,10 +3485,13 @@ describe("full-library search and keyset pagination", () => {
 
 describe("account export and deletion", () => {
   async function createAccountWithData() {
-    const [account] = await database.db.insert(users).values({}).returning();
+    const [account] = await coreDatabase.db
+      .insert(users)
+      .values({})
+      .returning();
     const accountId = account!.id;
 
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId: accountId,
@@ -3237,7 +3501,7 @@ describe("account export and deletion", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(imageAssets).values({
+    await scanDatabase.db.insert(imageAssets).values({
       scanId: scan!.id,
       idempotencyKey: `account-export-image-${randomUUID()}`,
       objectKey: `${accountId}/${scan!.id}/${randomUUID()}/original`,
@@ -3254,7 +3518,7 @@ describe("account export and deletion", () => {
       analysisHeight: 800,
       thumbnailSizeBytes: 40,
     });
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -3289,16 +3553,20 @@ describe("account export and deletion", () => {
     });
 
     // Saved-music data (roadmap P3.3 Task 2) must travel with the account.
-    await updateLibraryItem(database.db, {
+    await updateLibraryItem(coreDatabase.db, scanDatabase.db, {
       userId: accountId,
       itemId: confirmation.record.libraryItem!.id,
       update: { favorite: true },
     });
-    const { playlist } = await createPlaylist(database.db, {
-      userId: accountId,
-      name: "Export me",
-    });
-    await addPlaylistEntry(database.db, {
+    const { playlist } = await createPlaylist(
+      coreDatabase.db,
+      scanDatabase.db,
+      {
+        userId: accountId,
+        name: "Export me",
+      },
+    );
+    await addPlaylistEntry(coreDatabase.db, scanDatabase.db, {
       userId: accountId,
       playlistId: playlist.id,
       libraryItemId: confirmation.record.libraryItem!.id,
@@ -3315,9 +3583,13 @@ describe("account export and deletion", () => {
   it("exports every row the account owns", async () => {
     const { accountId, scanId, confirmation } = await createAccountWithData();
 
-    const exported = await getAccountExportForUser(database.db, {
-      userId: accountId,
-    });
+    const exported = await getAccountExportForUser(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId: accountId,
+      },
+    );
 
     expect(exported.account.id).toBe(accountId);
     expect(exported.scans).toHaveLength(1);
@@ -3342,60 +3614,66 @@ describe("account export and deletion", () => {
       }),
     ]);
 
-    await deleteAccount(database.db, { userId: accountId });
+    await deleteAccount(scanDatabase.db, coreDatabase.db, {
+      userId: accountId,
+    });
   });
 
   it("rejects exporting an account that does not exist", async () => {
     await expect(
-      getAccountExportForUser(database.db, { userId: randomUUID() }),
+      getAccountExportForUser(scanDatabase.db, coreDatabase.db, {
+        userId: randomUUID(),
+      }),
     ).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("deletes an account with confirmation history despite the restrict FKs, without touching shared catalog rows", async () => {
     const { accountId, scanId, playlistId } = await createAccountWithData();
-    const [libraryItemBeforeDelete] = await database.db
+    const [libraryItemBeforeDelete] = await coreDatabase.db
       .select({ releaseId: libraryItems.releaseId })
       .from(libraryItems)
       .where(eq(libraryItems.userId, accountId));
     const releaseId = libraryItemBeforeDelete!.releaseId;
 
-    const deleted = await deleteAccount(database.db, { userId: accountId });
+    const deleted = await deleteAccount(scanDatabase.db, coreDatabase.db, {
+      userId: accountId,
+    });
 
     expect(deleted.id).toBe(accountId);
     expect(deleted.objectKeys.length).toBeGreaterThan(0);
     expect(
-      await database.db.select().from(users).where(eq(users.id, accountId)),
+      await coreDatabase.db.select().from(users).where(eq(users.id, accountId)),
     ).toHaveLength(0);
     expect(
-      await database.db.select().from(scans).where(eq(scans.id, scanId)),
+      await scanDatabase.db.select().from(scans).where(eq(scans.id, scanId)),
     ).toHaveLength(0);
     expect(
-      await database.db
+      await scanDatabase.db
         .select()
         .from(scanConfirmations)
         .where(eq(scanConfirmations.scanId, scanId)),
     ).toHaveLength(0);
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(libraryItems)
         .where(eq(libraryItems.userId, accountId)),
     ).toHaveLength(0);
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(playlists)
         .where(eq(playlists.id, playlistId)),
     ).toHaveLength(0);
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(playlistEntries)
         .where(eq(playlistEntries.playlistId, playlistId)),
     ).toHaveLength(0);
     // The shared release/album rows must survive the account's deletion.
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(releases)
         .where(eq(releases.id, releaseId)),
@@ -3404,14 +3682,14 @@ describe("account export and deletion", () => {
 
   it("rejects deleting an account that does not exist", async () => {
     await expect(
-      deleteAccount(database.db, { userId: randomUUID() }),
+      deleteAccount(scanDatabase.db, coreDatabase.db, { userId: randomUUID() }),
     ).rejects.toMatchObject({ code: "not_found" });
   });
 });
 
 describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   async function insertReviewableScan() {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId,
@@ -3421,7 +3699,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -3468,7 +3746,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
 
   async function readOutboxEvent(scanId: string, idempotencyKey: string) {
     const eventKey = confirmationEventId(scanId, idempotencyKey);
-    const [row] = await database.db
+    const [row] = await scanDatabase.db
       .select()
       .from(outboxMessages)
       .where(
@@ -3502,7 +3780,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   ) {
     for (let attempts = 0; attempts < 50; attempts += 1) {
       const result = await dispatchNextConfirmationReceipt(
-        database.db,
+        coreDatabase.db,
         async (payload, idempotencyKey) => {
           if (idempotencyKey === targetKey) {
             await publish(payload);
@@ -3524,7 +3802,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
 
-    const result = await confirmScan(database.db, input);
+    const result = await confirmScan(scanDatabase.db, coreDatabase.db, input);
 
     expect(result.created).toBe(true);
     expect(result.record).toMatchObject({
@@ -3547,7 +3825,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       list: "collection",
     });
 
-    const [storedConfirmation] = await database.db
+    const [storedConfirmation] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.scanId, scanId));
@@ -3558,7 +3836,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       copyId: null,
     });
     expect(
-      await database.db
+      await coreDatabase.db
         .select()
         .from(libraryItems)
         .where(eq(libraryItems.confirmedFromScanId, scanId)),
@@ -3569,15 +3847,15 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
 
-    const first = await confirmScan(database.db, input);
-    const replay = await confirmScan(database.db, input);
+    const first = await confirmScan(scanDatabase.db, coreDatabase.db, input);
+    const replay = await confirmScan(scanDatabase.db, coreDatabase.db, input);
 
     expect(first.created).toBe(true);
     expect(replay.created).toBe(false);
     expect(replay.record).toEqual(first.record);
 
     await expect(
-      confirmScan(database.db, {
+      confirmScan(scanDatabase.db, coreDatabase.db, {
         ...input,
         confirmation: { ...input.confirmation, title: "A different title" },
       }),
@@ -3586,7 +3864,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // A conflict must not have deleted-and-reset the pending row (the
     // ADR-0018 "removed" branch, which a pending confirmation's null
     // libraryItemId could otherwise be mistaken for).
-    const [stillPending] = await database.db
+    const [stillPending] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.scanId, scanId));
@@ -3596,27 +3874,27 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   it("processScanConfirmation resolves the release and writes the library row exactly once, even if the event is delivered twice", async () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
-    await confirmScan(database.db, input);
+    await confirmScan(scanDatabase.db, coreDatabase.db, input);
     const { event, eventKey } = await readOutboxEvent(
       scanId,
       input.idempotencyKey,
     );
 
-    await processScanConfirmation(database.db, event);
-    await processScanConfirmation(database.db, event);
+    await processScanConfirmation(coreDatabase.db, event);
+    await processScanConfirmation(coreDatabase.db, event);
 
-    const receipts = await database.db
+    const receipts = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.idempotencyKey, eventKey));
     expect(receipts).toHaveLength(1);
 
-    const libraryRows = await database.db
+    const libraryRows = await coreDatabase.db
       .select()
       .from(libraryItems)
       .where(eq(libraryItems.confirmedFromScanId, scanId));
     expect(libraryRows).toHaveLength(1);
-    const copyRows = await database.db
+    const copyRows = await coreDatabase.db
       .select()
       .from(libraryCopies)
       .where(eq(libraryCopies.confirmedFromScanId, scanId));
@@ -3626,13 +3904,13 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   it("applyConfirmationCompletion projects the completion and is idempotent against redelivery or a missing row", async () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
-    await confirmScan(database.db, input);
+    await confirmScan(scanDatabase.db, coreDatabase.db, input);
     const { event, eventKey } = await readOutboxEvent(
       scanId,
       input.idempotencyKey,
     );
-    await processScanConfirmation(database.db, event);
-    const [receipt] = await database.db
+    await processScanConfirmation(coreDatabase.db, event);
+    const [receipt] = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.idempotencyKey, eventKey));
@@ -3641,12 +3919,15 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
         receipt!.payload,
       );
 
-    const applied = await applyConfirmationCompletion(database.db, completion);
+    const applied = await applyConfirmationCompletion(
+      scanDatabase.db,
+      completion,
+    );
     // P4.2 Task 5 (ADR-0028): the confirmation-to-library latency this
     // task's target bounds -- non-negative, since completedAt is always at
     // or after confirmScan's own confirmedAt write.
     expect(applied?.latencyMs).toBeGreaterThanOrEqual(0);
-    const [afterFirst] = await database.db
+    const [afterFirst] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.scanId, scanId));
@@ -3660,9 +3941,9 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // Redelivery after completion is a silent no-op, not a re-application,
     // and reports no latency to measure.
     await expect(
-      applyConfirmationCompletion(database.db, completion),
+      applyConfirmationCompletion(scanDatabase.db, completion),
     ).resolves.toBeNull();
-    const [afterRedelivery] = await database.db
+    const [afterRedelivery] = await scanDatabase.db
       .select()
       .from(scanConfirmations)
       .where(eq(scanConfirmations.scanId, scanId));
@@ -3672,7 +3953,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // is a defensive no-op, not a throw -- this handler runs from a queue
     // consumer with no request to fail back to.
     await expect(
-      applyConfirmationCompletion(database.db, {
+      applyConfirmationCompletion(scanDatabase.db, {
         ...completion,
         scanId: randomUUID(),
         idempotencyKey: `orphan-${randomUUID()}`,
@@ -3683,12 +3964,12 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   it("dispatchNextConfirmationReceipt claims, backs off on a failed publish, and marks published on success", async () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
-    await confirmScan(database.db, input);
+    await confirmScan(scanDatabase.db, coreDatabase.db, input);
     const { event, eventKey } = await readOutboxEvent(
       scanId,
       input.idempotencyKey,
     );
-    await processScanConfirmation(database.db, event);
+    await processScanConfirmation(coreDatabase.db, event);
 
     const firstDispatchAt = new Date(Date.now() + 1_000);
     await dispatchConfirmationReceiptUntil(
@@ -3698,7 +3979,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       },
       firstDispatchAt,
     );
-    const [afterDeferral] = await database.db
+    const [afterDeferral] = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.idempotencyKey, eventKey));
@@ -3728,7 +4009,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       expect.objectContaining({ scanId, idempotencyKey: event.idempotencyKey }),
     ]);
 
-    const [receipt] = await database.db
+    const [receipt] = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.idempotencyKey, eventKey));
@@ -3739,19 +4020,19 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
 
-    const pending = await confirmScan(database.db, input);
+    const pending = await confirmScan(scanDatabase.db, coreDatabase.db, input);
     expect(pending.record.status).toBe("pending");
 
     const { event, eventKey } = await readOutboxEvent(
       scanId,
       input.idempotencyKey,
     );
-    await processScanConfirmation(database.db, event);
+    await processScanConfirmation(coreDatabase.db, event);
     const dispatched = await dispatchConfirmationReceiptUntil(
       eventKey,
       async (payload) => {
         await applyConfirmationCompletion(
-          database.db,
+          scanDatabase.db,
           payload as Parameters<typeof applyConfirmationCompletion>[1],
         );
       },
@@ -3759,7 +4040,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     expect(dispatched.status).toBe("published");
 
     await expect(
-      getScanForUser(database.db, { userId, scanId }),
+      getScanForUser(scanDatabase.db, coreDatabase.db, { userId, scanId }),
     ).resolves.toMatchObject({
       confirmation: {
         status: "completed",
@@ -3770,9 +4051,12 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   });
 
   it("exports a pending confirmation with a null releaseId and pending status", async () => {
-    const [account] = await database.db.insert(users).values({}).returning();
+    const [account] = await coreDatabase.db
+      .insert(users)
+      .values({})
+      .returning();
     const accountId = account!.id;
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId: accountId,
@@ -3782,7 +4066,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -3792,7 +4076,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       durationMs: 20,
       completedAt: new Date(),
     });
-    await confirmScan(database.db, {
+    await confirmScan(scanDatabase.db, coreDatabase.db, {
       userId: accountId,
       scanId: scan!.id,
       idempotencyKey: `pipeline-export-confirm-${randomUUID()}`,
@@ -3816,9 +4100,13 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       },
     });
 
-    const exported = await getAccountExportForUser(database.db, {
-      userId: accountId,
-    });
+    const exported = await getAccountExportForUser(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId: accountId,
+      },
+    );
     expect(exported.confirmations).toEqual([
       expect.objectContaining({
         scanId: scan!.id,
@@ -3829,18 +4117,28 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       }),
     ]);
 
-    await deleteAccount(database.db, { userId: accountId });
+    // Torn down directly rather than through `deleteAccount`: this account's
+    // confirmation is deliberately still `pending`, which is exactly the case
+    // `deleteAccount` defers (it marks the account and deletes nothing), so
+    // using it here would leak this user and its pending confirmation into
+    // every later run -- and `listStalePendingConfirmations` below queries
+    // the whole table, not one user's rows.
+    await deleteTestAccount(accountId);
   });
 
   it("reconcileScanConfirmation completes a confirmation stuck before hop 2 (no receipt yet)", async () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
-    await confirmScan(database.db, input);
+    await confirmScan(scanDatabase.db, coreDatabase.db, input);
 
-    const result = await reconcileScanConfirmation(database.db, {
-      userId,
-      scanId,
-    });
+    const result = await reconcileScanConfirmation(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId,
+        scanId,
+      },
+    );
 
     expect(result).toMatchObject({
       status: "completed",
@@ -3848,17 +4146,17 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       libraryItem: { list: "collection" },
     });
     const { eventKey } = await readOutboxEvent(scanId, input.idempotencyKey);
-    const receipts = await database.db
+    const receipts = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.idempotencyKey, eventKey));
     expect(receipts).toHaveLength(1);
-    const libraryRows = await database.db
+    const libraryRows = await coreDatabase.db
       .select()
       .from(libraryItems)
       .where(eq(libraryItems.confirmedFromScanId, scanId));
     expect(libraryRows).toHaveLength(1);
-    const copyRows = await database.db
+    const copyRows = await coreDatabase.db
       .select()
       .from(libraryCopies)
       .where(eq(libraryCopies.confirmedFromScanId, scanId));
@@ -3868,7 +4166,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   it("reconcileScanConfirmation completes a confirmation stuck after hop 2 (receipt exists, unpublished)", async () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
-    await confirmScan(database.db, input);
+    await confirmScan(scanDatabase.db, coreDatabase.db, input);
     const { event, eventKey } = await readOutboxEvent(
       scanId,
       input.idempotencyKey,
@@ -3876,20 +4174,24 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // Hop 2 already ran (e.g. the queue delivered the event once), but the
     // completion receipt was never published -- exactly the state a
     // dead-lettered `confirmation.completed.v1` delivery would leave behind.
-    await processScanConfirmation(database.db, event);
+    await processScanConfirmation(coreDatabase.db, event);
 
-    const result = await reconcileScanConfirmation(database.db, {
-      userId,
-      scanId,
-    });
+    const result = await reconcileScanConfirmation(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId,
+        scanId,
+      },
+    );
 
     expect(result).toMatchObject({ status: "completed" });
-    const receipts = await database.db
+    const receipts = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.idempotencyKey, eventKey));
     expect(receipts).toHaveLength(1);
-    const libraryRows = await database.db
+    const libraryRows = await coreDatabase.db
       .select()
       .from(libraryItems)
       .where(eq(libraryItems.confirmedFromScanId, scanId));
@@ -3899,30 +4201,38 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   it("reconcileScanConfirmation on an already-completed confirmation is a safe no-op", async () => {
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
-    await confirmScan(database.db, input);
+    await confirmScan(scanDatabase.db, coreDatabase.db, input);
     const { event, eventKey } = await readOutboxEvent(
       scanId,
       input.idempotencyKey,
     );
-    await processScanConfirmation(database.db, event);
+    await processScanConfirmation(coreDatabase.db, event);
     await dispatchConfirmationReceiptUntil(eventKey, async (payload) => {
       await applyConfirmationCompletion(
-        database.db,
+        scanDatabase.db,
         payload as Parameters<typeof applyConfirmationCompletion>[1],
       );
     });
 
-    const before = await getScanConfirmationForUser(database.db, {
-      userId,
-      scanId,
-    });
-    const result = await reconcileScanConfirmation(database.db, {
-      userId,
-      scanId,
-    });
+    const before = await getScanConfirmationForUser(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId,
+        scanId,
+      },
+    );
+    const result = await reconcileScanConfirmation(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId,
+        scanId,
+      },
+    );
 
     expect(result).toEqual(before);
-    const libraryRows = await database.db
+    const libraryRows = await coreDatabase.db
       .select()
       .from(libraryItems)
       .where(eq(libraryItems.confirmedFromScanId, scanId));
@@ -3937,28 +4247,28 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // raw 23505 on the receipt insert instead of the two converging safely.
     const scanId = await insertReviewableScan();
     const input = collectionConfirmationInput(scanId);
-    await confirmScan(database.db, input);
+    await confirmScan(scanDatabase.db, coreDatabase.db, input);
     const { event, eventKey } = await readOutboxEvent(
       scanId,
       input.idempotencyKey,
     );
 
     await Promise.all([
-      processScanConfirmation(database.db, event),
-      processScanConfirmation(database.db, event),
+      processScanConfirmation(coreDatabase.db, event),
+      processScanConfirmation(coreDatabase.db, event),
     ]);
 
-    const receipts = await database.db
+    const receipts = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.idempotencyKey, eventKey));
     expect(receipts).toHaveLength(1);
-    const libraryRows = await database.db
+    const libraryRows = await coreDatabase.db
       .select()
       .from(libraryItems)
       .where(eq(libraryItems.confirmedFromScanId, scanId));
     expect(libraryRows).toHaveLength(1);
-    const copyRows = await database.db
+    const copyRows = await coreDatabase.db
       .select()
       .from(libraryCopies)
       .where(eq(libraryCopies.confirmedFromScanId, scanId));
@@ -3968,8 +4278,12 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
   it("listStalePendingConfirmations respects olderThan/limit and ignores completed rows", async () => {
     async function insertBackdatedPendingConfirmation(confirmedAt: Date) {
       const scanId = await insertReviewableScan();
-      await confirmScan(database.db, collectionConfirmationInput(scanId));
-      await database.db
+      await confirmScan(
+        scanDatabase.db,
+        coreDatabase.db,
+        collectionConfirmationInput(scanId),
+      );
+      await scanDatabase.db
         .update(scanConfirmations)
         .set({ confirmedAt })
         .where(eq(scanConfirmations.scanId, scanId));
@@ -3984,24 +4298,28 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     );
 
     const freshScanId = await insertReviewableScan();
-    await confirmScan(database.db, collectionConfirmationInput(freshScanId));
+    await confirmScan(
+      scanDatabase.db,
+      coreDatabase.db,
+      collectionConfirmationInput(freshScanId),
+    );
 
     const completedScanId = await insertReviewableScan();
     const completedInput = collectionConfirmationInput(completedScanId);
-    await confirmScan(database.db, completedInput);
+    await confirmScan(scanDatabase.db, coreDatabase.db, completedInput);
     const { event: completedEvent, eventKey: completedKey } =
       await readOutboxEvent(completedScanId, completedInput.idempotencyKey);
-    await processScanConfirmation(database.db, completedEvent);
+    await processScanConfirmation(coreDatabase.db, completedEvent);
     await dispatchConfirmationReceiptUntil(completedKey, async (payload) => {
       await applyConfirmationCompletion(
-        database.db,
+        scanDatabase.db,
         payload as Parameters<typeof applyConfirmationCompletion>[1],
       );
     });
 
     const olderThan = new Date(Date.now() - 5 * 60_000);
 
-    const limited = await listStalePendingConfirmations(database.db, {
+    const limited = await listStalePendingConfirmations(scanDatabase.db, {
       olderThan,
       limit: 1,
     });
@@ -4009,7 +4327,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       expect.objectContaining({ scanId: olderStaleScanId }),
     ]);
 
-    const all = await listStalePendingConfirmations(database.db, {
+    const all = await listStalePendingConfirmations(scanDatabase.db, {
       olderThan,
       limit: 10,
     });
@@ -4024,12 +4342,12 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // A real, older scan.analyze.v1 row -- the same setup
     // "cancels a queued scan and skips its outbox dispatch" above uses to get
     // one, so the row parses against the real registered contract.
-    const scan = await createOrGetScan(database.db, {
+    const scan = await createOrGetScan(scanDatabase.db, {
       userId,
       source: "single_upload",
       idempotencyKey: `isolation-scan-${randomUUID()}`,
     });
-    const upload = await createOrGetImageUpload(database.db, {
+    const upload = await createOrGetImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `isolation-upload-${randomUUID()}`,
@@ -4039,7 +4357,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       checksumSha256: "f".repeat(64),
       maxImages: 12,
     });
-    await completeImageUpload(database.db, {
+    await completeImageUpload(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       imageId: upload.record.id,
@@ -4050,7 +4368,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
       analysisHeight: 800,
       thumbnailSizeBytes: 40,
     });
-    const submitted = await submitScan(database.db, {
+    const submitted = await submitScan(scanDatabase.db, {
       userId,
       scanId: scan.record.id,
       idempotencyKey: `isolation-submit-${randomUUID()}`,
@@ -4060,7 +4378,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // above so it is unambiguously the newer of the two.
     const confirmedScanId = await insertReviewableScan();
     const confirmationInput = collectionConfirmationInput(confirmedScanId);
-    await confirmScan(database.db, confirmationInput);
+    await confirmScan(scanDatabase.db, coreDatabase.db, confirmationInput);
     const { eventKey: confirmedIdempotencyKey } = await readOutboxEvent(
       confirmedScanId,
       confirmationInput.idempotencyKey,
@@ -4074,7 +4392,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // drain that backlog ahead of this test's own row. Count exactly how many
     // are currently pending instead: FIFO ordering guarantees this test's row
     // is claimed at or before that count, however large the backlog is.
-    const pendingConfirmedEvents = await database.db
+    const pendingConfirmedEvents = await scanDatabase.db
       .select({ idempotencyKey: outboxMessages.idempotencyKey })
       .from(outboxMessages)
       .where(
@@ -4096,7 +4414,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     for (let attempts = 0; attempts < attemptBudget; attempts += 1) {
       if (publishedIdempotencyKeys.has(confirmedIdempotencyKey)) break;
       const result = await dispatchNextOutboxMessage(
-        database.db,
+        scanDatabase.db,
         {
           [SCAN_CONFIRMED_EVENT]: async (_payload, idempotencyKey) => {
             publishedIdempotencyKeys.add(idempotencyKey);
@@ -4117,7 +4435,7 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
     // interference, not merely a missed optimization, and exactly the
     // starvation the roadmap names in the other direction (a deep analysis
     // backlog delaying a newer confirmation).
-    const [analysisRow] = await database.db
+    const [analysisRow] = await scanDatabase.db
       .select()
       .from(outboxMessages)
       .where(eq(outboxMessages.idempotencyKey, submitted.jobId));
@@ -4140,12 +4458,15 @@ describe("P4.2 Task 3: async scan-confirmation pipeline (ADR-0028)", () => {
 
 describe("P4.2 Task 6: durable account deletion and release_id FK policy (new ADR)", () => {
   async function createAccount() {
-    const [account] = await database.db.insert(users).values({}).returning();
+    const [account] = await coreDatabase.db
+      .insert(users)
+      .values({})
+      .returning();
     return account!.id;
   }
 
   async function insertReviewableScanForAccount(accountId: string) {
-    const [scan] = await database.db
+    const [scan] = await scanDatabase.db
       .insert(scans)
       .values({
         userId: accountId,
@@ -4155,7 +4476,7 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
         completedAt: new Date(),
       })
       .returning();
-    await database.db.insert(scanAttempts).values({
+    await scanDatabase.db.insert(scanAttempts).values({
       scanId: scan!.id,
       attemptNumber: 1,
       status: "succeeded",
@@ -4196,7 +4517,7 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
 
   async function driveToCompletion(scanId: string, idempotencyKey: string) {
     const eventKey = confirmationEventId(scanId, idempotencyKey);
-    const [outboxRow] = await database.db
+    const [outboxRow] = await scanDatabase.db
       .select()
       .from(outboxMessages)
       .where(
@@ -4209,9 +4530,9 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
     const confirmedEvent = SCAN_CONFIRMED_EVENT_CONTRACT.consumerSchema.parse(
       outboxRow!.payload,
     );
-    await processScanConfirmation(database.db, confirmedEvent);
+    await processScanConfirmation(coreDatabase.db, confirmedEvent);
 
-    const [receipt] = await database.db
+    const [receipt] = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.idempotencyKey, eventKey))
@@ -4220,17 +4541,23 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
       CONFIRMATION_COMPLETED_EVENT_CONTRACT.consumerSchema.parse(
         receipt!.payload,
       );
-    await applyConfirmationCompletion(database.db, completedEvent);
+    await applyConfirmationCompletion(scanDatabase.db, completedEvent);
   }
 
   it("defers a whole-account delete while a confirmation is still pending, instead of racing hop 2 into a foreign-key violation", async () => {
     const accountId = await createAccount();
     const scanId = await insertReviewableScanForAccount(accountId);
     const confirmInput = collectionConfirmationInput(accountId, scanId);
-    const pendingConfirmation = await confirmScan(database.db, confirmInput);
+    const pendingConfirmation = await confirmScan(
+      scanDatabase.db,
+      coreDatabase.db,
+      confirmInput,
+    );
     expect(pendingConfirmation.record.status).toBe("pending");
 
-    const deletion = await deleteAccount(database.db, { userId: accountId });
+    const deletion = await deleteAccount(scanDatabase.db, coreDatabase.db, {
+      userId: accountId,
+    });
     expect(deletion).toMatchObject({
       id: accountId,
       status: "pending",
@@ -4242,7 +4569,7 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
     // that still exists -- exactly the race ADR-0028 documented and left
     // open for this task, now closed by deferring instead of racing.
     expect(
-      await database.db.select().from(users).where(eq(users.id, accountId)),
+      await coreDatabase.db.select().from(users).where(eq(users.id, accountId)),
     ).toHaveLength(1);
 
     await expect(
@@ -4250,12 +4577,16 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
     ).resolves.toBeUndefined();
 
     // Nothing is pending anymore, so a retried delete finalizes immediately.
-    const finalDeletion = await deleteAccount(database.db, {
-      userId: accountId,
-    });
+    const finalDeletion = await deleteAccount(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId: accountId,
+      },
+    );
     expect(finalDeletion.status).toBe("deleted");
     expect(
-      await database.db.select().from(users).where(eq(users.id, accountId)),
+      await coreDatabase.db.select().from(users).where(eq(users.id, accountId)),
     ).toHaveLength(0);
   });
 
@@ -4265,59 +4596,76 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
     const newScanId = await insertReviewableScanForAccount(accountId);
 
     await confirmScan(
-      database.db,
+      scanDatabase.db,
+      coreDatabase.db,
       collectionConfirmationInput(accountId, drainingScanId),
     );
-    const deletion = await deleteAccount(database.db, { userId: accountId });
+    const deletion = await deleteAccount(scanDatabase.db, coreDatabase.db, {
+      userId: accountId,
+    });
     expect(deletion.status).toBe("pending");
 
     await expect(
       confirmScan(
-        database.db,
+        scanDatabase.db,
+        coreDatabase.db,
         collectionConfirmationInput(accountId, newScanId),
       ),
     ).rejects.toMatchObject({ code: "account_deleting" });
 
     // Cleanup: bypass the app-level guard directly, since this account's own
     // deletion workflow is deliberately left mid-drain by this test.
-    await database.db.delete(users).where(eq(users.id, accountId));
+    await deleteTestAccount(accountId);
   });
 
   it("finalizes a drained deletion through the background sweep helpers", async () => {
     const accountId = await createAccount();
     const scanId = await insertReviewableScanForAccount(accountId);
     const confirmInput = collectionConfirmationInput(accountId, scanId);
-    await confirmScan(database.db, confirmInput);
+    await confirmScan(scanDatabase.db, coreDatabase.db, confirmInput);
 
-    const deletion = await deleteAccount(database.db, { userId: accountId });
+    const deletion = await deleteAccount(scanDatabase.db, coreDatabase.db, {
+      userId: accountId,
+    });
     expect(deletion.status).toBe("pending");
 
-    // Not ready yet: one confirmation is still pending.
+    // P4.2 Task 7 (ADR-0030): the candidate list names every account whose
+    // deletion was requested, ready or not -- readiness moved inside
+    // finalizeAccountDeletion, which re-checks it under its own lock and
+    // returns null while a confirmation is still pending.
     expect(
-      await listAccountsReadyForDeletion(database.db, { limit: 500 }),
-    ).not.toContain(accountId);
+      await listAccountsPendingDeletion(coreDatabase.db, { limit: 500 }),
+    ).toContain(accountId);
     expect(
-      await finalizeAccountDeletion(database.db, { userId: accountId }),
+      await finalizeAccountDeletion(scanDatabase.db, coreDatabase.db, {
+        userId: accountId,
+      }),
     ).toBeNull();
 
     await driveToCompletion(scanId, confirmInput.idempotencyKey);
 
     expect(
-      await listAccountsReadyForDeletion(database.db, { limit: 500 }),
+      await listAccountsPendingDeletion(coreDatabase.db, { limit: 500 }),
     ).toContain(accountId);
-    const finalized = await finalizeAccountDeletion(database.db, {
-      userId: accountId,
-    });
+    const finalized = await finalizeAccountDeletion(
+      scanDatabase.db,
+      coreDatabase.db,
+      {
+        userId: accountId,
+      },
+    );
     expect(finalized).toMatchObject({ id: accountId });
 
     // Idempotent: a racing second sweep pass (or a retried request) finds
     // the account already gone and no-ops rather than throwing.
     expect(
-      await finalizeAccountDeletion(database.db, { userId: accountId }),
+      await finalizeAccountDeletion(scanDatabase.db, coreDatabase.db, {
+        userId: accountId,
+      }),
     ).toBeNull();
   });
 
-  it("still protects a completed confirmation's release from deletion, via the status-consistency check rather than the old restrict FK", async () => {
+  it("still protects a completed confirmation's release reference, via the status-consistency check now that no cross-schema FK survives", async () => {
     const accountId = await createAccount();
     const scanId = await insertReviewableScanForAccount(accountId);
     const result = await confirmScanAndComplete(
@@ -4325,11 +4673,44 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
     );
     const releaseId = result.record.release!.id;
 
+    // The surviving half of ADR-0029's protection, and the only half that
+    // can survive the P4.2 Task 7 split: nothing may null a `completed`
+    // confirmation's release_id, so its audit reference cannot be erased.
     await expect(
-      database.db.delete(releases).where(eq(releases.id, releaseId)),
+      scanDatabase.db
+        .update(scanConfirmations)
+        .set({ releaseId: null })
+        .where(eq(scanConfirmations.scanId, scanId)),
     ).rejects.toMatchObject({ cause: { code: "23514" } });
 
-    await deleteAccount(database.db, { userId: accountId });
+    // The half that is deliberately gone (P4.2 Task 7, ADR-0030): deleting
+    // the release used to cascade a SET NULL into this completed row
+    // through scan_confirmations_release_id_fkey and be rejected by the
+    // check above. Migration 022 drops that FK -- no cross-schema
+    // constraint can exist once scan and core are separate schemas/roles --
+    // so the delete now succeeds and the confirmation keeps naming a
+    // release row that is gone. The replacement guarantee is that nothing
+    // in the application ever deletes a `releases` row (see schema.ts's
+    // note on this column); reviewed_release stays the durable audit
+    // projection of what was confirmed either way.
+    await coreDatabase.db.delete(releases).where(eq(releases.id, releaseId));
+
+    const [confirmationRow] = await scanDatabase.db
+      .select()
+      .from(scanConfirmations)
+      .where(eq(scanConfirmations.scanId, scanId));
+    expect(confirmationRow).toMatchObject({
+      status: "completed",
+      releaseId,
+    });
+    expect(confirmationRow!.reviewedRelease).toMatchObject({
+      artist: result.record.release!.artist,
+      title: result.record.release!.title,
+    });
+
+    await deleteAccount(scanDatabase.db, coreDatabase.db, {
+      userId: accountId,
+    });
   });
 
   it("nulls confirmation_receipts.release_id on release deletion instead of blocking it, preserving the audit payload", async () => {
@@ -4346,19 +4727,19 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
     // cascades with its owning user (it never outlives it), so this isolates
     // this table's own release_id FK behavior at the DB level rather than
     // simulating a reachable product flow.
-    await database.db
+    await scanDatabase.db
       .delete(scanConfirmations)
       .where(eq(scanConfirmations.scanId, scanId));
-    await database.db
+    await coreDatabase.db
       .delete(libraryCopies)
       .where(eq(libraryCopies.libraryItemId, libraryItemId));
-    await database.db
+    await coreDatabase.db
       .delete(libraryItems)
       .where(eq(libraryItems.id, libraryItemId));
 
-    await database.db.delete(releases).where(eq(releases.id, releaseId));
+    await coreDatabase.db.delete(releases).where(eq(releases.id, releaseId));
 
-    const [receiptRow] = await database.db
+    const [receiptRow] = await coreDatabase.db
       .select()
       .from(confirmationReceipts)
       .where(eq(confirmationReceipts.scanId, scanId));
@@ -4367,6 +4748,6 @@ describe("P4.2 Task 6: durable account deletion and release_id FK policy (new AD
       releaseId,
     );
 
-    await database.db.delete(users).where(eq(users.id, accountId));
+    await deleteTestAccount(accountId);
   });
 });

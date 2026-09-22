@@ -17,11 +17,11 @@ export default async function DashboardLayout({
   const context = getServerContext();
   const userId = await requireUserId(context);
   const [collectionCount, wishlistCount] = await Promise.all([
-    countLibraryItemsForUser(context.database.db, {
+    countLibraryItemsForUser(context.database.core, {
       userId,
       list: "collection",
     }),
-    countLibraryItemsForUser(context.database.db, {
+    countLibraryItemsForUser(context.database.core, {
       userId,
       list: "wishlist",
     }),

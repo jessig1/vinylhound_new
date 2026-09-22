@@ -49,6 +49,8 @@ output "database_ca_base64" {
 output "runtime_secret_arns" {
   value = {
     database_url            = aws_secretsmanager_secret.database_url.arn
+    scan_database_url       = aws_secretsmanager_secret.scan_database_url.arn
+    core_database_url       = aws_secretsmanager_secret.core_database_url.arn
     clerk_secret_key        = aws_secretsmanager_secret.clerk_secret_key.arn
     clerk_publishable_key   = aws_secretsmanager_secret.clerk_publishable_key.arn
     openai_api_key          = aws_secretsmanager_secret.openai_api_key.arn

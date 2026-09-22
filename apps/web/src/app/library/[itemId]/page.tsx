@@ -37,10 +37,11 @@ export default async function LibraryItemPage({
 
   const context = getServerContext();
   const userId = await requireUserId(context);
-  const item = await getLibraryItemForUser(context.database.db, {
-    userId,
-    itemId,
-  }).catch((error: unknown) => {
+  const item = await getLibraryItemForUser(
+    context.database.core,
+    context.database.scan,
+    { userId, itemId },
+  ).catch((error: unknown) => {
     if (error instanceof DatabaseCommandError && error.code === "not_found") {
       notFound();
     }
@@ -48,8 +49,8 @@ export default async function LibraryItemPage({
   });
 
   const [{ playlists }, memberships] = await Promise.all([
-    listPlaylistsForUser(context.database.db, { userId }),
-    listPlaylistMembershipForItem(context.database.db, {
+    listPlaylistsForUser(context.database.core, { userId }),
+    listPlaylistMembershipForItem(context.database.core, {
       userId,
       libraryItemId: item.id,
     }),

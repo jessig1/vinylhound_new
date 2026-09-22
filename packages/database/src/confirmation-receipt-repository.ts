@@ -2,7 +2,7 @@ import { and, asc, eq, isNull, lte, sql } from "drizzle-orm";
 
 import { CONFIRMATION_COMPLETED_EVENT_CONTRACT } from "@vinylhound/contracts";
 
-import type { Database } from "./database.ts";
+import type { CoreDatabase } from "./database.ts";
 import { confirmationReceipts } from "./schema.ts";
 
 export type ConfirmationReceiptDispatchResult =
@@ -28,7 +28,7 @@ export type ConfirmationReceiptPublisher = (
  * generic over two differently-shaped Drizzle tables.
  */
 export async function dispatchNextConfirmationReceipt(
-  db: Database,
+  db: CoreDatabase,
   publish: ConfirmationReceiptPublisher,
   now = new Date(),
 ): Promise<ConfirmationReceiptDispatchResult> {

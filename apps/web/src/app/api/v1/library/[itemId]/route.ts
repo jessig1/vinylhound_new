@@ -23,11 +23,11 @@ export const PATCH = withRoute(
     const update = await parseJson(request, UpdateLibraryItemSchema);
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await updateLibraryItem(context.database.db, {
-      userId,
-      itemId,
-      update,
-    });
+    const result = await updateLibraryItem(
+      context.database.core,
+      context.database.scan,
+      { userId, itemId, update },
+    );
 
     const response = jsonResponse(
       UpdateLibraryItemResponseSchema.parse(result),
@@ -50,10 +50,11 @@ export const DELETE = withRoute(
     const itemId = parseUuid(rawItemId, "itemId");
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await deleteLibraryItem(context.database.db, {
-      userId,
-      itemId,
-    });
+    const result = await deleteLibraryItem(
+      context.database.core,
+      context.database.scan,
+      { userId, itemId },
+    );
 
     const response = jsonResponse(
       DeleteLibraryItemResponseSchema.parse(result),

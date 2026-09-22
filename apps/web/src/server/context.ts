@@ -10,8 +10,10 @@ import {
   createSpotifyDiscovery,
 } from "@vinylhound/catalog";
 import {
-  createDatabase,
-  databaseOptionsFromConfig,
+  coreDatabaseOptionsFromConfig,
+  createCoreDatabase,
+  createScanDatabase,
+  scanDatabaseOptionsFromConfig,
 } from "@vinylhound/database";
 import { createS3ObjectStorage } from "@vinylhound/storage";
 
@@ -45,9 +47,28 @@ function createServerContext() {
         }
       : null;
 
+  // P4.2 Task 7 (ADR-0030): two role-scoped connections, never one shared
+  // pool. Every repository function takes the specific handle its own
+  // table(s) live behind; a handful of functions that compose a response
+  // from both (library reads, account export/deletion, confirmation reads)
+  // take both explicitly rather than reaching for a merged "do anything"
+  // connection that would defeat the point of the split.
+  const scanDatabase = createScanDatabase(
+    scanDatabaseOptionsFromConfig(config),
+  );
+  const coreDatabase = createCoreDatabase(
+    coreDatabaseOptionsFromConfig(config),
+  );
+
   return {
     config,
-    database: createDatabase(databaseOptionsFromConfig(config)),
+    database: {
+      scan: scanDatabase.db,
+      core: coreDatabase.db,
+      close: async () => {
+        await Promise.all([scanDatabase.close(), coreDatabase.close()]);
+      },
+    },
     storage: createS3ObjectStorage({
       endpoint: config.S3_ENDPOINT,
       region: config.S3_REGION,

@@ -131,13 +131,69 @@ Staging first provisions task definitions with ECS services disabled, runs a
 one-off Fargate migration, and creates services only after success. Production
 first provisions EKS/edge resources, creates secret-backed Kubernetes runtime
 configuration, runs a migration Job, and applies workloads only after success.
-Migrations use the application's bounded, CA-verified database configuration;
-they are forward-only and must remain compatible with the previous image. An
-operator rollback redeploys previous ECR digests and never reverses a migration.
+Migrations use the application's bounded, CA-verified database configuration
+and must remain compatible with the previous image. Almost every migration in
+this repository is forward-only by convention (no `-- Down Migration` section,
+so `node-pg-migrate down` refuses to run it) and an operator rollback redeploys
+previous ECR digests without reversing one. Migrations `021`/`022` (P4.2 Task
+7's scan/core physical split, ADR-0030) are the sole exception with a real,
+tested down path — see "Scan/core schema and role rollback" below before
+reversing either.
 
 Before the first deployment, populate the database URL (development only),
-Clerk secret, Clerk publishable key, and OpenAI key containers named by each
-root's outputs. Never put those values in Terraform variables or GitHub secrets.
+the scan/core database role URLs (development only — staging/production
+generate theirs in Terraform), Clerk secret, Clerk publishable key, and
+OpenAI key containers named by each root's outputs. Never put those values in
+Terraform variables or GitHub secrets.
+
+## Scan/core schema and role rollback (P4.2 Task 7, ADR-0030)
+
+Migration `021_scan_core_schema_split.sql` (additive: two schemas, two roles,
+the `library_items.confirmed_release` backfill, the `scan.account_deletions`
+backfill) and `022_scan_core_writer_switch.sql` (drops the eight FKs the
+schema/role split made unenforceable across the boundary) both carry a real
+`-- Down Migration` section, verified by driving it against seeded in-flight
+state rather than an empty database:
+
+1. Seed one `pending` `scan_confirmations` row, one undelivered
+   `scan.confirmed.v1` `outbox_messages` row, one undelivered
+   `confirmation_receipts` row, and one account with `deletion_requested_at`
+   set — the same shapes `packages/database/src/schema.integration.ts`'s own
+   test suite seeds for the pipeline's other tests.
+2. `npx node-pg-migrate down --count 1 --migrations-dir packages/database/migrations
+--migrations-table vinylhound_migrations` (from `packages/database`, or
+   with `--migration-dir`/table flags adjusted for the repo root) reverses
+   `022` alone: the eight FKs come back `NOT VALID` (a row orphaned while
+   they were absent must not make the rollback itself fail) and the three
+   replacement indexes are dropped. Confirm zero rows were lost, then run
+   `ALTER TABLE ... VALIDATE CONSTRAINT <name>` for each of the eight once you
+   have reconciled any row that would fail it (in practice, none should: the
+   FKs these replace were already unenforced in the direction that matters
+   for as long as 022 was live).
+3. `--count 1` again reverses `021`: both schemas move back to `public`,
+   `library_items.confirmed_release` and `scan.account_deletions` are
+   dropped, and every `search_path` resets. The two roles are left in place
+   (they own nothing; the next forward `npm run db:migrate` re-`ALTER`s them
+   harmlessly).
+4. Run the seeded in-flight confirmation through `reconcileScanConfirmation`
+   against the rolled-back, single-schema database using the pre-cutover
+   (single-connection) code path — it must still complete and the library
+   item must still appear. This is the concrete proof behind the roadmap's
+   "test rollback with in-flight events and reconciliation": the recovery
+   mechanism the async pipeline already relies on (ADR-0028) also recovers
+   correctly on the far side of an emergency rollback, not just going
+   forward.
+5. Re-apply `npm run db:migrate` (forward) and confirm the
+   `library_items.confirmed_release` backfill is idempotent — re-running the
+   `UPDATE ... FROM scan_confirmations` a second time must leave every row
+   unchanged.
+
+**Never roll back `022` alone while any application instance is still running
+code written for the post-cutover (two-connection) shape** — that code no
+longer performs the single-transaction account deletion or confirmation
+writes the restored FKs assume, so a rollback must always pair with
+redeploying the pre-Task-7 application image at the same time, exactly like
+any other schema/application coupled release.
 
 ## Backup and restoration
 
@@ -148,8 +204,10 @@ restore monthly and after a database-provider change:
 
 1. Restore a production backup to an isolated database and use separate,
    non-production storage credentials.
-2. Apply `npm run db:migrate`, start one web instance and one worker against
-   the restored database, and verify an account export and a representative
+2. Apply `npm run db:migrate` (needs `DATABASE_URL` plus `SCAN_DATABASE_URL`/
+   `CORE_DATABASE_URL` pointed at the restored database's own scan/core
+   roles, P4.2 Task 7), start one web instance and one worker against the
+   restored database, and verify an account export and a representative
    scan audit trail (without sending a provider request).
 3. Record the backup timestamp, restore duration, result, and operator in the
    incident log; investigate any mismatch before relying on the backup.

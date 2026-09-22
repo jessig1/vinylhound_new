@@ -13,10 +13,12 @@ import {
   type ScanConfirmedEvent,
 } from "@vinylhound/contracts";
 import {
-  createDatabase,
-  databaseOptionsFromConfig,
+  coreDatabaseOptionsFromConfig,
+  createCoreDatabase,
+  createScanDatabase,
   dispatchNextConfirmationReceipt,
   dispatchNextOutboxMessage,
+  scanDatabaseOptionsFromConfig,
 } from "@vinylhound/database";
 import {
   createSqsConfirmationCompletionQueue,
@@ -59,7 +61,8 @@ if (
 }
 requireOpenAiApiKey(config.OPENAI_API_KEY);
 
-const database = createDatabase(databaseOptionsFromConfig(config));
+const scanDatabase = createScanDatabase(scanDatabaseOptionsFromConfig(config));
+const coreDatabase = createCoreDatabase(coreDatabaseOptionsFromConfig(config));
 const queue = createSqsScanQueue({
   queueUrl: config.SQS_QUEUE_URL,
   deadLetterQueueUrl: config.SQS_DEAD_LETTER_QUEUE_URL,
@@ -81,7 +84,7 @@ const storage = createS3ObjectStorage({
   forcePathStyle: config.S3_FORCE_PATH_STYLE,
 });
 const analyzeScan = createScanAnalysisHandler({
-  database: database.db,
+  database: scanDatabase.db,
   storage,
   identifier: createOpenAIAlbumIdentifier({
     apiKey: config.OPENAI_API_KEY,
@@ -96,10 +99,10 @@ const analyzeScan = createScanAnalysisHandler({
 // run in this same Lambda today -- a transactional boundary, not a process
 // one, until Task 7's physical cutover (see ADR-0027).
 const processScanConfirmed = createConfirmationProcessingHandler({
-  database: database.db,
+  database: coreDatabase.db,
 });
 const applyConfirmationCompleted = createConfirmationCompletionHandler({
-  database: database.db,
+  database: scanDatabase.db,
 });
 
 /**
@@ -124,7 +127,7 @@ const applyConfirmationCompleted = createConfirmationCompletionHandler({
 async function dispatchOutbox() {
   let confirmedEventsPublished = 0;
   while (confirmedEventsPublished < 100) {
-    const result = await dispatchNextOutboxMessage(database.db, {
+    const result = await dispatchNextOutboxMessage(scanDatabase.db, {
       [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
         await confirmationProcessingQueue.enqueue(
           payload as ScanConfirmedEvent,
@@ -138,7 +141,7 @@ async function dispatchOutbox() {
 
   let published = 0;
   while (published < 100) {
-    const result = await dispatchNextOutboxMessage(database.db, {
+    const result = await dispatchNextOutboxMessage(scanDatabase.db, {
       [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
         await queue.enqueueAnalyzeScan(
           payload as AnalyzeScanJob,
@@ -153,7 +156,7 @@ async function dispatchOutbox() {
   let confirmationReceiptsPublished = 0;
   while (confirmationReceiptsPublished < 100) {
     const result = await dispatchNextConfirmationReceipt(
-      database.db,
+      coreDatabase.db,
       async (payload, idempotencyKey) => {
         await confirmationCompletionQueue.enqueue(
           payload as ConfirmationCompletedEvent,

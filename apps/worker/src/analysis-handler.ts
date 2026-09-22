@@ -7,7 +7,7 @@ import {
   completeScanAnalysis,
   failScanAnalysis,
   prepareScanAnalysis,
-  type Database,
+  type ScanDatabase,
 } from "@vinylhound/database";
 import { determineReviewOutcome } from "@vinylhound/domain";
 import {
@@ -23,7 +23,7 @@ export interface AnalyzeScanDelivery {
 }
 
 export interface ScanAnalysisHandlerOptions {
-  database: Database;
+  database: ScanDatabase;
   storage: ObjectStorage;
   identifier: AlbumIdentifier;
   configuredModel: string;

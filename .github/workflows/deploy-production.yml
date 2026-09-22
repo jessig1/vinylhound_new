@@ -130,12 +130,14 @@ jobs:
           secrets="$(terraform -chdir=infra/terraform/production output -json runtime_secret_arns)"
           secret_value() { aws secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text; }
           database_url="$(secret_value "$(jq -r .database_url <<<"$secrets")")"
+          scan_database_url="$(secret_value "$(jq -r .scan_database_url <<<"$secrets")")"
+          core_database_url="$(secret_value "$(jq -r .core_database_url <<<"$secrets")")"
           clerk_secret="$(secret_value "$(jq -r .clerk_secret_key <<<"$secrets")")"
           clerk_public="$(secret_value "$(jq -r .clerk_publishable_key <<<"$secrets")")"
           openai_key="$(secret_value "$(jq -r .openai_api_key <<<"$secrets")")"
           discovery_secret="$(secret_value "$(jq -r .discovery_shared_secret <<<"$secrets")")"
           database_ca="$(terraform -chdir=infra/terraform/production output -raw database_ca_base64)"
-          for value in "$database_url" "$clerk_secret" "$clerk_public" "$openai_key" "$discovery_secret"; do echo "::add-mask::$value"; done
+          for value in "$database_url" "$scan_database_url" "$core_database_url" "$clerk_secret" "$clerk_public" "$openai_key" "$discovery_secret"; do echo "::add-mask::$value"; done
           kubectl -n vinylhound create configmap runtime \
             --from-literal=NODE_ENV=production --from-literal=APP_URL="$(jq -r .app_url <<<"$runtime")" \
             --from-literal=DATABASE_MAX_CONNECTIONS=5 --from-literal=DATABASE_CONNECT_TIMEOUT_MS=30000 \
@@ -160,8 +162,8 @@ jobs:
             --from-literal=DISCOVERY_SERVICE_URL=http://discovery:4001 \
             --from-literal=DISCOVERY_SERVICE_PORT=4001 \
             --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n vinylhound create secret generic web-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=CLERK_SECRET_KEY="$clerk_secret" --from-literal=NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$clerk_public" --from-literal=DISCOVERY_SERVICE_SHARED_SECRET="$discovery_secret" --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n vinylhound create secret generic worker-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=OPENAI_API_KEY="$openai_key" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n vinylhound create secret generic web-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=SCAN_DATABASE_URL="$scan_database_url" --from-literal=CORE_DATABASE_URL="$core_database_url" --from-literal=CLERK_SECRET_KEY="$clerk_secret" --from-literal=NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$clerk_public" --from-literal=DISCOVERY_SERVICE_SHARED_SECRET="$discovery_secret" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n vinylhound create secret generic worker-secrets --from-literal=DATABASE_URL="$database_url" --from-literal=SCAN_DATABASE_URL="$scan_database_url" --from-literal=CORE_DATABASE_URL="$core_database_url" --from-literal=OPENAI_API_KEY="$openai_key" --dry-run=client -o yaml | kubectl apply -f -
           kubectl -n vinylhound create secret generic discovery-secrets --from-literal=DISCOVERY_SERVICE_SHARED_SECRET="$discovery_secret" --dry-run=client -o yaml | kubectl apply -f -
       - name: Migrate database
         id: migrate

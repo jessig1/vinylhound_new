@@ -21,7 +21,7 @@ export const DELETE = withRoute(
     const entryId = parseUuid(rawEntryId, "entryId");
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await removePlaylistEntry(context.database.db, {
+    const result = await removePlaylistEntry(context.database.core, {
       userId,
       playlistId,
       entryId,

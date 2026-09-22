@@ -15,9 +15,12 @@ import {
   resolvePlaylistOrder,
 } from "@vinylhound/domain";
 
-import type { Database } from "./database.ts";
+import type {
+  CoreDatabase,
+  CoreTransaction,
+  ScanDatabase,
+} from "./database.ts";
 import { getLibraryItemsByIdForUser } from "./library-repository.ts";
-import type { DatabaseTransaction } from "./release-resolution.ts";
 import { DatabaseCommandError } from "./scan-repository.ts";
 import { libraryItems, playlistEntries, playlists } from "./schema.ts";
 
@@ -30,7 +33,7 @@ import { libraryItems, playlistEntries, playlists } from "./schema.ts";
  * concurrent edits to one playlist serialize instead of interleaving.
  */
 export async function listPlaylistsForUser(
-  db: Database,
+  db: CoreDatabase,
   input: { userId: string },
 ): Promise<ListPlaylistsResponse> {
   const rows = await db
@@ -64,7 +67,7 @@ export async function listPlaylistsForUser(
  * without loading every playlist in full.
  */
 export async function listPlaylistMembershipForItem(
-  db: Database,
+  db: CoreDatabase,
   input: { userId: string; libraryItemId: string },
 ): Promise<{ playlistId: string; entryId: string }[]> {
   const rows = await db
@@ -84,7 +87,8 @@ export async function listPlaylistMembershipForItem(
 }
 
 export async function getPlaylistForUser(
-  db: Database,
+  db: CoreDatabase,
+  scanDb: ScanDatabase,
   input: { userId: string; playlistId: string },
 ): Promise<PlaylistDetail> {
   const [playlist] = await db
@@ -99,7 +103,7 @@ export async function getPlaylistForUser(
   if (!playlist) {
     throw new DatabaseCommandError("not_found", "Playlist not found.");
   }
-  return readPlaylistDetail(db, input.userId, playlist);
+  return readPlaylistDetail(db, scanDb, input.userId, playlist);
 }
 
 /**
@@ -108,7 +112,8 @@ export async function getPlaylistForUser(
  * second one. No `Idempotency-Key` is needed, matching `POST /library`.
  */
 export async function createPlaylist(
-  db: Database,
+  db: CoreDatabase,
+  scanDb: ScanDatabase,
   input: { userId: string; name: string },
 ): Promise<{ playlist: PlaylistDetail; created: boolean }> {
   const normalizedName = normalizePlaylistName(input.name);
@@ -128,7 +133,12 @@ export async function createPlaylist(
     });
     if (existing) {
       return {
-        playlist: await readPlaylistDetail(transaction, input.userId, existing),
+        playlist: await readPlaylistDetail(
+          transaction,
+          scanDb,
+          input.userId,
+          existing,
+        ),
         created: false,
       };
     }
@@ -161,14 +171,20 @@ export async function createPlaylist(
       );
     }
     return {
-      playlist: await readPlaylistDetail(transaction, input.userId, inserted),
+      playlist: await readPlaylistDetail(
+        transaction,
+        scanDb,
+        input.userId,
+        inserted,
+      ),
       created: true,
     };
   });
 }
 
 export async function updatePlaylist(
-  db: Database,
+  db: CoreDatabase,
+  scanDb: ScanDatabase,
   input: { userId: string; playlistId: string; update: UpdatePlaylist },
 ): Promise<PlaylistDetail> {
   return db.transaction(async (transaction) => {
@@ -260,12 +276,12 @@ export async function updatePlaylist(
         "The updated playlist could not be read back.",
       );
     }
-    return readPlaylistDetail(transaction, input.userId, updated);
+    return readPlaylistDetail(transaction, scanDb, input.userId, updated);
   });
 }
 
 export async function deletePlaylist(
-  db: Database,
+  db: CoreDatabase,
   input: { userId: string; playlistId: string },
 ): Promise<{ id: string }> {
   return db.transaction(async (transaction) => {
@@ -292,7 +308,8 @@ export async function deletePlaylist(
  * not found, never as someone else's.
  */
 export async function addPlaylistEntry(
-  db: Database,
+  db: CoreDatabase,
+  scanDb: ScanDatabase,
   input: { userId: string; playlistId: string; libraryItemId: string },
 ): Promise<{ playlist: PlaylistDetail; created: boolean }> {
   return db.transaction(async (transaction) => {
@@ -324,7 +341,12 @@ export async function addPlaylistEntry(
       .where(eq(playlistEntries.playlistId, playlist.id));
     if (entries.some((entry) => entry.libraryItemId === item.id)) {
       return {
-        playlist: await readPlaylistDetail(transaction, input.userId, playlist),
+        playlist: await readPlaylistDetail(
+          transaction,
+          scanDb,
+          input.userId,
+          playlist,
+        ),
         created: false,
       };
     }
@@ -350,6 +372,7 @@ export async function addPlaylistEntry(
     return {
       playlist: await readPlaylistDetail(
         transaction,
+        scanDb,
         input.userId,
         updated ?? playlist,
       ),
@@ -359,7 +382,7 @@ export async function addPlaylistEntry(
 }
 
 export async function removePlaylistEntry(
-  db: Database,
+  db: CoreDatabase,
   input: { userId: string; playlistId: string; entryId: string },
 ): Promise<{ id: string }> {
   return db.transaction(async (transaction) => {
@@ -389,7 +412,7 @@ export async function removePlaylistEntry(
 }
 
 async function lockPlaylist(
-  transaction: DatabaseTransaction,
+  transaction: CoreTransaction,
   userId: string,
   playlistId: string,
 ) {
@@ -405,7 +428,8 @@ async function lockPlaylist(
 }
 
 async function readPlaylistDetail(
-  db: Pick<Database, "select">,
+  db: Pick<CoreDatabase, "select">,
+  scanDb: ScanDatabase,
   userId: string,
   playlist: typeof playlists.$inferSelect,
 ): Promise<PlaylistDetail> {
@@ -420,7 +444,7 @@ async function readPlaylistDetail(
     .where(eq(playlistEntries.playlistId, playlist.id))
     .orderBy(asc(playlistEntries.position), asc(playlistEntries.id))
     .limit(MAX_PLAYLIST_ENTRIES);
-  const items = await getLibraryItemsByIdForUser(db, {
+  const items = await getLibraryItemsByIdForUser(db, scanDb, {
     userId,
     itemIds: entries.map((entry) => entry.libraryItemId),
   });

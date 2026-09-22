@@ -25,7 +25,7 @@ export const POST = withRoute(
     const context = getServerContext();
     const userId = await requireUserId(context);
 
-    const result = await submitScan(context.database.db, {
+    const result = await submitScan(context.database.scan, {
       userId,
       scanId,
       idempotencyKey,

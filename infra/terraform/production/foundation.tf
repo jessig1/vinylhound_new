@@ -199,6 +199,35 @@ resource "aws_secretsmanager_secret_version" "database_url" {
   secret_id     = aws_secretsmanager_secret.database_url.id
   secret_string = "postgresql://vinylhound:${random_password.database.result}@${aws_rds_cluster.main.endpoint}:5432/vinylhound"
 }
+
+# P4.2 Task 7 (ADR-0030): see the identical staging resources in
+# infra/terraform/environment/database.tf for the full reasoning. Production
+# keeps its own independently generated passwords.
+resource "random_password" "scan_database" {
+  length  = 32
+  special = false
+}
+resource "random_password" "core_database" {
+  length  = 32
+  special = false
+}
+resource "aws_secretsmanager_secret" "scan_database_url" {
+  name                    = "${local.name}/scan-database-url"
+  recovery_window_in_days = 30
+}
+resource "aws_secretsmanager_secret_version" "scan_database_url" {
+  secret_id     = aws_secretsmanager_secret.scan_database_url.id
+  secret_string = "postgresql://vinylhound_scan_app:${random_password.scan_database.result}@${aws_rds_cluster.main.endpoint}:5432/vinylhound"
+}
+resource "aws_secretsmanager_secret" "core_database_url" {
+  name                    = "${local.name}/core-database-url"
+  recovery_window_in_days = 30
+}
+resource "aws_secretsmanager_secret_version" "core_database_url" {
+  secret_id     = aws_secretsmanager_secret.core_database_url.id
+  secret_string = "postgresql://vinylhound_core_app:${random_password.core_database.result}@${aws_rds_cluster.main.endpoint}:5432/vinylhound"
+}
+
 resource "aws_secretsmanager_secret" "clerk_secret_key" {
   name                    = "${local.name}/clerk-secret-key"
   recovery_window_in_days = 30

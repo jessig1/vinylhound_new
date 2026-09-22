@@ -8,14 +8,12 @@ import {
   normalizeReleaseIdentityPart,
 } from "@vinylhound/domain";
 
-import type { Database } from "./database.ts";
+import type { CoreTransaction } from "./database.ts";
 import { DatabaseCommandError } from "./scan-repository.ts";
 import { albums, catalogReferences, releases } from "./schema.ts";
 import type { libraryCopies } from "./schema.ts";
 
-export type DatabaseTransaction = Parameters<
-  Parameters<Database["transaction"]>[0]
->[0];
+export type { CoreTransaction } from "./database.ts";
 
 /**
  * The reviewed release attributes that decide album and release identity,
@@ -63,7 +61,7 @@ export function hashJson(value: unknown) {
  * race each other into duplicate rows.
  */
 export async function resolveReviewedRelease(
-  transaction: DatabaseTransaction,
+  transaction: CoreTransaction,
   reviewed: ReviewedReleaseIdentity,
 ) {
   const catalogReference = reviewed.catalogReference;

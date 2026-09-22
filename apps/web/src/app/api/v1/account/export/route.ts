@@ -13,9 +13,11 @@ export const GET = withRoute(
   async (_request, { requestId }) => {
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await getAccountExportForUser(context.database.db, {
-      userId,
-    });
+    const result = await getAccountExportForUser(
+      context.database.scan,
+      context.database.core,
+      { userId },
+    );
 
     const response = jsonResponse(
       AccountExportResponseSchema.parse(result),

@@ -5,10 +5,45 @@ import {
   type ScanConfirmedEvent,
 } from "@vinylhound/contracts";
 
-import type { Database } from "./database.ts";
+import type { CoreDatabase } from "./database.ts";
 import { confirmationEventId } from "./confirmation-repository.ts";
 import { resolveReviewedRelease } from "./release-resolution.ts";
-import { confirmationReceipts, libraryCopies, libraryItems } from "./schema.ts";
+import {
+  confirmationReceipts,
+  libraryCopies,
+  libraryItems,
+  type ReviewedRelease,
+} from "./schema.ts";
+
+/**
+ * Rebuilds the same shape `confirmScan` stores as `reviewedRelease`
+ * (`confirmation-repository.ts`) directly from the delivered event -- no
+ * cross-schema read is needed, because `ScanConfirmedEventSchema` spreads the
+ * identical `ReviewedReleaseShape` the request that produced this event was
+ * validated against. Written once here so the two construction sites (this
+ * one, and `confirmScan`'s own) cannot drift in shape.
+ */
+function reviewedReleaseFromEvent(
+  payload: ScanConfirmedEvent,
+): ReviewedRelease {
+  return {
+    artist: payload.artist,
+    title: payload.title,
+    releaseYear: payload.releaseYear,
+    label: payload.label,
+    catalogNumber: payload.catalogNumber,
+    barcode: payload.barcode,
+    releaseDate: payload.releaseDate,
+    country: payload.country,
+    format: payload.format,
+    packaging: payload.packaging,
+    releaseStatus: payload.releaseStatus,
+    catalogReference: payload.catalogReference,
+    list: payload.list,
+    notes: payload.notes,
+    copy: payload.copy,
+  };
+}
 
 /**
  * The "core" side of P4.2 Task 3's async confirmation pipeline (ADR-0028):
@@ -27,7 +62,7 @@ import { confirmationReceipts, libraryCopies, libraryItems } from "./schema.ts";
  * (re-)dispatched, never a second one.
  */
 export async function processScanConfirmation(
-  db: Database,
+  db: CoreDatabase,
   payload: ScanConfirmedEvent,
 ): Promise<void> {
   const receiptKey = confirmationEventId(
@@ -72,6 +107,7 @@ export async function processScanConfirmation(
     });
 
     const now = new Date();
+    const confirmedRelease = reviewedReleaseFromEvent(payload);
     const [libraryItem] = await transaction
       .insert(libraryItems)
       .values({
@@ -80,6 +116,7 @@ export async function processScanConfirmation(
         list: payload.list,
         notes: payload.notes,
         confirmedFromScanId: payload.scanId,
+        confirmedRelease,
         updatedAt: now,
       })
       .onConflictDoUpdate({
@@ -93,6 +130,7 @@ export async function processScanConfirmation(
           end`,
           notes: payload.notes,
           confirmedFromScanId: payload.scanId,
+          confirmedRelease,
           updatedAt: now,
         },
       })

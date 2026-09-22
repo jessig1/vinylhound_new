@@ -25,10 +25,11 @@ export const GET = withRoute(
     const playlistId = parseUuid(rawPlaylistId, "playlistId");
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const playlist = await getPlaylistForUser(context.database.db, {
-      userId,
-      playlistId,
-    });
+    const playlist = await getPlaylistForUser(
+      context.database.core,
+      context.database.scan,
+      { userId, playlistId },
+    );
     const response = jsonResponse(
       GetPlaylistResponseSchema.parse({ playlist }),
       200,
@@ -53,11 +54,11 @@ export const PATCH = withRoute(
     const update = await parseJson(request, UpdatePlaylistSchema);
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const playlist = await updatePlaylist(context.database.db, {
-      userId,
-      playlistId,
-      update,
-    });
+    const playlist = await updatePlaylist(
+      context.database.core,
+      context.database.scan,
+      { userId, playlistId, update },
+    );
     const response = jsonResponse(
       GetPlaylistResponseSchema.parse({ playlist }),
       200,
@@ -75,7 +76,7 @@ export const DELETE = withRoute(
     const playlistId = parseUuid(rawPlaylistId, "playlistId");
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await deletePlaylist(context.database.db, {
+    const result = await deletePlaylist(context.database.core, {
       userId,
       playlistId,
     });

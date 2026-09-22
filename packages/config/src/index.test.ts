@@ -12,6 +12,10 @@ describe("ServerConfigSchema", () => {
     const config = ServerConfigSchema.parse({
       APP_URL: "http://localhost:3000",
       DATABASE_URL: "postgresql://vinylhound:password@localhost/vinylhound",
+      SCAN_DATABASE_URL:
+        "postgresql://vinylhound_scan_app:password@localhost/vinylhound",
+      CORE_DATABASE_URL:
+        "postgresql://vinylhound_core_app:password@localhost/vinylhound",
       REDIS_URL: "redis://localhost:6379",
       S3_REGION: "us-east-1",
       S3_BUCKET: "vinylhound",
@@ -30,6 +34,10 @@ describe("ServerConfigSchema", () => {
     const config = ServerConfigSchema.parse({
       APP_URL: "https://vinylhound.example",
       DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      SCAN_DATABASE_URL:
+        "postgresql://vinylhound_scan_app:password@db/vinylhound",
+      CORE_DATABASE_URL:
+        "postgresql://vinylhound_core_app:password@db/vinylhound",
       DATABASE_SSL_MODE: "verify-full",
       DATABASE_SSL_CA_BASE64: Buffer.from("test-ca").toString("base64"),
       REDIS_URL: "rediss://cache:6379",
@@ -46,6 +54,10 @@ describe("ServerConfigSchema", () => {
     const partialCredentials = ServerConfigSchema.safeParse({
       APP_URL: "https://vinylhound.example",
       DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      SCAN_DATABASE_URL:
+        "postgresql://vinylhound_scan_app:password@db/vinylhound",
+      CORE_DATABASE_URL:
+        "postgresql://vinylhound_core_app:password@db/vinylhound",
       REDIS_URL: "rediss://cache:6379",
       S3_REGION: "us-east-1",
       S3_BUCKET: "vinylhound",
@@ -55,6 +67,10 @@ describe("ServerConfigSchema", () => {
     const missingCa = ServerConfigSchema.safeParse({
       APP_URL: "https://vinylhound.example",
       DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      SCAN_DATABASE_URL:
+        "postgresql://vinylhound_scan_app:password@db/vinylhound",
+      CORE_DATABASE_URL:
+        "postgresql://vinylhound_core_app:password@db/vinylhound",
       DATABASE_SSL_MODE: "verify-full",
       REDIS_URL: "rediss://cache:6379",
       S3_REGION: "us-east-1",
@@ -65,12 +81,38 @@ describe("ServerConfigSchema", () => {
     expect(partialCredentials.success).toBe(false);
     expect(missingCa.success).toBe(false);
   });
+
+  it("rejects identical scan/core database URLs in production, but not elsewhere (P4.2 Task 7)", () => {
+    const matching = {
+      APP_URL: "https://vinylhound.example",
+      DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      SCAN_DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      CORE_DATABASE_URL: "postgresql://vinylhound:password@db/vinylhound",
+      REDIS_URL: "rediss://cache:6379",
+      S3_REGION: "us-east-1",
+      S3_BUCKET: "vinylhound",
+      OPENAI_API_KEY: "test-key",
+    };
+
+    expect(
+      ServerConfigSchema.safeParse({ ...matching, NODE_ENV: "production" })
+        .success,
+    ).toBe(false);
+    expect(
+      ServerConfigSchema.safeParse({ ...matching, NODE_ENV: "development" })
+        .success,
+    ).toBe(true);
+  });
 });
 
 describe("DevelopmentWebConfigSchema", () => {
   const baseEnv = {
     APP_URL: "http://localhost:3000",
     DATABASE_URL: "postgresql://vinylhound:password@localhost/vinylhound",
+    SCAN_DATABASE_URL:
+      "postgresql://vinylhound_scan_app:password@localhost/vinylhound",
+    CORE_DATABASE_URL:
+      "postgresql://vinylhound_core_app:password@localhost/vinylhound",
     REDIS_URL: "redis://localhost:6379",
     S3_REGION: "us-east-1",
     S3_BUCKET: "vinylhound",
@@ -224,6 +266,10 @@ describe("DiscoveryServiceConfigSchema", () => {
 describe("QueueWorkerConfigSchema", () => {
   const baseEnv = {
     DATABASE_URL: "postgresql://vinylhound:password@localhost/vinylhound",
+    SCAN_DATABASE_URL:
+      "postgresql://vinylhound_scan_app:password@localhost/vinylhound",
+    CORE_DATABASE_URL:
+      "postgresql://vinylhound_core_app:password@localhost/vinylhound",
     S3_REGION: "us-east-1",
     S3_BUCKET: "vinylhound",
   };

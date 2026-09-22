@@ -29,12 +29,11 @@ export const POST = withRoute(
     const confirmation = await parseJson(request, ConfirmScanRequestSchema);
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await confirmScan(context.database.db, {
-      userId,
-      scanId,
-      idempotencyKey,
-      confirmation,
-    });
+    const result = await confirmScan(
+      context.database.scan,
+      context.database.core,
+      { userId, scanId, idempotencyKey, confirmation },
+    );
 
     return jsonResponse(
       ConfirmScanResponseSchema.parse(result.record),

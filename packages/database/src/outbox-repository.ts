@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 
 import { ANALYZE_SCAN_JOB, getEventContract } from "@vinylhound/contracts";
 
-import type { Database } from "./database.ts";
+import type { ScanDatabase } from "./database.ts";
 import { outboxMessages, scans } from "./schema.ts";
 
 export type OutboxDispatchResult =
@@ -54,7 +54,7 @@ export type OutboxPublisherRegistry = Record<string, OutboxPublisher>;
  * never looked up against `scans`.
  */
 export async function dispatchNextOutboxMessage(
-  db: Database,
+  db: ScanDatabase,
   publishers: OutboxPublisherRegistry,
   now = new Date(),
 ): Promise<OutboxDispatchResult> {

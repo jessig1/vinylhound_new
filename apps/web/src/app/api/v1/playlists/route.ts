@@ -17,7 +17,9 @@ export const GET = withRoute(
   async (_request, { requestId }) => {
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const result = await listPlaylistsForUser(context.database.db, { userId });
+    const result = await listPlaylistsForUser(context.database.core, {
+      userId,
+    });
     const response = jsonResponse(
       ListPlaylistsResponseSchema.parse(result),
       200,
@@ -40,10 +42,11 @@ export const POST = withRoute(
     const parsed = await parseJson(request, CreatePlaylistSchema);
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const { playlist, created } = await createPlaylist(context.database.db, {
-      userId,
-      name: parsed.name,
-    });
+    const { playlist, created } = await createPlaylist(
+      context.database.core,
+      context.database.scan,
+      { userId, name: parsed.name },
+    );
     const response = jsonResponse(
       GetPlaylistResponseSchema.parse({ playlist }),
       created ? 201 : 200,

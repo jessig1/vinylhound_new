@@ -14,7 +14,7 @@ export const POST = withRoute(
     const context = getServerContext();
     const userId = await requireUserId(context);
 
-    const result = await createOrGetBatch(context.database.db, {
+    const result = await createOrGetBatch(context.database.scan, {
       userId,
       idempotencyKey,
     });

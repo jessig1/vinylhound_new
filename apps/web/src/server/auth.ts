@@ -31,7 +31,7 @@ async function resolveDevelopmentUserId(
 export async function requireUserId(context: ServerContext): Promise<string> {
   if (context.config.AUTH_MODE === "development") {
     const userId = await resolveDevelopmentUserId(context);
-    await ensureDevelopmentUser(context.database.db, userId);
+    await ensureDevelopmentUser(context.database.core, userId);
     return userId;
   }
 
@@ -39,5 +39,5 @@ export async function requireUserId(context: ServerContext): Promise<string> {
   if (!clerkUserId) {
     throw new HttpError(401, "unauthenticated", "Sign in is required.");
   }
-  return getOrCreateUserIdByClerkId(context.database.db, clerkUserId);
+  return getOrCreateUserIdByClerkId(context.database.core, clerkUserId);
 }

@@ -1,5 +1,8 @@
 import type { ScanConfirmedEvent } from "@vinylhound/contracts";
-import { processScanConfirmation, type Database } from "@vinylhound/database";
+import {
+  processScanConfirmation,
+  type CoreDatabase,
+} from "@vinylhound/database";
 
 export interface ConfirmationProcessingDelivery {
   jobId: string;
@@ -8,7 +11,7 @@ export interface ConfirmationProcessingDelivery {
 }
 
 export interface ConfirmationProcessingHandlerOptions {
-  database: Database;
+  database: CoreDatabase;
 }
 
 /**

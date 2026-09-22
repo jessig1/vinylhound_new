@@ -166,6 +166,16 @@ resource "aws_sqs_queue_redrive_allow_policy" "confirmation_completion" {
 resource "aws_secretsmanager_secret" "runtime" {
   for_each = toset([
     "database-url",
+    # P4.2 Task 7 (ADR-0030): unlike staging/production's Aurora-backed
+    # secrets, development's database is externally supplied (not Terraform-
+    # managed), so these two placeholders carry no generated password --
+    # same as database-url above, the maintainer must set their real values
+    # (pointing at two least-privilege Postgres roles on the same database
+    # database-url names) before the next deploy-development.yml run, or
+    # migration 021's GRANT statements will fail for lack of the roles they
+    # name.
+    "scan-database-url",
+    "core-database-url",
     "clerk-secret-key",
     "clerk-publishable-key",
     "openai-api-key"

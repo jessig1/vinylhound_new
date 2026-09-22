@@ -13,3 +13,4 @@ export * from "./playlist-repository.ts";
 export * from "./release-resolution.ts";
 export * from "./scan-repository.ts";
 export * from "./schema.ts";
+export * from "./user-repository.ts";

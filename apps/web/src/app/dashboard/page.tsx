@@ -21,23 +21,26 @@ export default async function DashboardPage() {
   const userId = await requireUserId(context);
   const [scans, collection, wishlist, collectionCount, wishlistCount] =
     await Promise.all([
-      listScansForUser(context.database.db, { userId, limit: 3 }),
+      listScansForUser(context.database.scan, context.database.core, {
+        userId,
+        limit: 3,
+      }),
       // The previews show three records each; the counts come separately.
-      listLibraryItemsForUser(context.database.db, {
+      listLibraryItemsForUser(context.database.core, context.database.scan, {
         userId,
         list: "collection",
         limit: 3,
       }),
-      listLibraryItemsForUser(context.database.db, {
+      listLibraryItemsForUser(context.database.core, context.database.scan, {
         userId,
         list: "wishlist",
         limit: 3,
       }),
-      countLibraryItemsForUser(context.database.db, {
+      countLibraryItemsForUser(context.database.core, {
         userId,
         list: "collection",
       }),
-      countLibraryItemsForUser(context.database.db, {
+      countLibraryItemsForUser(context.database.core, {
         userId,
         list: "wishlist",
       }),

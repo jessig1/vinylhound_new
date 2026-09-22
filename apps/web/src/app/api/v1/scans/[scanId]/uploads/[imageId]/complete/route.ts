@@ -43,7 +43,7 @@ export const POST = withRoute(
       scanId,
       imageId,
     };
-    const image = await getImageUploadForUser(context.database.db, lookup);
+    const image = await getImageUploadForUser(context.database.scan, lookup);
 
     if (image.completedAt) {
       return completedResponse(image, requestId);
@@ -92,7 +92,7 @@ export const POST = withRoute(
     const normalizationPhaseDurationMs =
       Date.now() - normalizationPhaseStartedAt;
 
-    const completed = await completeImageUpload(context.database.db, {
+    const completed = await completeImageUpload(context.database.scan, {
       ...lookup,
       width: validated.width,
       height: validated.height,

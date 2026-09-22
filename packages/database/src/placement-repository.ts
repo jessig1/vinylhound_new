@@ -5,7 +5,7 @@ import type {
   PlaceLibraryReleaseResponse,
 } from "@vinylhound/contracts";
 
-import type { Database } from "./database.ts";
+import type { CoreDatabase } from "./database.ts";
 import { resolveReviewedRelease, serializeCopy } from "./release-resolution.ts";
 import { DatabaseCommandError } from "./scan-repository.ts";
 import { libraryCopies, libraryItems } from "./schema.ts";
@@ -28,7 +28,7 @@ import { libraryCopies, libraryItems } from "./schema.ts";
  *    adds the second through per-copy editing, where that intent is explicit.
  */
 export async function placeLibraryRelease(
-  db: Database,
+  db: CoreDatabase,
   input: {
     userId: string;
     placement: PlaceLibraryRelease;

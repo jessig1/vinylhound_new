@@ -84,26 +84,38 @@ in P4.1 Task 5 alongside its own ECR repository and IAM/Pod execution role.
 Development is unaffected: it keeps the in-process adapter under ADR-0025's
 tier scope.
 
-## Scan and core services (P4.2, ADR-0027, ADR-0028)
+## Scan and core services (P4.2, ADR-0027 through ADR-0030)
 
-Roadmap P4.2 extracts a second boundary: `scan` (scans, batches, images,
-attempts, and reviewed confirmations) and `core` (users, catalog, library,
-copies, favorites, and playlists). ADR-0027 assigns each of the fifteen
-existing tables to one of the two and keeps a single physical PostgreSQL
-deployment for now — two Postgres schemas and two least-privilege
-credentials, no cross-schema `GRANT`, replacing today's single undivided
-schema and single `DATABASE_URL`. Eight existing foreign keys will cross the
-new schema line once it takes effect, named exactly in ADR-0027; three
-(`scans`/`batches`/`scan_confirmations` → `users`, `cascade`, and
-`library_items`/`library_copies` → `scans`, `set null`) stay in place until
-Task 7's physical cutover, since a same-schema cascade/set-null costs nothing
-today. The other two (`scan_confirmations.release_id` and
-`confirmation_receipts.release_id`, both `restrict`) were replaced by Task 6
-(ADR-0029) with `set null` plus each row's own durable audit
-projection (`reviewedRelease`/`payload`), ahead of Task 7, since a
-cross-schema `restrict` cannot survive the physical split at all. No schema,
-role, or credential changes exist yet — the tables still live in one
-undivided schema — but Task 3's transaction split (below) is done.
+Roadmap P4.2 extracted a second boundary: `scan` (scans, batches, images,
+attempts, reviewed confirmations, and the outbox) and `core` (users,
+catalog, library, copies, favorites, playlists, and confirmation receipts).
+**Task 7 (ADR-0030) completed the physical cutover**: two Postgres schemas
+and two least-privilege roles (`vinylhound_scan_app`/`vinylhound_core_app`)
+in one physical PostgreSQL deployment, no cross-schema `GRANT` in either
+direction, replacing the single undivided schema and single `DATABASE_URL`
+every prior P4.2 task worked ahead of. Every repository function now takes
+a role-scoped, compiler-checked `ScanDatabase` or `CoreDatabase` handle
+(`packages/database/src/database.ts`) instead of one opaque connection;
+`apps/web`'s and `apps/worker`'s entry points construct both at startup and
+route each call, handler, and background sweep to the one matching the
+table(s) it touches. The eight cross-schema foreign keys ADR-0027 named are
+gone (migration 022, the "writer switch"): three `→ users` cascades became
+plain UUID attributes (an authenticated-request-path invariant, as
+ADR-0027 predicted), `confirmed_from_scan_id` became a fixed audit
+reference, and the three remaining `scan_confirmations` FKs into `core`
+became soft references backed by application-level liveness checks and
+best-effort projections. **A Postgres nuance worth stating plainly**: a
+cross-schema FK's referential-integrity check runs with the referenced
+table's owner rights, not the connecting role's, so those eight FKs kept
+silently working through the schema/role split itself (migration 021,
+additive and behavior-neutral by design) — the GRANT boundary alone never
+removed them; migration 022 dropping them on purpose is what actually did.
+See ADR-0030 for the full design, including the account-deletion
+two-phase workflow, the ADR-0018 liveness/self-heal replacement for the
+FKs that used to null a stale reference automatically, and the denormalized
+`library_items.confirmed_release` that replaced library reads' only
+cross-schema SQL join (search/sort/pagination, ADR-0023, cannot span two
+connections).
 
 **Task 6 (ADR-0029) made account deletion a durable, drain-then-delete
 workflow**, closing the coupling `deleteAccount`'s single cross-schema
@@ -138,8 +150,8 @@ The scan page's existing queued/processing poll loop now also polls while a
 confirmation is `pending`, so the UI never reports a completed save before
 the projection lands. See ADR-0028 for the full design (Task 4: replay/
 conflict polish and UI; Task 5: isolated dispatch and a latency target; Task
-6, ADR-0029: the FK policy and account-deletion rework, below) and what
-remains: Task 7's physical schema/role/process cutover.
+6, ADR-0029: the FK policy and account-deletion rework; Task 7, ADR-0030,
+above: the physical schema/role/connection cutover that completes P4.2).
 
 **Task 5 isolated hop 1 -> 2 dispatch from scan-analysis dispatch and set a
 latency target.** `dispatchNextOutboxMessage` now scopes its claim to the

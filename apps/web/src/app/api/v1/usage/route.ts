@@ -18,7 +18,7 @@ export const GET = withRoute("usage.get", async (_request, { requestId }) => {
     Date.now() - USAGE_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
   );
 
-  const summary = await getUsageSummaryForUser(context.database.db, {
+  const summary = await getUsageSummaryForUser(context.database.scan, {
     userId,
     since,
   });

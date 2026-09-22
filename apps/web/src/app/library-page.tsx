@@ -30,12 +30,11 @@ export async function LibraryPage({
 
   const context = getServerContext();
   const userId = await requireUserId(context);
-  const library = await listLibraryItemsForUser(context.database.db, {
-    userId,
-    list,
-    query,
-    sort,
-  });
+  const library = await listLibraryItemsForUser(
+    context.database.core,
+    context.database.scan,
+    { userId, list, query, sort },
+  );
   const wishlist = list === "wishlist";
 
   return (

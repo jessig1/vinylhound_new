@@ -35,12 +35,16 @@ export const GET = withRoute(
     }
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const pages = iterateLibraryItemsForUser(context.database.db, {
-      userId,
-      list: parsedQuery.data.list,
-      query: parsedQuery.data.q,
-      sort: parsedQuery.data.sort,
-    });
+    const pages = iterateLibraryItemsForUser(
+      context.database.core,
+      context.database.scan,
+      {
+        userId,
+        list: parsedQuery.data.list,
+        query: parsedQuery.data.q,
+        sort: parsedQuery.data.sort,
+      },
+    );
     // The first page is read before the response starts so a database
     // failure still surfaces as an error status rather than an empty file.
     const first = await pages.next();

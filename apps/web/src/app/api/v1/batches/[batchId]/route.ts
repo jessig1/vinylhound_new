@@ -24,13 +24,16 @@ export const GET = withRoute(
     const context = getServerContext();
     const userId = await requireUserId(context);
 
-    const { batch, scanIds } = await getBatchForUser(context.database.db, {
+    const { batch, scanIds } = await getBatchForUser(context.database.scan, {
       userId,
       batchId,
     });
     const [scanSummaries, cost] = await Promise.all([
-      listScanSummariesForUser(context.database.db, { userId, scanIds }),
-      getBatchCostSummary(context.database.db, { batchId, scanIds }),
+      listScanSummariesForUser(context.database.scan, context.database.core, {
+        userId,
+        scanIds,
+      }),
+      getBatchCostSummary(context.database.scan, { batchId, scanIds }),
     ]);
 
     const response = jsonResponse(

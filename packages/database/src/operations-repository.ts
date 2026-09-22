@@ -6,10 +6,10 @@ import {
   type AnalyzeScanJob,
 } from "@vinylhound/contracts";
 
-import type { Database } from "./database.ts";
+import type { ScanDatabase } from "./database.ts";
 import { outboxMessages, scans } from "./schema.ts";
 
-export async function getOperationalDrainState(db: Database) {
+export async function getOperationalDrainState(db: ScanDatabase) {
   const [scanState] = await db
     .select({
       activeScans: sql<number>`count(*) filter (where ${scans.status} in ('queued', 'processing'))::int`,
@@ -27,7 +27,7 @@ export async function getOperationalDrainState(db: Database) {
 }
 
 export async function listRepublishableAnalysisJobs(
-  db: Database,
+  db: ScanDatabase,
   limit = 100,
 ): Promise<Array<{ job: AnalyzeScanJob; idempotencyKey: string }>> {
   const rows = await db

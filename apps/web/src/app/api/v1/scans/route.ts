@@ -36,7 +36,8 @@ export const GET = withRoute("scans.list", async (request, { requestId }) => {
 
   const userId = await requireUserId(context);
   const { summaries, nextCursor } = await listScansForUser(
-    context.database.db,
+    context.database.scan,
+    context.database.core,
     {
       userId,
       limit: MAX_SCANS_PER_PAGE,
@@ -64,7 +65,7 @@ export const POST = withRoute(
     const context = getServerContext();
     const userId = await requireUserId(context);
 
-    const result = await createOrGetScan(context.database.db, {
+    const result = await createOrGetScan(context.database.scan, {
       userId,
       source: input.source,
       idempotencyKey,

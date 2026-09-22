@@ -26,7 +26,7 @@ export const GET = withRoute(
     const imageId = parseUuid(rawImageId, "imageId");
     const context = getServerContext();
     const userId = await requireUserId(context);
-    const image = await getImageUploadForUser(context.database.db, {
+    const image = await getImageUploadForUser(context.database.scan, {
       userId,
       scanId,
       imageId,

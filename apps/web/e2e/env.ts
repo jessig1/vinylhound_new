@@ -17,15 +17,31 @@ export const repoRoot = path.resolve(__dirname, "../../..");
  * AUTH_MODE=production in .env would otherwise redirect every test to
  * /sign-in and fail the whole suite.
  */
+function e2eDatabaseUrl(envVar: string, fallback: string): string {
+  const url = new URL(process.env[envVar] ?? fallback);
+  url.pathname = `/${E2E_DATABASE_NAME}`;
+  return url.toString();
+}
+
 export function buildE2eEnv(): Record<string, string> {
   loadEnvConfig(repoRoot, true, console, true);
-  const url = new URL(
-    process.env.DATABASE_URL ??
-      "postgresql://vinylhound:vinylhound@localhost:5432/vinylhound",
-  );
-  url.pathname = `/${E2E_DATABASE_NAME}`;
   return {
-    DATABASE_URL: url.toString(),
+    DATABASE_URL: e2eDatabaseUrl(
+      "DATABASE_URL",
+      "postgresql://vinylhound:vinylhound@localhost:5432/vinylhound",
+    ),
+    // P4.2 Task 7 (ADR-0030): the e2e worker's own DATABASE_URL guard
+    // (apps/worker/src/e2e-worker.ts) only refuses to start against a
+    // non-e2e database; every actual query runs through these two role
+    // credentials instead, isolated to the same e2e database by name.
+    SCAN_DATABASE_URL: e2eDatabaseUrl(
+      "SCAN_DATABASE_URL",
+      "postgresql://vinylhound_scan_app:vinylhound_scan@localhost:5432/vinylhound",
+    ),
+    CORE_DATABASE_URL: e2eDatabaseUrl(
+      "CORE_DATABASE_URL",
+      "postgresql://vinylhound_core_app:vinylhound_core@localhost:5432/vinylhound",
+    ),
     SCAN_QUEUE_NAME: "vinylhound-scans-e2e",
     // P4.2 Task 3: same isolation as SCAN_QUEUE_NAME above, so the e2e
     // worker's confirmation pipeline never shares a BullMQ queue with a

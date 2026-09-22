@@ -31,7 +31,7 @@ export const POST = withRoute(
     const context = getServerContext();
     const userId = await requireUserId(context);
 
-    const result = await createOrGetImageUpload(context.database.db, {
+    const result = await createOrGetImageUpload(context.database.scan, {
       userId,
       scanId,
       idempotencyKey,

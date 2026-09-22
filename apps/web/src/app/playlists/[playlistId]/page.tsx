@@ -25,10 +25,11 @@ export default async function PlaylistPage({
 
   const context = getServerContext();
   const userId = await requireUserId(context);
-  const playlist = await getPlaylistForUser(context.database.db, {
-    userId,
-    playlistId,
-  }).catch((error: unknown) => {
+  const playlist = await getPlaylistForUser(
+    context.database.core,
+    context.database.scan,
+    { userId, playlistId },
+  ).catch((error: unknown) => {
     if (error instanceof DatabaseCommandError && error.code === "not_found") {
       notFound();
     }

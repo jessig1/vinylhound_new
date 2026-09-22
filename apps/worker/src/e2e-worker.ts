@@ -10,10 +10,12 @@ import {
   type ScanConfirmedEvent,
 } from "@vinylhound/contracts";
 import {
-  createDatabase,
-  databaseOptionsFromConfig,
+  coreDatabaseOptionsFromConfig,
+  createCoreDatabase,
+  createScanDatabase,
   dispatchNextConfirmationReceipt,
   dispatchNextOutboxMessage,
+  scanDatabaseOptionsFromConfig,
 } from "@vinylhound/database";
 import {
   createAnalyzeScanWorker,
@@ -35,7 +37,11 @@ import { createConfirmationProcessingHandler } from "./confirmation-processing-h
 
 const config = loadQueueWorkerConfig();
 
-if (!config.DATABASE_URL.includes("vinylhound_e2e")) {
+if (
+  !config.DATABASE_URL.includes("vinylhound_e2e") ||
+  !config.SCAN_DATABASE_URL.includes("vinylhound_e2e") ||
+  !config.CORE_DATABASE_URL.includes("vinylhound_e2e")
+) {
   throw new Error(
     "Refusing to start: the e2e worker must point at the vinylhound_e2e database.",
   );
@@ -83,7 +89,8 @@ const syntheticIdentifier: AlbumIdentifier = {
   },
 };
 
-const database = createDatabase(databaseOptionsFromConfig(config));
+const scanDatabase = createScanDatabase(scanDatabaseOptionsFromConfig(config));
+const coreDatabase = createCoreDatabase(coreDatabaseOptionsFromConfig(config));
 const queue = createBullMqScanQueue({
   redisUrl: config.REDIS_URL!,
   queueName: config.SCAN_QUEUE_NAME,
@@ -101,7 +108,7 @@ const analysisWorker = createAnalyzeScanWorker({
   queueName: config.SCAN_QUEUE_NAME,
   concurrency: config.ANALYSIS_CONCURRENCY,
   onAnalyzeScan: createScanAnalysisHandler({
-    database: database.db,
+    database: scanDatabase.db,
     storage,
     identifier: syntheticIdentifier,
     configuredModel: "e2e-synthetic-vision",
@@ -125,7 +132,7 @@ const confirmationProcessingWorker = createConfirmationProcessingWorker({
   redisUrl: config.REDIS_URL!,
   queueName: config.CONFIRMATION_PROCESSING_QUEUE_NAME,
   onScanConfirmed: createConfirmationProcessingHandler({
-    database: database.db,
+    database: coreDatabase.db,
   }),
   onError: (error) => {
     console.error("[e2e-worker] confirmation-processing consumer error", {
@@ -141,7 +148,7 @@ const confirmationCompletionWorker = createConfirmationCompletionWorker({
   redisUrl: config.REDIS_URL!,
   queueName: config.CONFIRMATION_COMPLETION_QUEUE_NAME,
   onConfirmationCompleted: createConfirmationCompletionHandler({
-    database: database.db,
+    database: scanDatabase.db,
   }),
   onError: (error) => {
     console.error("[e2e-worker] confirmation-completion consumer error", {
@@ -162,7 +169,7 @@ let nextConfirmationReceiptPoll: NodeJS.Timeout | undefined;
 async function poll() {
   try {
     while (!stopping) {
-      const result = await dispatchNextOutboxMessage(database.db, {
+      const result = await dispatchNextOutboxMessage(scanDatabase.db, {
         [ANALYZE_SCAN_JOB]: async (payload, idempotencyKey) => {
           await queue.enqueueAnalyzeScan(
             payload as AnalyzeScanJob,
@@ -188,7 +195,7 @@ async function poll() {
 async function confirmedEventPoll() {
   try {
     while (!stopping) {
-      const result = await dispatchNextOutboxMessage(database.db, {
+      const result = await dispatchNextOutboxMessage(scanDatabase.db, {
         [SCAN_CONFIRMED_EVENT]: async (payload, idempotencyKey) => {
           await confirmationProcessingQueue.enqueue(
             payload as ScanConfirmedEvent,
@@ -218,7 +225,7 @@ async function confirmationReceiptPoll() {
   try {
     while (!stopping) {
       const result = await dispatchNextConfirmationReceipt(
-        database.db,
+        coreDatabase.db,
         async (payload, idempotencyKey) => {
           await confirmationCompletionQueue.enqueue(
             payload as ConfirmationCompletedEvent,
@@ -265,7 +272,8 @@ async function shutdown() {
     queue.close(),
     confirmationProcessingQueue.close(),
     confirmationCompletionQueue.close(),
-    database.close(),
+    scanDatabase.close(),
+    coreDatabase.close(),
   ]);
 }
 
