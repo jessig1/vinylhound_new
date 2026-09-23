@@ -13,11 +13,15 @@ on:
       skip_activation_check:
         description: >-
           Run terraform apply -var environment_active=false unconditionally,
-          bypassing the SSM active-flag gate and the Kubernetes drain/cleanup
-          steps. Use only when Terraform state and the SSM flag have drifted
-          out of sync with real AWS state (e.g. a prior destroy died mid-poll
-          after its credentials expired) and the normal gate is wrongly
-          reporting the environment as already inactive.
+          bypassing the SSM active-flag gate. Still attempts a best-effort
+          Kubernetes drain first if the cluster is reachable (same as the
+          normal path, capped at 2.5 minutes instead of 10, non-fatal if the
+          cluster is unreachable or already gone). Use only when Terraform
+          state and the SSM flag have drifted out of sync with real AWS state
+          (e.g. a prior destroy died mid-poll after its credentials expired)
+          and the normal gate is wrongly reporting the environment as already
+          inactive. See "Emergency production deactivation inputs" in
+          docs/OPERATIONS.md before using this.
         required: true
         default: false
         type: boolean
@@ -25,7 +29,12 @@ on:
         description: >-
           Terraform state lock ID to force-unlock before applying (from a
           previous "Error acquiring the state lock" message's "ID:" field).
-          Leave blank if there is no orphaned lock to clear.
+          This repository's production-platform concurrency group already
+          prevents two GitHub Actions runs from racing each other, but it
+          cannot see a manual `terraform apply` run outside GitHub Actions —
+          confirm no one is running Terraform against the production root
+          directly before using this. Leave blank if there is no orphaned
+          lock to clear.
         required: false
         default: ""
         type: string
@@ -82,6 +91,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-duration-seconds: 14400
           aws-region: ${{ env.AWS_REGION }}
       - name: Check activation and expiry
         if: steps.configuration.outputs.configured == 'true'
@@ -131,6 +141,30 @@ jobs:
       - name: Release an orphaned state lock from a crashed apply
         if: steps.configuration.outputs.configured == 'true' && inputs.skip_activation_check == true && inputs.stale_lock_id != ''
         run: terraform -chdir=infra/terraform/production force-unlock -force "${{ inputs.stale_lock_id }}"
+      - name: Attempt best-effort drain before forced teardown
+        if: steps.configuration.outputs.configured == 'true' && inputs.skip_activation_check == true
+        continue-on-error: true
+        run: |
+          cluster="$(terraform -chdir=infra/terraform/production output -raw eks_cluster_name 2>/dev/null || true)"
+          if [[ -z "$cluster" || "$cluster" == "null" ]]; then
+            echo "::notice title=Skipping best-effort drain::No eks_cluster_name in state; the cluster is likely already gone."
+            exit 0
+          fi
+          if ! aws eks update-kubeconfig --name "$cluster" --region "$AWS_REGION"; then
+            echo "::notice title=Skipping best-effort drain::Cluster $cluster is not reachable."
+            exit 0
+          fi
+          kubectl -n vinylhound delete horizontalpodautoscaler web --ignore-not-found || true
+          kubectl -n vinylhound scale deployment/web --replicas=0 || true
+          kubectl -n vinylhound wait --for=delete pod -l app.kubernetes.io/name=vinylhound-web --timeout=1m || true
+          for attempt in {1..5}; do
+            if kubectl -n vinylhound exec deployment/worker -- node apps/worker/dist/ops.js drain-check; then
+              echo "Best-effort drain succeeded."
+              break
+            fi
+            echo "Best-effort drain check failed (attempt $attempt/5); the forced teardown below still proceeds regardless."
+            sleep 30
+          done
       - name: Apply teardown without the activation gate
         if: steps.configuration.outputs.configured == 'true' && inputs.skip_activation_check == true
         env:

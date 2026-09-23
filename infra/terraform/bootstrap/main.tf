@@ -106,6 +106,20 @@ locals {
     "iam:TagPolicy", "iam:TagRole", "iam:UntagPolicy", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
     "logs:*", "rds:*", "route53:*", "s3:*", "secretsmanager:*", "sns:*", "ssm:*", "sts:GetCallerIdentity"
   ]
+
+  # Which repository subject may assume each environment's deploy role.
+  # "development" was transferred to the platform repository (P4.3 Task 3,
+  # 2026-09-22): the old repository's writer is frozen
+  # (deploy-development.yml disabled in vinylhound_new) and the cutover
+  # deploy from vinylhound-platform is verified live, so only the platform
+  # repository is trusted now — single-writer discipline, no dual trust left
+  # over. staging/production are untouched, still trusting only the
+  # application repository, pending their own future transfer.
+  deploy_trusted_subjects = {
+    development = ["${var.github_oidc_subject_prefix_platform}:environment:development"]
+    staging     = ["${var.github_oidc_subject_prefix}:environment:staging"]
+    production  = ["${var.github_oidc_subject_prefix}:environment:production"]
+  }
 }
 
 data "aws_iam_policy_document" "plan_assume" {
@@ -155,7 +169,7 @@ resource "aws_iam_role_policy" "github_plan_state" {
 }
 
 data "aws_iam_policy_document" "deploy_assume" {
-  for_each = toset(["development", "staging", "production"])
+  for_each = local.deploy_trusted_subjects
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
@@ -170,15 +184,16 @@ data "aws_iam_policy_document" "deploy_assume" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["${var.github_oidc_subject_prefix}:environment:${each.key}"]
+      values   = each.value
     }
   }
 }
 
 resource "aws_iam_role" "github_deploy" {
-  for_each           = data.aws_iam_policy_document.deploy_assume
-  name               = "vinylhound-github-${each.key}-deploy"
-  assume_role_policy = each.value.json
+  for_each             = data.aws_iam_policy_document.deploy_assume
+  name                 = "vinylhound-github-${each.key}-deploy"
+  assume_role_policy   = each.value.json
+  max_session_duration = 14400 # 4h; production activation/deactivation can run long (issue #9)
 }
 
 resource "aws_iam_role_policy" "github_deploy" {
@@ -192,5 +207,58 @@ resource "aws_iam_role_policy" "github_deploy" {
       Action   = local.deploy_actions
       Resource = "*"
     }]
+  })
+}
+
+# P4.3 Task 3 (ADR-0031's two-axis OIDC narrowing): a narrow role for the
+# application repository's own build-and-push workflow, replacing its prior
+# use of the broad per-environment deploy role for a plain `docker push`.
+data "aws_iam_policy_document" "ecr_push_assume" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [local.github_oidc_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["${var.github_oidc_subject_prefix}:ref:refs/heads/main"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_ecr_push" {
+  name               = "vinylhound-github-ecr-push"
+  assume_role_policy = data.aws_iam_policy_document.ecr_push_assume.json
+}
+
+resource "aws_iam_role_policy" "github_ecr_push" {
+  name = "ecr-push"
+  role = aws_iam_role.github_ecr_push.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer",
+          "ecr:PutImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload", "ecr:DescribeImages", "ecr:DescribeRepositories",
+          "ecr:BatchGetImage"
+        ]
+        Resource = [for r in aws_ecr_repository.application : r.arn]
+      }
+    ]
   })
 }

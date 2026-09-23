@@ -39,6 +39,23 @@ variable "github_oidc_subject_prefix" {
   }
 }
 
+variable "github_oidc_subject_prefix_platform" {
+  description = <<-EOT
+    Exact GitHub OIDC sub claim prefix for the platform repository
+    (P4.3 Task 3's transfer target), including immutable owner and
+    repository IDs. Trusted alongside github_oidc_subject_prefix for any
+    environment's deploy role that has been transferred to the platform
+    repository.
+  EOT
+  type        = string
+  default     = "repo:jessig1@13804284/vinylhound-platform@1382543962"
+
+  validation {
+    condition     = startswith(var.github_oidc_subject_prefix_platform, "repo:") && !endswith(var.github_oidc_subject_prefix_platform, ":")
+    error_message = "github_oidc_subject_prefix_platform must be the exact GitHub OIDC prefix beginning with repo: and without a trailing colon."
+  }
+}
+
 variable "create_github_oidc_provider" {
   description = "Disable when the account already has GitHub's OIDC provider."
   type        = bool

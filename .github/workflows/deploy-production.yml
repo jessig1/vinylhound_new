@@ -72,6 +72,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-duration-seconds: 14400
           aws-region: ${{ env.AWS_REGION }}
       - env: { BREAK_GLASS: "${{ inputs.break_glass }}" }
         run: bash scripts/aws/check-monthly-cost.sh 20 "$BREAK_GLASS"
