@@ -113,12 +113,21 @@ locals {
   # (deploy-development.yml/deploy-staging.yml disabled in vinylhound_new)
   # and each cutover deploy from vinylhound-platform is verified live, so
   # only the platform repository is trusted now — single-writer discipline,
-  # no dual trust left over. "production" is untouched, still trusting only
-  # the application repository, pending its own future transfer.
+  # no dual trust left over. "production" is mid-transfer (P4.3 Task 3,
+  # 2026-09-23), plumbing-only per the maintainer's explicit choice (no
+  # activation cycle, since issue #8 still gates a real production
+  # rehearsal): dual-trusted while vinylhound-platform's deploy-production.yml
+  # is rehearsed; narrow to the platform prefix alone once the rehearsal
+  # plan is verified — this transfer does not include an activation cutover,
+  # so there is no "cutover deploy" milestone to wait for the way
+  # development/staging had.
   deploy_trusted_subjects = {
     development = ["${var.github_oidc_subject_prefix_platform}:environment:development"]
     staging     = ["${var.github_oidc_subject_prefix_platform}:environment:staging"]
-    production  = ["${var.github_oidc_subject_prefix}:environment:production"]
+    production = [
+      "${var.github_oidc_subject_prefix}:environment:production",
+      "${var.github_oidc_subject_prefix_platform}:environment:production",
+    ]
   }
 }
 
