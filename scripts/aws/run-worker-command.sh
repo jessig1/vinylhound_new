@@ -2,15 +2,24 @@
 set -euo pipefail
 
 operation="${1:-}"
+# --experimental-transform-types: an ECS containerOverrides command replaces
+# the image's own CMD entirely (Dockerfile.worker's CMD, not ENTRYPOINT), so
+# this flag must be repeated here or the cross-package .ts resolution these
+# scripts also hit (packages/*'s constructor parameter properties, e.g.
+# scan-repository.ts's DatabaseCommandError) throws
+# ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX in Node's default strip-only mode — see
+# Dockerfile.worker's own CMD comment for the full explanation. Found live
+# via P4.3 Task 3's staging cutover (the first real migrate invocation
+# staging has ever run), not by inspection.
 case "$operation" in
   migrate)
-    command_json='["node","apps/worker/dist/migrate.js"]'
+    command_json='["node","--experimental-transform-types","apps/worker/dist/migrate.js"]'
     ;;
   drain-check)
-    command_json='["node","apps/worker/dist/ops.js","drain-check"]'
+    command_json='["node","--experimental-transform-types","apps/worker/dist/ops.js","drain-check"]'
     ;;
   reconcile-queue)
-    command_json='["node","apps/worker/dist/ops.js","reconcile-queue"]'
+    command_json='["node","--experimental-transform-types","apps/worker/dist/ops.js","reconcile-queue"]'
     ;;
   *)
     echo "Usage: $0 <migrate|drain-check|reconcile-queue>" >&2

@@ -158,7 +158,7 @@ jobs:
           kubectl -n vinylhound scale deployment/web --replicas=0 || true
           kubectl -n vinylhound wait --for=delete pod -l app.kubernetes.io/name=vinylhound-web --timeout=1m || true
           for attempt in {1..5}; do
-            if kubectl -n vinylhound exec deployment/worker -- node apps/worker/dist/ops.js drain-check; then
+            if kubectl -n vinylhound exec deployment/worker -- node --experimental-transform-types apps/worker/dist/ops.js drain-check; then
               echo "Best-effort drain succeeded."
               break
             fi
@@ -196,7 +196,7 @@ jobs:
         run: |
           drained=false
           for attempt in {1..10}; do
-            if kubectl -n vinylhound exec deployment/worker -- node apps/worker/dist/ops.js drain-check; then
+            if kubectl -n vinylhound exec deployment/worker -- node --experimental-transform-types apps/worker/dist/ops.js drain-check; then
               drained=true
               break
             fi
