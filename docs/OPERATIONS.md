@@ -486,11 +486,15 @@ vinylhound_migrations` (from `packages/database`, or with
    run `ALTER TABLE ... VALIDATE CONSTRAINT <name>` for each of the eight
    once you have reconciled any row that would fail it (in practice, none
    should: the FKs these replace were already unenforced in the direction
-   that matters for as long as 022 was live). **Not yet built**: a
-   deployed-environment-compatible way to run that `VALIDATE CONSTRAINT`
-   pass itself (today this still needs either a local checkout pointed at
-   the deployed database, or a new dedicated `ops.ts` command — the same gap
-   category as the rollback command this task added). **2026-09-23 re-run**:
+   that matters for as long as 022 was live). **Now built for a deployed
+   environment** too: `bash scripts/aws/run-worker-command.sh validate-fks`
+   runs `apps/worker/dist/validate-fks.js`
+   (`validateScanCoreForeignKeys` in `packages/database/src/migrations.ts`,
+   same admin connection as migrate/rollback — table ownership, not the
+   scan-/core-scoped app roles, is what `VALIDATE CONSTRAINT` needs) and
+   reports a per-constraint `valid`/`error` result rather than stopping at
+   the first failure, so an operator can see exactly which of the eight
+   still have a real violation to reconcile. **2026-09-23 re-run**:
    `apps/worker/dist/rollback.js 1` reversed `022` cleanly against the local
    dev database's real data with zero row-count change across every table.
    All eight FKs came back `NOT VALID`, confirmed directly against
@@ -546,8 +550,14 @@ vinylhound_migrations` (from `packages/database`, or with
    attempting this step there, e.g. via `build-staging-images.yml` at the
    commit immediately before `021`/`022` were added
    (`git log --oneline --diff-filter=A -- packages/database/migrations/021_scan_core_schema_split.sql`'s
-   parent). This step is straightforward against a local checkout, which
-   just runs whatever commit is checked out directly, no image involved.
+   parent). Dispatching that workflow needs a ref where it exists, which the
+   pre-cutover commit predates — push a temporary branch at that commit with
+   only the current workflow file added (no application source changed)
+   rather than reverting the schema-split commit forward onto `main` (an
+   earlier session's attempt at that produced unmanageable conflicts across
+   nearly every file in `apps/web`). This step is straightforward against a
+   local checkout, which just runs whatever commit is checked out directly,
+   no image involved.
    **2026-09-23 re-run**: used a `git worktree add` checked out at that
    parent commit (`160073a9cd158aba89fc421153b89d1c9557549a`) as a
    subdirectory of the main checkout (so its bare-specifier imports still
