@@ -459,17 +459,34 @@ state rather than an empty database:
    `confirmation_receipts` row, and one account with `deletion_requested_at`
    set — the same shapes `packages/database/src/schema.integration.ts`'s own
    test suite seeds for the pipeline's other tests.
-2. `npx node-pg-migrate down --count 1 --migrations-dir packages/database/migrations
---migrations-table vinylhound_migrations` (from `packages/database`, or
-   with `--migration-dir`/table flags adjusted for the repo root) reverses
-   `022` alone: the eight FKs come back `NOT VALID` (a row orphaned while
-   they were absent must not make the rollback itself fail) and the three
-   replacement indexes are dropped. Confirm zero rows were lost, then run
-   `ALTER TABLE ... VALIDATE CONSTRAINT <name>` for each of the eight once you
-   have reconciled any row that would fail it (in practice, none should: the
-   FKs these replace were already unenforced in the direction that matters
-   for as long as 022 was live).
-3. `--count 1` again reverses `021`: both schemas move back to `public`,
+2. **Local dev checkout**: `npx node-pg-migrate down --count 1
+--migrations-dir packages/database/migrations --migrations-table
+vinylhound_migrations` (from `packages/database`, or with
+   `--migration-dir`/table flags adjusted for the repo root). **A deployed
+   environment** (staging/production) has no `npx` and no dev dependencies
+   in its runtime image (P4.3 Task 4: found this gap live, since this
+   runbook had only ever been driven from a local checkout before) — use
+   `bash scripts/aws/run-worker-command.sh rollback 1` instead, which runs
+   the same reversal through `apps/worker/dist/rollback.js`
+   (`rollbackDatabaseMigrations` in `packages/database/src/migrations.ts`,
+   reusing `runDatabaseMigrations`'s own SSL-aware connection options rather
+   than re-deriving TLS setup for a bare CLI invocation). Either path
+   reverses `022` alone: the eight FKs come back `NOT VALID` (a row orphaned
+   while they were absent must not make the rollback itself fail) and the
+   three replacement indexes are dropped. Confirm zero rows were lost, then
+   run `ALTER TABLE ... VALIDATE CONSTRAINT <name>` for each of the eight
+   once you have reconciled any row that would fail it (in practice, none
+   should: the FKs these replace were already unenforced in the direction
+   that matters for as long as 022 was live). **Not yet built**: a
+   deployed-environment-compatible way to run that `VALIDATE CONSTRAINT`
+   pass itself (today this still needs either a local checkout pointed at
+   the deployed database, or a new dedicated `ops.ts` command — the same gap
+   category as the rollback command this task added).
+3. A second `--count 1` (local) / `rollback 1` (deployed) call reverses
+   `021` too, once the FK validation above is done — deliberately a second,
+   separate call rather than `--count 2`/`rollback 2` in one shot, so there
+   is a real inspection point between reversing `022` and `021`. Both
+   schemas move back to `public`,
    `library_items.confirmed_release` and `scan.account_deletions` are
    dropped, and every `search_path` resets. The two roles are left in place
    (they own nothing; the next forward `npm run db:migrate` re-`ALTER`s them
@@ -481,7 +498,15 @@ state rather than an empty database:
    "test rollback with in-flight events and reconciliation": the recovery
    mechanism the async pipeline already relies on (ADR-0028) also recovers
    correctly on the far side of an emergency rollback, not just going
-   forward.
+   forward. **In a deployed environment this step needs a real pre-cutover
+   application image already available** (P4.3 Task 4 found staging has
+   none — its first-ever successful real deployment was the cutover itself,
+   so there was nothing pre-cutover to have deployed) — build one before
+   attempting this step there, e.g. via `build-staging-images.yml` at the
+   commit immediately before `021`/`022` were added
+   (`git log --oneline --diff-filter=A -- packages/database/migrations/021_scan_core_schema_split.sql`'s
+   parent). This step is straightforward against a local checkout, which
+   just runs whatever commit is checked out directly, no image involved.
 5. Re-apply `npm run db:migrate` (forward) and confirm the
    `library_items.confirmed_release` backfill is idempotent — re-running the
    `UPDATE ... FROM scan_confirmations` a second time must leave every row

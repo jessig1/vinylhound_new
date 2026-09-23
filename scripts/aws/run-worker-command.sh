@@ -21,8 +21,15 @@ case "$operation" in
   reconcile-queue)
     command_json='["node","--experimental-transform-types","apps/worker/dist/ops.js","reconcile-queue"]'
     ;;
+  rollback)
+    # P4.3 Task 4: count defaults to 1 (one migration reversed), matching
+    # docs/OPERATIONS.md's "Scan/core schema and role rollback" runbook's
+    # own step-by-step (022 alone, then a separate `rollback` call for 021).
+    count="${2:-1}"
+    command_json="$(jq -cn --arg count "$count" '["node","--experimental-transform-types","apps/worker/dist/rollback.js",$count]')"
+    ;;
   *)
-    echo "Usage: $0 <migrate|drain-check|reconcile-queue>" >&2
+    echo "Usage: $0 <migrate|drain-check|reconcile-queue|rollback> [count]" >&2
     exit 64
     ;;
 esac
