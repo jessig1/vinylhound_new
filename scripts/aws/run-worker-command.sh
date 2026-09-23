@@ -28,8 +28,15 @@ case "$operation" in
     count="${2:-1}"
     command_json="$(jq -cn --arg count "$count" '["node","--experimental-transform-types","apps/worker/dist/rollback.js",$count]')"
     ;;
+  validate-fks)
+    # P4.3 Task 4: the deployed-environment-compatible VALIDATE CONSTRAINT
+    # pass docs/OPERATIONS.md's rollback runbook flagged as "not yet built"
+    # -- runs after reversing 022 (step 2) to confirm all eight FKs are
+    # clean, or report exactly which have real violations to reconcile.
+    command_json='["node","--experimental-transform-types","apps/worker/dist/validate-fks.js"]'
+    ;;
   *)
-    echo "Usage: $0 <migrate|drain-check|reconcile-queue|rollback> [count]" >&2
+    echo "Usage: $0 <migrate|drain-check|reconcile-queue|rollback|validate-fks> [count]" >&2
     exit 64
     ;;
 esac

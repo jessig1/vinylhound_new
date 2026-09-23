@@ -1,5 +1,14 @@
 # Terraform bootstrap
 
+**Transferred to [vinylhound-platform](https://github.com/jessig1/vinylhound-platform)
+as of 2026-09-23 (P4.3 Task 3)** — apply from that repository's copy of this
+root going forward. This copy is kept for reference only; a plan-only
+rehearsal from the platform repository's copy against the real backend
+confirmed byte-identical state ("No changes"). See
+`docs/roadmap/p4.3-platform-delivery.md`'s Task 3 entry for why this root's
+"transfer" looks different from the other three (no automated writer ever
+existed to freeze).
+
 This root creates the resources that must exist before environment state can
 use the S3 backend: the state bucket, immutable ECR repositories, GitHub OIDC
 provider, and GitHub plan/deployment roles.

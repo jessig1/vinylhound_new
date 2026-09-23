@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 import { runner } from "node-pg-migrate";
+import { Client } from "pg";
 
 import type { DatabaseOptions } from "./database.ts";
 import { ensureDatabaseRoles } from "./roles.ts";
@@ -56,4 +57,88 @@ export async function rollbackDatabaseMigrations(
     migrationsTable: "vinylhound_migrations",
     singleTransaction: true,
   });
+}
+
+/**
+ * The eight FKs 022's down migration re-adds `NOT VALID` (docs/OPERATIONS.md's
+ * "Scan/core schema and role rollback" runbook, step 2) — a row orphaned
+ * while they were absent must not make the rollback itself fail, but each
+ * constraint still needs an explicit `VALIDATE CONSTRAINT` pass once any
+ * such row has been reconciled. `docs/OPERATIONS.md` had flagged this as
+ * "not yet built" for a deployed environment (no local checkout, no ad hoc
+ * SQL client) — this reuses the same admin connection
+ * rollbackDatabaseMigrations/runDatabaseMigrations already use, not a
+ * scan-/core-scoped app role, since VALIDATE CONSTRAINT needs table
+ * ownership. Runs each constraint independently and reports per-constraint
+ * results rather than failing on the first one, matching the runbook's own
+ * "reconcile any row that would fail it" framing -- a caller needs to know
+ * exactly which constraints still have real violations, not just that
+ * validation as a whole didn't complete.
+ */
+const SCAN_CORE_FOREIGN_KEYS = [
+  { table: "scan.scans", constraint: "scans_user_id_fkey" },
+  { table: "scan.batches", constraint: "batches_user_id_fkey" },
+  {
+    table: "scan.scan_confirmations",
+    constraint: "scan_confirmations_user_id_fkey",
+  },
+  {
+    table: "core.library_items",
+    constraint: "library_items_confirmed_from_scan_id_fkey",
+  },
+  {
+    table: "core.library_copies",
+    constraint: "library_copies_confirmed_from_scan_id_fkey",
+  },
+  {
+    table: "scan.scan_confirmations",
+    constraint: "scan_confirmations_release_id_fkey",
+  },
+  {
+    table: "scan.scan_confirmations",
+    constraint: "scan_confirmations_library_item_id_fkey",
+  },
+  {
+    table: "scan.scan_confirmations",
+    constraint: "scan_confirmations_copy_id_fkey",
+  },
+] as const;
+
+export interface ForeignKeyValidationResult {
+  table: string;
+  constraint: string;
+  valid: boolean;
+  error?: string;
+}
+
+export async function validateScanCoreForeignKeys(
+  options: DatabaseOptions,
+): Promise<ForeignKeyValidationResult[]> {
+  const client = new Client({
+    connectionString: options.connectionString,
+    connectionTimeoutMillis: options.connectionTimeoutMillis,
+    ssl: options.ssl,
+  });
+  await client.connect();
+  try {
+    const results: ForeignKeyValidationResult[] = [];
+    for (const { table, constraint } of SCAN_CORE_FOREIGN_KEYS) {
+      try {
+        await client.query(
+          `ALTER TABLE ${table} VALIDATE CONSTRAINT ${constraint}`,
+        );
+        results.push({ table, constraint, valid: true });
+      } catch (error) {
+        results.push({
+          table,
+          constraint,
+          valid: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return results;
+  } finally {
+    await client.end();
+  }
 }
