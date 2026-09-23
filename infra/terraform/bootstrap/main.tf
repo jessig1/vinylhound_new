@@ -113,12 +113,19 @@ locals {
   # (deploy-development.yml disabled in vinylhound_new) and the cutover
   # deploy from vinylhound-platform is verified live, so only the platform
   # repository is trusted now — single-writer discipline, no dual trust left
-  # over. staging/production are untouched, still trusting only the
-  # application repository, pending their own future transfer.
+  # over. "staging" is mid-transfer (P4.3 Task 3, 2026-09-23): dual-trusted
+  # while vinylhound-platform's deploy-staging.yml is rehearsed and cut over;
+  # narrow to the platform prefix alone (delete the application-repo entry)
+  # once the cutover deploy is verified live. "production" is untouched,
+  # still trusting only the application repository, pending its own future
+  # transfer.
   deploy_trusted_subjects = {
     development = ["${var.github_oidc_subject_prefix_platform}:environment:development"]
-    staging     = ["${var.github_oidc_subject_prefix}:environment:staging"]
-    production  = ["${var.github_oidc_subject_prefix}:environment:production"]
+    staging = [
+      "${var.github_oidc_subject_prefix}:environment:staging",
+      "${var.github_oidc_subject_prefix_platform}:environment:staging",
+    ]
+    production = ["${var.github_oidc_subject_prefix}:environment:production"]
   }
 }
 
@@ -138,8 +145,14 @@ data "aws_iam_policy_document" "plan_assume" {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
+        # Application repository: platform.yml's terraform-plan job, which
+        # only ever plans the environment (staging) root. Removed once that
+        # root is deleted from the application repository (P4.3 Task 3).
         "${var.github_oidc_subject_prefix}:pull_request",
-        "${var.github_oidc_subject_prefix}:ref:refs/heads/main"
+        "${var.github_oidc_subject_prefix}:ref:refs/heads/main",
+        # Platform repository: its own PR-plan job for a transferred root.
+        "${var.github_oidc_subject_prefix_platform}:pull_request",
+        "${var.github_oidc_subject_prefix_platform}:ref:refs/heads/main",
       ]
     }
   }
