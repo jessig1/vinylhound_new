@@ -97,7 +97,7 @@ locals {
   deploy_actions = [
     "acm:*", "apigateway:*", "application-autoscaling:*", "autoscaling:*",
     "budgets:*", "cloudfront:*", "cloudwatch:*", "ec2:*", "ecr:*", "ecs:*",
-    "eks:*", "elasticloadbalancing:*", "events:*", "lambda:*", "sqs:*", "wafv2:*",
+    "eks:*", "elasticloadbalancing:*", "events:*", "lambda:*", "servicediscovery:*", "sqs:*", "wafv2:*",
     "iam:AttachRolePolicy", "iam:CreatePolicy", "iam:CreateRole", "iam:CreateServiceLinkedRole",
     "iam:DeletePolicy", "iam:DeleteRole", "iam:DetachRolePolicy",
     "iam:DeleteRolePolicy", "iam:GetPolicy", "iam:GetPolicyVersion", "iam:GetRole",

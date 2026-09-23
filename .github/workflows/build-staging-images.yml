@@ -1,0 +1,147 @@
+name: Build staging images
+
+# P4.3 Task 3: replaces deploy-staging.yml's build/push responsibility (that
+# workflow is frozen — infra/terraform/environment's writer moved to
+# https://github.com/jessig1/vinylhound-platform). This workflow only
+# builds, scans, and pushes images tagged ${sha}-staging; it never applies
+# Terraform and never needs deploy-broad AWS permissions, per ADR-0031's
+# two-axis OIDC narrowing (vinylhound-github-ecr-push).
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: staging-platform
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build-and-push:
+    name: Build, scan, and push web/worker/discovery images
+    needs: validate
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Load configuration
+        id: configuration
+        env:
+          ECR_WEB_REPOSITORY: ${{ vars.ECR_WEB_REPOSITORY }}
+          ECR_WORKER_REPOSITORY: ${{ vars.ECR_WORKER_REPOSITORY }}
+          ECR_DISCOVERY_REPOSITORY: ${{ vars.ECR_DISCOVERY_REPOSITORY }}
+          AWS_ECR_PUSH_ROLE_ARN: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+        run: |
+          missing=()
+          for name in ECR_WEB_REPOSITORY ECR_WORKER_REPOSITORY ECR_DISCOVERY_REPOSITORY AWS_ECR_PUSH_ROLE_ARN; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error title=Staging image build misconfigured::Configure: ${missing[*]}." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Resolve existing web image
+        id: existing-web
+        env:
+          REPOSITORY_URL: ${{ vars.ECR_WEB_REPOSITORY }}
+        run: |
+          repository="${REPOSITORY_URL#*/}"
+          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Resolve existing worker image
+        id: existing-worker
+        env:
+          REPOSITORY_URL: ${{ vars.ECR_WORKER_REPOSITORY }}
+        run: |
+          repository="${REPOSITORY_URL#*/}"
+          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Resolve existing discovery image
+        id: existing-discovery
+        env:
+          REPOSITORY_URL: ${{ vars.ECR_DISCOVERY_REPOSITORY }}
+        run: |
+          repository="${REPOSITORY_URL#*/}"
+          digest="$(aws ecr describe-images --repository-name "$repository" --image-ids imageTag="${GITHUB_SHA}-staging" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push web
+        id: web
+        if: steps.existing-web.outputs.exists != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.web
+          platforms: linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ vars.ECR_WEB_REPOSITORY }}:${{ github.sha }}-staging
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+      - name: Build and push worker
+        id: worker
+        if: steps.existing-worker.outputs.exists != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.worker
+          platforms: linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ vars.ECR_WORKER_REPOSITORY }}:${{ github.sha }}-staging
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+      - name: Build and push discovery
+        id: discovery
+        if: steps.existing-discovery.outputs.exists != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.discovery
+          platforms: linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ vars.ECR_DISCOVERY_REPOSITORY }}:${{ github.sha }}-staging
+          cache-from: type=gha,scope=discovery
+          cache-to: type=gha,mode=max,scope=discovery
+      - name: Print manual deploy command
+        run: |
+          cat <<EOF
+          Images pushed (or already existed) for commit ${{ github.sha }}.
+          Trigger the staging deploy:
+
+          gh workflow run deploy-staging.yml --repo jessig1/vinylhound-platform -f plan_only=false
+          EOF

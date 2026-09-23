@@ -60,10 +60,20 @@ jobs:
           entrypoint: /kubeconform
           args: -strict -summary infra/kubernetes/production
 
+  # FROZEN as of P4.3 Task 3 (2026-09-23): infra/terraform/environment's
+  # (staging's) writer transferred to
+  # https://github.com/jessig1/vinylhound-platform, whose own platform.yml
+  # now runs this same plan job against the real state. Once the cutover is
+  # verified live, vinylhound-github-plan's dual trust (added to rehearse
+  # this transfer) narrows to the platform repository alone — see
+  # infra/terraform/bootstrap/main.tf's deploy_trusted_subjects and
+  # plan_assume comments for the current trust state. The `false &&` below
+  # is a second, explicit guard independent of that IAM narrowing.
   terraform-plan:
     name: Terraform plan (trusted PR)
     needs: terraform
     if: >-
+      false &&
       needs.terraform.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&

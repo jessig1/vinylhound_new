@@ -1,5 +1,12 @@
 name: Deploy staging
 
+# FROZEN as of P4.3 Task 3 (2026-09-23): infra/terraform/environment's
+# writer transferred to https://github.com/jessig1/vinylhound-platform.
+# This workflow is disabled (gh workflow disable). Kept for reference/
+# rollback only. Image builds for staging moved to
+# build-staging-images.yml in this repository; deploys now happen from the
+# platform repository's own deploy-staging.yml (manual
+# `gh workflow run deploy-staging.yml --repo jessig1/vinylhound-platform`).
 on:
   workflow_dispatch:
 
