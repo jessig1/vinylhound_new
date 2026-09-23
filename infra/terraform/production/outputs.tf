@@ -10,6 +10,13 @@ output "eks_cluster_name" {
   value = var.environment_active ? aws_eks_cluster.main[0].name : null
 }
 
+# Issue #8: lets deploy-production.yml check real ALB target health between
+# "Deploy Kubernetes workloads" and the CloudFront smoke test, instead of
+# guessing blindly at a 504's cause.
+output "web_target_group_arn" {
+  value = var.environment_active ? aws_lb_target_group.web[0].arn : null
+}
+
 output "db_cluster_identifier" {
   value = aws_rds_cluster.main.cluster_identifier
 }

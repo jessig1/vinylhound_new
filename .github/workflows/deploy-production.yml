@@ -192,6 +192,37 @@ jobs:
           kubectl -n vinylhound rollout status deployment/web --timeout=10m
           kubectl -n vinylhound rollout status deployment/worker --timeout=10m
           kubectl -n vinylhound rollout status deployment/discovery --timeout=10m
+      - name: Wait for ALB target health
+        # Issue #8: kubectl rollout status only confirms pods pass their own
+        # in-cluster readiness probe, not that the ALB target group has
+        # registered and health-checked them -- a real production run hit a
+        # persistent CloudFront 504 with no diagnostic step in between to
+        # tell registration-delay/health-check-mismatch/security-group/
+        # routing candidates apart. Polls real target health directly and
+        # prints Kubernetes Service endpoints alongside it before the smoke
+        # test, so a failure here has real data instead of another blind
+        # retry.
+        run: |
+          target_group_arn="$(terraform -chdir=infra/terraform/production output -raw web_target_group_arn)"
+          for attempt in {1..18}; do
+            healthy_count="$(aws elbv2 describe-target-health --target-group-arn "$target_group_arn" --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text)"
+            if [[ "$healthy_count" -gt 0 ]]; then
+              echo "ALB target group has ${healthy_count} healthy target(s)."
+              aws elbv2 describe-target-health --target-group-arn "$target_group_arn"
+              exit 0
+            fi
+            echo "Waiting for a healthy ALB target (attempt ${attempt}/18)..."
+            aws elbv2 describe-target-health --target-group-arn "$target_group_arn"
+            sleep 10
+          done
+          echo "::error title=No healthy ALB target::No target in ${target_group_arn} became healthy within the wait window." >&2
+          echo "--- aws elbv2 describe-target-health (final) ---"
+          aws elbv2 describe-target-health --target-group-arn "$target_group_arn"
+          echo "--- kubectl get endpoints -n vinylhound web ---"
+          kubectl get endpoints -n vinylhound web -o wide
+          echo "--- kubectl get pods -n vinylhound -o wide ---"
+          kubectl get pods -n vinylhound -o wide
+          exit 1
       - name: Smoke test CloudFront path
         run: |
           url="$(terraform -chdir=infra/terraform/production output -raw application_url)"
