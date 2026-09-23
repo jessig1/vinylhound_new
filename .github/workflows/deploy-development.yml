@@ -1,5 +1,15 @@
 name: Deploy development
 
+# FROZEN as of P4.3 Task 3 (2026-09-22): infra/terraform/development's
+# writer transferred to https://github.com/jessig1/vinylhound-platform.
+# This workflow is disabled (gh workflow disable) and
+# vinylhound-github-development-deploy's IAM trust policy no longer trusts
+# this repository's OIDC subject at all, so it cannot apply even if
+# re-enabled by mistake. Kept for reference/rollback only. Image builds for
+# development moved to build-development-images.yml in this repository;
+# deploys now happen from the platform repository's own
+# deploy-development.yml (triggered by that workflow, or manually via
+# `gh workflow run deploy-development.yml --repo jessig1/vinylhound-platform`).
 on:
   push:
     branches: [main]

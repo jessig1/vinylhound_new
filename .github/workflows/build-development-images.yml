@@ -1,0 +1,121 @@
+name: Build development images
+
+# P4.3 Task 3: replaces deploy-development.yml's build/push responsibility
+# (that workflow is frozen — infra/terraform/development's writer moved to
+# https://github.com/jessig1/vinylhound-platform). This workflow only
+# builds, scans, and pushes images; it never applies Terraform and never
+# needs deploy-broad AWS permissions, per ADR-0031's two-axis OIDC
+# narrowing (vinylhound-github-ecr-push, scoped to ecr:* on the four named
+# repositories only).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: development-platform
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build-and-push:
+    name: Build, scan, and push web/worker-lambda images
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Load configuration
+        id: configuration
+        env:
+          ECR_WEB_REPOSITORY: ${{ vars.ECR_WEB_REPOSITORY }}
+          ECR_WORKER_LAMBDA_REPOSITORY: ${{ vars.ECR_WORKER_LAMBDA_REPOSITORY }}
+          AWS_ECR_PUSH_ROLE_ARN: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+        run: |
+          missing=()
+          for name in ECR_WEB_REPOSITORY ECR_WORKER_LAMBDA_REPOSITORY AWS_ECR_PUSH_ROLE_ARN; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::notice title=Development image build skipped::Configure: ${missing[*]}."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+      - if: steps.configuration.outputs.configured == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build and push web
+        id: web
+        if: steps.configuration.outputs.configured == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.web
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ vars.ECR_WEB_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+      - name: Build and push Lambda worker
+        id: worker
+        if: steps.configuration.outputs.configured == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.worker-lambda
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ vars.ECR_WORKER_LAMBDA_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha,scope=worker-lambda
+          cache-to: type=gha,mode=max,scope=worker-lambda
+      - name: Dispatch deploy to the platform repository
+        if: steps.configuration.outputs.configured == 'true'
+        env:
+          PLATFORM_DISPATCH_TOKEN: ${{ secrets.PLATFORM_DISPATCH_TOKEN }}
+          WEB_IMAGE: ${{ vars.ECR_WEB_REPOSITORY }}@${{ steps.web.outputs.digest }}
+          WORKER_LAMBDA_IMAGE: ${{ vars.ECR_WORKER_LAMBDA_REPOSITORY }}@${{ steps.worker.outputs.digest }}
+        run: |
+          if [[ -z "$PLATFORM_DISPATCH_TOKEN" ]]; then
+            cat <<EOF
+          ::warning title=Manual deploy required::PLATFORM_DISPATCH_TOKEN is not
+          configured, so this build was NOT automatically deployed. Trigger it
+          manually:
+
+          gh workflow run deploy-development.yml --repo jessig1/vinylhound-platform \\
+            -f commit_sha=${{ github.sha }} \\
+            -f web_image="$WEB_IMAGE" \\
+            -f worker_lambda_image="$WORKER_LAMBDA_IMAGE" \\
+            -f plan_only=false
+          EOF
+            exit 0
+          fi
+          curl --fail -sS -X POST \
+            -H "Authorization: Bearer $PLATFORM_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/jessig1/vinylhound-platform/dispatches \
+            -d "$(jq -n --arg sha "${{ github.sha }}" --arg web "$WEB_IMAGE" --arg worker "$WORKER_LAMBDA_IMAGE" \
+              '{event_type:"deploy-development",client_payload:{commit_sha:$sha,web_image:$web,worker_lambda_image:$worker}}')"
