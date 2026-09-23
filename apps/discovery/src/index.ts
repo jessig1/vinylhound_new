@@ -17,6 +17,9 @@ server.listen(config.DISCOVERY_SERVICE_PORT, () => {
     deploymentVersion: config.DEPLOYMENT_VERSION,
     environmentName: config.ENVIRONMENT_NAME,
     discoveryConfigured: context.discovery !== null,
+    // P4.3 Task 4 independent-delivery marker: confirms a discovery-only
+    // redeploy reached this service without a web/worker rebuild.
+    independentDeliveryMarker: "p4.3-task4",
   });
 });
 
