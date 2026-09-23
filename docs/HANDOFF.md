@@ -13,7 +13,124 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-22
+## Current state — verified 2026-09-23
+
+- **P4.3 Task 3: `development` AND `environment` (staging) are both
+  transferred to [vinylhound-platform](https://github.com/jessig1/vinylhound-platform)
+  and verified live. `production`/`bootstrap` have not started.** Resumed
+  at the maintainer's direction across three prompts in sequence this
+  session ("work on task 3" → "let's do issues 9 and 10 then finish up the
+  remaining items" → "finish task 3"). The working tree was clean at
+  session start (`4026807 p4.3.3`) — a **different, earlier session had
+  already applied step 1 of staging's transfer** (dual-trusting
+  `vinylhound-github-staging-deploy`/`vinylhound-github-plan` for the
+  platform repository, applied to real AWS, committed as `p4.3.3`) before
+  being interrupted; this session picked up from there after verifying that
+  dual-trust was actually live in AWS (not just committed).
+
+  **Staging's transfer surfaced real, pre-existing gaps unrelated to the
+  transfer itself, which the maintainer explicitly chose to fix and close
+  as part of this work rather than defer**: the first plan-only rehearsal
+  did not show "no changes" the way development's had — 22 resources to
+  add (the discovery service, scan/core database secrets, confirmation
+  queues), because staging's real infrastructure had never been updated
+  for P4.1's discovery extraction or P4.2 Task 7's scan/core split despite
+  that code being in `main` for weeks. This is exactly what issues #19 and
+  #29 track. Asked the maintainer explicitly before applying it (see
+  AskUserQuestion in this session); they chose to proceed.
+
+  **Getting the real cutover deploy to succeed took five attempts, each
+  failure a real bug found live (not by inspection), fixed, and re-tried**:
+  1. My own `deploy-staging.yml` tried to build Docker images inside the
+     platform repository's checkout (no `Dockerfile.web` there by design)
+     — the same mistake development's transfer had correctly avoided.
+     Fixed by adding `build-staging-images.yml` to `vinylhound_new`
+     (mirroring `build-development-images.yml`) and requiring
+     `deploy-staging.yml` to consume already-built `${sha}-staging` images.
+  2. The shared deploy-role IAM policy (`local.deploy_actions`) was missing
+     `servicediscovery:*`, needed for the discovery service's ECS Service
+     Connect namespace — **the real reason issue #19's staging rehearsal
+     had never succeeded**. Fixed and applied to real AWS (all three
+     environments' deploy roles share this policy, so development's and
+     production's roles also gained this permission).
+  3. `${GITHUB_SHA}`/`${{ github.sha }}` in `deploy-staging.yml` resolved
+     to the **platform repository's own commit**, not the application
+     repository's commit whose images were built — discovered `GITHUB_SHA`
+     is a GitHub Actions reserved name that cannot be overridden via
+     `env:` (the runner always re-injects its own value into every step
+     regardless). Fixed by adding a required `commit_sha` input (matching
+     `deploy-development.yml`'s existing pattern) and renaming the shell
+     variable to `DEPLOY_COMMIT_SHA` throughout.
+  4. `scripts/aws/run-worker-command.sh`'s ECS `containerOverrides` (and,
+     found by inspection once this pattern was known,
+     `deactivate-environment.yml`'s `kubectl exec` drain-check calls for
+     production) were both missing `--experimental-transform-types` — an
+     ECS/kubectl command override replaces the image's own `CMD` entirely
+     rather than appending to it, silently dropping the flag
+     `Dockerfile.worker`'s own `CMD` carries for exactly this reason
+     (cross-package `.ts` resolution through non-erasable constructor
+     parameter properties, per that Dockerfile's own detailed comment).
+     This had never been exercised against a real image before — found via
+     staging's own first-ever real `migrate` invocation crashing with
+     `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. Fixed in both `vinylhound_new`
+     and the duplicated copy in `vinylhound-platform`.
+
+  **The fifth attempt succeeded completely**: `terraform apply` created the
+  persistent foundation and all new discovery/scan/core/queue resources,
+  `ensureDatabaseRoles` created `vinylhound_scan_app`/`vinylhound_core_app`,
+  migrations `021`/`022` applied cleanly against staging's real Aurora
+  cluster **for the first time ever**, all three ECS services
+  (web/worker/discovery) reached stable, the smoke test passed, all three
+  images were tagged `staging-passed-<sha>`, and staging deactivated
+  cleanly afterward (`environment_active = false` — confirmed via the
+  apply's own output, not assumed; this was a real, temporary
+  activate/deploy/deactivate cycle matching staging's normal
+  scale-to-zero design, not a lasting change to its cost profile). Froze
+  the old writer before this final attempt (`gh workflow disable
+deploy-staging.yml`, `platform.yml`'s `terraform-plan` job guarded with
+  `false &&`) and narrowed `vinylhound-github-staging-deploy`'s trust to
+  the platform repository alone afterward — same single-writer discipline
+  as `development`, verified live via `aws iam get-role`.
+
+  **Commented on issues [#19](https://github.com/jessig1/vinylhound_new/issues/19)
+  and [#29](https://github.com/jessig1/vinylhound_new/issues/29) with what
+  this verified live; did not close either**, since each still has
+  explicit checklist items this session did not attempt: #19's own
+  discovery-only redeploy/rollback demonstration and concurrent-caller
+  exercise; #29's own full scan→confirm→library pipeline smoke test (only
+  `/api/healthz`/`/api/readyz` were exercised) and a real rollback
+  rehearsal against staging's now-live split schema. Closed issues #9 and
+  #10 on GitHub this session (both fixes were already live/complete from
+  the prior "Current state" entry below; closing them was the maintainer's
+  own explicit direction — "let's do issues 9 and 10").
+
+  **`production`/`bootstrap`'s own transfers have not started.** The
+  maintainer's third prompt this session ("finish task 3") was interpreted
+  as continuing root-by-root, not attempting all four at once —
+  `production` in particular still needs its own careful read (the one
+  root with a real activation gate; issue #8 remains open) before starting
+  its transfer.
+
+  Verification this session, beyond what's implicit in "the real deploy
+  succeeded": `terraform fmt -check`/`validate`/`plan` at every step before
+  any apply (bootstrap's IAM changes, the platform repo's copied
+  `environment` root); every plan reviewed for unexpected
+  replacements/destroys before applying (none occurred — all changes were
+  in-place IAM policy updates or additive resource creation); `npm run
+format:check` across the whole `vinylhound_new` repo after every doc/code
+  change (also caught and fixed a real, unrelated pre-existing Prettier
+  break from an earlier session's `p4.3.2` commit — see the entry below);
+  direct `aws iam get-role` checks confirming both IAM narrowing steps
+  landed exactly as planned, not just trusting Terraform's own "apply
+  complete" message. Left uncommitted only `.claude/settings.local.json`
+  (the maintainer's own change, not this session's) and the platform
+  repository's own git history (a separate repository, not part of this
+  checkout); every `vinylhound_new` change was committed and pushed
+  directly to `main` as it was verified, per the same precedent already set
+  earlier this session (see the entry below) — this session did not ask
+  again before each subsequent commit, treating the maintainer's repeated
+  "yes, commit and push" answers plus "finish task 3" as continuing
+  authorization for the same class of change, not a one-time approval.
 
 - **P4.3 Task 3 preparation: both roadmap-gating issues are fixed in
   substance. #9 is applied to real AWS; #10's code fix is complete. Neither
@@ -2976,63 +3093,70 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**Both #9 and #10's fixes are done in substance — #9 is live in real AWS,
-#10's code is complete — but neither GitHub issue is closed. Task 3 itself
-(the actual ownership transfer) has not started.** See "Current state" above
-for the full summary. `bootstrap` now has a real S3 backend
-(`vinylhound-tf`/`bootstrap/terraform.tfstate`), so the prior session's "back
-up the local state file" concern is resolved — there is no more local
-bootstrap state to lose; S3 (versioned, locked) is now authoritative, the
-same as the other three roots.
+**`development` and `environment` (staging) are both transferred to
+[vinylhound-platform](https://github.com/jessig1/vinylhound-platform) and
+verified live. `production`/`bootstrap` have not started.** Issues #9/#10
+are closed on GitHub. Issues #19/#29 each have a comment recording what this
+session verified live, but neither is closed — both still have real,
+explicit checklist items outstanding. See "Current state" above for the
+full summary, including five real bugs found and fixed live (not by
+inspection) while getting staging's cutover to actually work.
 
-**Remaining decision for the maintainer**: whether to close issues #9/#10 on
-GitHub now that both fixes are live/complete. This session did not close
-either — closing/commenting on issues is a visible action this session did
-not take without being asked explicitly.
+**Real credentials and access confirmed working this session, for the next
+session's reference**: this environment has live root AWS credentials
+(re-authenticate with your own `aws login` if `aws sts get-caller-identity`
+reports an expired session — this session hit that once); `gh` is
+authenticated as `jessig1`; `.claude/settings.local.json` has
+`Bash(terraform:*)` and `Bash(gh:*)` allowed, so routine Terraform/GitHub
+CLI operations no longer need a permission prompt. Two real, narrow gaps
+remain unresolved from this session, not urgent: no `PLATFORM_DISPATCH_TOKEN`
+in `vinylhound_new` (development's build workflow prints a manual `gh
+workflow run` command instead of auto-deploying; staging was never
+push-triggered in the first place, so this doesn't affect it); `scripts/
+aws/*.sh` are now duplicated between `vinylhound_new` and
+`vinylhound-platform` (both need the same fix if either needs another one,
+until `production` is transferred and the old copies can be deleted).
 
 **Next session, pick one:**
 
-1. **Decide whether to close issues #9/#10 on GitHub.** #9's fix is live
-   (verified: all three `vinylhound-github-<env>-deploy` roles show
-   `MaxSessionDuration: 14400`); #10's code fix is complete but not yet
-   exercised against a real cluster (would need a live incident or a
-   deliberate staging rehearsal to prove the new best-effort-drain step
-   actually works end to end).
-2. **P4.3 Task 3**, now that both roadmap-gating issues are fixed: rehearse
-   `development` first (freeze the old writer, back up/version state,
-   transfer configuration/workflow authority, verify an unchanged plan
-   against the existing backend, then enable exactly one new writer), then
-   transfer `environment`/`production`/`bootstrap` individually with the
-   same verification and rollback discipline. Read this session's full
-   bootstrap-import-then-S3-migration experience above first — it's the
-   closest thing to a rehearsal of the state-handling mechanics Task 3 will
-   need (the `for_each`-graph-resolution workaround for importing into a
-   fresh state, and the `terraform init -migrate-state` mechanics for moving
-   state between backends, will both very likely recur when transferring the
-   other three roots' real state into a new platform repository's own state
-   files). Note `bootstrap` itself is one of Task 3's four roots to
-   transfer — it now has real S3-backed state to actually rehearse against,
-   which it didn't before this session.
-3. **[Issue #29](https://github.com/jessig1/vinylhound_new/issues/29)** — P4.2
-   Task 7's own live staging rehearsal (apply the new Terraform, trigger
-   `deploy-staging.yml`, verify the cutover and a rollback under real
-   traffic). Needs real AWS access and GitHub environment/Actions
-   permissions no agent session can use unilaterally, same constraint as
-   issue #19 below — though note this session found live root AWS
-   credentials ARE present in this environment, which may change that
-   calculus; the GitHub Actions/environment-permissions half of the
-   constraint still stands regardless.
-4. **[Issue #19](https://github.com/jessig1/vinylhound_new/issues/19)** — P4.1's
-   own still-open live staging rehearsal, older and still unstarted. Same
-   access constraint.
-5. Before starting new Phase 4 work, read `docs/decisions/0030-scan-core-physical-split.md`
-   (ADR-0030) and this session's Task 7 entry in
-   `docs/roadmap/p4.2-scans-async-confirmation.md` in full — the account-deletion
-   two-phase workflow, the ADR-0018 liveness/self-heal replacement, and the
-   denormalized `library_items.confirmed_release` column are all
-   load-bearing design decisions a future session should understand before
-   touching any of the files they span (`account-repository.ts`,
-   `confirmation-repository.ts`, `library-repository.ts`).
+1. **`production`'s transfer**, continuing Task 3 root-by-root. Read this
+   session's `development`/`environment` transfers in full first — the
+   pattern is proven (populate the platform repo, rehearse with a
+   plan-only dispatch, freeze the old writer, real cutover deploy, verify
+   independently, narrow OIDC trust to single-writer) but `production` has
+   real differences worth planning for before starting: it's the one root
+   with a genuine activation gate (issue #8 is still open — `docs/
+ROADMAP.md`'s "Sequence and gates" note ties production/EKS rehearsal to
+   it), its `deploy-production.yml` has the same build-step-inside-deploy-
+   workflow shape staging's had before this session's fix (so the same
+   split into a `build-production-images.yml` will likely be needed), and
+   activating it for real has its own cost/duration profile (EKS/CloudFront
+   provisioning takes tens of minutes per `docs/OPERATIONS.md`). Consider
+   whether to attempt only the ownership-transfer plumbing (populate the
+   repo, rehearse a plan-only dispatch against the currently-inactive
+   foundation) without a full activation cycle, versus doing the complete
+   cutover the way staging's was done — worth asking the maintainer their
+   preference given issue #8's gate, rather than assuming.
+2. **`bootstrap`'s transfer** — the last of the four roots. Unlike the
+   other three, no workflow has ever applied it (human-administrator-only,
+   per `docs/OPERATIONS.md`); moving it to the platform repository would
+   mean the platform repo becomes where a human runs `terraform apply`
+   from, not a new automated writer. Think through what "transfer" even
+   means for a root with no existing automated writer before starting.
+3. **Issue #19's remaining items**: a discovery-only redeploy/rollback
+   demonstration, and exercising discovery under concurrent callers to
+   observe the bounded cache/rate coordination ADR-0026 committed to.
+4. **Issue #29's remaining items**: smoke-test the full scan → confirm →
+   library pipeline against staging directly (not just `/api/healthz`/
+   `/api/readyz`), and rehearse a real rollback of migrations `021`/`022`
+   against staging's now-live split schema (`docs/OPERATIONS.md`'s "Scan/core
+   schema and role rollback" runbook, exercised locally before but not yet
+   against staging's real Aurora cluster).
+5. **P4.3 Task 4**, once Task 3's remaining two roots are done: demonstrate
+   independent service delivery, scaling, health, migration, rollback, and
+   activation/deactivation in staging — most of this is now plausible to
+   attempt directly, since staging has a real, working, platform-repo-owned
+   deploy pipeline for the first time.
 
 **Known, non-blocking loose ends from this session:**
 

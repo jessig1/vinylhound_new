@@ -248,6 +248,20 @@ push` runs under the same broad, `Resource = "*"` policy as the Terraform
 
 ### environment (staging)
 
+**As of 2026-09-23, this root's writer transferred to
+[vinylhound-platform](https://github.com/jessig1/vinylhound-platform)** —
+the inventory below describes the pre-transfer state (still accurate for
+the backend key, locking, and configuration, which are unchanged) except
+where noted. `vinylhound_new`'s own `deploy-staging.yml` is now frozen
+(disabled) and `platform.yml`'s `terraform-plan` job is guarded with
+`false &&`; both are kept for reference/rollback only. See
+`docs/roadmap/p4.3-platform-delivery.md`'s Task 3 entry for the full
+transfer record, including two real bugs (a missing `servicediscovery:*`
+IAM permission and a missing `--experimental-transform-types` flag on ECS
+command overrides) found and fixed while getting the real cutover deploy to
+succeed — the first real deploy staging has ever completed for P4.1's
+discovery service and P4.2 Task 7's scan/core split.
+
 - **Backend**: `backend "s3" {}`, same `use_lockfile`/`encrypt`-only shape.
   The only root with a `backend.hcl.example` (for local use), but its
   placeholder key comment ("replace-with-staging-or-production") is stale —
