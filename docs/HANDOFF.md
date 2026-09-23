@@ -125,20 +125,68 @@ the log.
   install hung on an unavoidable GUI prompt this non-interactive environment
   couldn't click through, and the tool was reverted before a working
   install path was found — moot regardless, given the `discoveryConfigured:
-false` finding above. The migration `021`/`022` rollback rehearsal against
-  staging's real Aurora cluster (issue #29 item 4, this task's highest-risk
-  remaining item) was not attempted this session.
+false` finding above.
 
-  Updated `docs/HANDOFF.md` (this entry); `docs/roadmap/p4.3-platform-delivery.md`
-  and `docs/ROADMAP.md` were not yet updated with Task 4's own status as of
-  this entry — see the resume point below for what's still open. Did not
-  comment on or close issues #19/#29 (each has real items this session
-  didn't reach). Two `vinylhound_new` commits
-  ([a59e966](https://github.com/jessig1/vinylhound_new/commit/a59e9666d65ca34cbca68c02fee21020ce8436ea))
-  and four `vinylhound-platform` commits (`e6318f4` hold/exec added,
-  `6d78755` the tmpfs fix, `7c7c85a` hold/exec reverted) were committed and
-  pushed directly as verified, per this task's standing "commit and push as
-  verified" authorization from prior P4.3 sessions.
+  Updated `docs/HANDOFF.md` (this entry), `docs/roadmap/p4.3-platform-delivery.md`,
+  and `docs/ROADMAP.md` with Task 4's status; commented on issues
+  [#19](https://github.com/jessig1/vinylhound_new/issues/19) and
+  [#29](https://github.com/jessig1/vinylhound_new/issues/29) with the
+  findings above (neither closed — both still have real items open). Two
+  `vinylhound_new` commits
+  ([a59e966](https://github.com/jessig1/vinylhound_new/commit/a59e9666d65ca34cbca68c02fee21020ce8436ea)
+  the discovery marker,
+  [aeb86d2](https://github.com/jessig1/vinylhound_new/commit/aeb86d2437992d59962fd099ea934268b0457621)
+  the doc updates) and four `vinylhound-platform` commits (`e6318f4`
+  hold/exec added, `6d78755` the tmpfs fix, `7c7c85a` hold/exec reverted)
+  were committed and pushed directly as verified, per this task's standing
+  "commit and push as verified" authorization from prior P4.3 sessions.
+
+  **Continued the same session, at the maintainer's direction ("continue"):
+  attempted the migration `021`/`022` rollback rehearsal against staging's
+  real Aurora cluster (issue #29 item 4), and found it could not actually be
+  attempted as originally planned — the runbook itself had gaps only real
+  execution surfaced.** Before touching the live database, checked three
+  preconditions the runbook assumes and found none were actually met: (1)
+  no pre-cutover `staging-passed-<sha>` image exists in ECR to pair with a
+  `022` rollback (staging's first successful real deployment ever was the
+  cutover itself, per Task 3's own log — there was never a pre-cutover
+  deployment to have kept an image from); attempting to synthesize one by
+  reverting the schema-split commit (`958a399`) on top of current `main`
+  produced conflicts across nearly every file in `apps/web` (months of
+  unrelated changes since), abandoned as too invasive to trust; (2) the
+  deployed worker image has no `npx` and no devDependencies (deliberately
+  stripped, see Task 3's own hardening), so `node-pg-migrate down` — the
+  runbook's own documented command — cannot run there at all; (3) that gap
+  cannot be worked around with a bare CLI invocation either, since the
+  down-migration would still need the same custom RDS CA/SSL wiring
+  `databaseOptionsFromConfig` already handles for the forward path. Asked
+  the maintainer explicitly (via AskUserQuestion) how to proceed given all
+  three; they chose to build proper tooling first rather than improvise
+  against the live database or defer indefinitely.
+
+  **Built and shipped real rollback tooling** (`bd69e58`):
+  `rollbackDatabaseMigrations` (`packages/database/src/migrations.ts`)
+  mirrors `runDatabaseMigrations`'s existing `node-pg-migrate` `runner()`
+  call with `direction: "down"`, reusing its already-correct SSL-aware
+  connection options rather than re-deriving TLS setup for a CLI
+  invocation; `apps/worker/src/rollback.ts` is a new entry point
+  (deliberately no retry loop, unlike `migrate.ts` — a rollback is a rare,
+  operator-invoked action, not something to silently re-attempt);
+  `scripts/aws/run-worker-command.sh` gets a new `rollback [count]`
+  operation alongside `migrate`/`drain-check`/`reconcile-queue`. Verified
+  with `npm run check` (423/423 tests) and a real `npm run build --workspace
+@vinylhound/worker` confirming `apps/worker/dist/rollback.js` is emitted
+  correctly. **Not yet exercised against a real database** — local Docker
+  isn't running in this environment either (`docker compose ps` fails the
+  same way `session-manager-plugin`'s installer did: a background Windows
+  service that won't start non-interactively without its full GUI app), and
+  the actual staging rehearsal remains deliberately deferred, now unblocked
+  on tooling but still needing the pre-cutover-image problem solved
+  separately. `docs/OPERATIONS.md`'s rollback runbook is updated to
+  document the new deployed-environment path, and to flag two further real
+  gaps found in the same pass: no deployed-environment way yet exists to
+  run the FK `VALIDATE CONSTRAINT` pass itself, and the pre-cutover-image
+  problem above remains unsolved.
 
 - **P4.3 Task 3: `production`'s ownership-transfer plumbing is in place in
   [vinylhound-platform](https://github.com/jessig1/vinylhound-platform),
@@ -3295,21 +3343,24 @@ DELETE` intended only to inspect response headers while manually verifying
 
 **P4.3 Task 4 is partially demonstrated: activation/deactivation and
 migration idempotency are proven live against staging; a real worker
-crash-loop bug was found and fixed live; the authenticated pipeline smoke
-test, discovery scaling/concurrency exercise, and migration rollback
-rehearsal are not done.** `development`/`environment` (staging) remain
-transferred to [vinylhound-platform](https://github.com/jessig1/vinylhound-platform)
-and verified live; `production` has its ownership-transfer plumbing there
-too but stops short of a cutover (issue #8 still gates a real activation);
+crash-loop bug was found and fixed live; migration rollback tooling now
+exists for deployed environments but is unexercised; the authenticated
+pipeline smoke test and discovery scaling/concurrency exercise are not
+done.** `development`/`environment` (staging) remain transferred to
+[vinylhound-platform](https://github.com/jessig1/vinylhound-platform) and
+verified live; `production` has its ownership-transfer plumbing there too
+but stops short of a cutover (issue #8 still gates a real activation);
 `bootstrap` has not started. Issues #9/#10 are closed on GitHub. Issues
-#19/#29 each still have a comment recording only what was verified live
-through Task 3 — this session's Task 4 findings have not yet been added to
-either, and neither issue is closed. See "Current state" above for the full
-Task 4 summary, including the worker crash-loop bug (fixed in
-`vinylhound-platform@6d78755`, verified live) and two real gaps found but
-not fixed (the `build-staging-images.yml`/`deploy-staging.yml` coupling
-that blocks a true discovery-only redeploy, and staging's discovery service
-having no real provider credentials configured).
+#19/#29 both have a fresh comment recording this session's Task 4 findings;
+neither is closed — both still have real items open. See "Current state"
+above for the full Task 4 summary, including the worker crash-loop bug
+(fixed in `vinylhound-platform@6d78755`, verified live), the new rollback
+command (`vinylhound_new@bd69e58`, `npm run check`-verified but not run
+against a real database), and three real gaps found but not fixed: the
+`build-staging-images.yml`/`deploy-staging.yml` coupling that blocks a true
+discovery-only redeploy, staging's discovery service having no real
+provider credentials configured, and no pre-cutover application image
+existing to pair with a real staging rollback.
 
 **A sandbox-specific finding worth the next session knowing about**: this
 environment's auto-mode safety classifier blocks certain action categories
@@ -3341,13 +3392,19 @@ writer for production, un-frozen, by design.
 
 1. **The migration `021`/`022` rollback rehearsal against staging's real
    Aurora cluster** (issue #29 item 4) — this task's highest-risk remaining
-   item, not yet attempted. `docs/OPERATIONS.md`'s "Scan/core schema and
-   role rollback" runbook has the exact steps, exercised locally before but
-   never against a real deployed environment; its own warning that rolling
-   back migration `022` requires simultaneously redeploying the pre-Task-7
-   application image (since post-cutover code assumes the two-connection
-   shape) needs a real pre-cutover `staging-passed-<sha>` image tag to still
-   exist in ECR — confirm that before starting.
+   item. Tooling now exists (`bash scripts/aws/run-worker-command.sh
+rollback [count]`, see `docs/OPERATIONS.md`'s updated "Scan/core schema
+   and role rollback" runbook) but has never been run against a real
+   database — start with a low-stakes local exercise if local Docker can be
+   gotten running in a future session's environment (it wasn't in this
+   one), before staging. **Two preconditions still unresolved from this
+   session**: no pre-cutover `staging-passed-<sha>` image exists in ECR to
+   pair with a real `022` rollback (build one via `build-staging-images.yml`
+   dispatched against a temporary branch/tag at the commit before `021`/`022`
+   were added — this session's own attempt to synthesize one by reverting
+   the schema-split commit on `main` produced unmanageable conflicts, so
+   don't repeat that path); and there is still no deployed-environment way
+   to run the FK `VALIDATE CONSTRAINT` pass the runbook's step 2 needs.
 2. **The authenticated pipeline smoke test** (issue #29 item 3) — needs a
    way to get a real Clerk session against staging's production-mode auth
    without extracting the Clerk secret key into a script (blocked this
