@@ -452,13 +452,22 @@ the `library_items.confirmed_release` backfill, the `scan.account_deletions`
 backfill) and `022_scan_core_writer_switch.sql` (drops the eight FKs the
 schema/role split made unenforceable across the boundary) both carry a real
 `-- Down Migration` section, verified by driving it against seeded in-flight
-state rather than an empty database:
+state rather than an empty database. **Re-verified end to end (P4.3 Task 4,
+2026-09-23) against the local dev database's own real, accumulated data**
+(not a fresh/empty database — 49 scans, 2187 outbox messages, 4921 library
+items already present from months of prior local testing) using the new
+`apps/worker/dist/rollback.js` tooling itself, the same code path a deployed
+environment now uses:
 
 1. Seed one `pending` `scan_confirmations` row, one undelivered
    `scan.confirmed.v1` `outbox_messages` row, one undelivered
    `confirmation_receipts` row, and one account with `deletion_requested_at`
    set — the same shapes `packages/database/src/schema.integration.ts`'s own
-   test suite seeds for the pipeline's other tests.
+   test suite seeds for the pipeline's other tests. **2026-09-23 re-run**:
+   seeded through the real `confirmScan`/`processScanConfirmation` repository
+   functions directly (not hand-written SQL, to guarantee every FK/shape
+   constraint is genuinely satisfied), confirmed via direct query before
+   proceeding.
 2. **Local dev checkout**: `npx node-pg-migrate down --count 1
 --migrations-dir packages/database/migrations --migrations-table
 vinylhound_migrations` (from `packages/database`, or with
@@ -481,7 +490,18 @@ vinylhound_migrations` (from `packages/database`, or with
    deployed-environment-compatible way to run that `VALIDATE CONSTRAINT`
    pass itself (today this still needs either a local checkout pointed at
    the deployed database, or a new dedicated `ops.ts` command — the same gap
-   category as the rollback command this task added).
+   category as the rollback command this task added). **2026-09-23 re-run**:
+   `apps/worker/dist/rollback.js 1` reversed `022` cleanly against the local
+   dev database's real data with zero row-count change across every table.
+   All eight FKs came back `NOT VALID`, confirmed directly against
+   `pg_constraint`. Validating all eight found exactly four failures — real,
+   pre-existing orphaned rows from unrelated prior local testing (one scan
+   with an orphaned copy/library-item/release triple, six scans whose user
+   had since been fully deleted), traced and confirmed unrelated to the
+   freshly-seeded drill data, which validated cleanly wherever exercised.
+   This is the same shape of result the original local drill found (some
+   real accumulated rows genuinely can't validate) — proof the `NOT VALID`
+   design choice is load-bearing, not defensive-programming theater.
 3. A second `--count 1` (local) / `rollback 1` (deployed) call reverses
    `021` too, once the FK validation above is done — deliberately a second,
    separate call rather than `--count 2`/`rollback 2` in one shot, so there
@@ -490,7 +510,28 @@ vinylhound_migrations` (from `packages/database`, or with
    `library_items.confirmed_release` and `scan.account_deletions` are
    dropped, and every `search_path` resets. The two roles are left in place
    (they own nothing; the next forward `npm run db:migrate` re-`ALTER`s them
-   harmlessly).
+   harmlessly). **2026-09-23 re-run**: confirmed both tables' schema moved to
+   `public` and every other table's row count matched exactly (49 scans,
+   2187 outbox messages, 4921 library items, unchanged). **Real finding: this
+   step is not fully loss-free.** `021`'s down migration unconditionally
+   `DROP TABLE IF EXISTS scan.account_deletions`, and its up migration only
+   repopulates it from `core.users` rows that currently have
+   `deletion_requested_at` set. A tombstone for an account whose deletion had
+   already **fully completed** before the rollback (its `core.users` row
+   already gone, by design — ADR-0018's "removed means unconfirmed" audit
+   record) has no source row left to re-derive it from, so it is
+   permanently lost across a rollback/roll-forward cycle even though no
+   currently in-flight data was touched. Confirmed directly: the local dev
+   database had 3 `scan.account_deletions` rows before this drill (from
+   unrelated prior sessions' completed-deletion testing) and 1 after a full
+   rollback + forward re-apply (only the drill's own still-pending deletion
+   survived). This was never exercised by the original local drill, whose
+   seeded deletion request was itself still pending when it checked the
+   table. Not fixed this session — flagged here and in
+   `docs/decisions/0030-scan-core-physical-split.md` for the maintainer's
+   own judgment on whether it matters (this table appears to be an internal
+   audit aid, not user-facing state, but the loss is real and worth a
+   conscious call, not a silent gap).
 4. Run the seeded in-flight confirmation through `reconcileScanConfirmation`
    against the rolled-back, single-schema database using the pre-cutover
    (single-connection) code path — it must still complete and the library
@@ -507,10 +548,23 @@ vinylhound_migrations` (from `packages/database`, or with
    (`git log --oneline --diff-filter=A -- packages/database/migrations/021_scan_core_schema_split.sql`'s
    parent). This step is straightforward against a local checkout, which
    just runs whatever commit is checked out directly, no image involved.
+   **2026-09-23 re-run**: used a `git worktree add` checked out at that
+   parent commit (`160073a9cd158aba89fc421153b89d1c9557549a`) as a
+   subdirectory of the main checkout (so its bare-specifier imports still
+   resolve node_modules by walking up, without a separate `npm install`) —
+   called the pre-cutover `reconcileScanConfirmation(db, ...)` (its old,
+   single-`Database`-argument signature) directly against the rolled-back
+   database. It completed the drill's seeded confirmation end to end: status
+   moved from `pending` to `completed`, and a real library item/copy were
+   created. Concrete proof the recovery mechanism (ADR-0028) still works on
+   the far side of an emergency rollback, exactly as this runbook always
+   claimed, now actually exercised rather than only designed.
 5. Re-apply `npm run db:migrate` (forward) and confirm the
    `library_items.confirmed_release` backfill is idempotent — re-running the
    `UPDATE ... FROM scan_confirmations` a second time must leave every row
-   unchanged.
+   unchanged. **2026-09-23 re-run**: forward migration re-applied cleanly;
+   every table's row count matched the pre-rollback snapshot exactly except
+   `scan.account_deletions` (see step 3's finding above).
 
 **Never roll back `022` alone while any application instance is still running
 code written for the post-cutover (two-connection) shape** — that code no
