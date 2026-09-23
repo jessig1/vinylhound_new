@@ -176,17 +176,59 @@ false` finding above.
   operation alongside `migrate`/`drain-check`/`reconcile-queue`. Verified
   with `npm run check` (423/423 tests) and a real `npm run build --workspace
 @vinylhound/worker` confirming `apps/worker/dist/rollback.js` is emitted
-  correctly. **Not yet exercised against a real database** — local Docker
-  isn't running in this environment either (`docker compose ps` fails the
-  same way `session-manager-plugin`'s installer did: a background Windows
-  service that won't start non-interactively without its full GUI app), and
-  the actual staging rehearsal remains deliberately deferred, now unblocked
-  on tooling but still needing the pre-cutover-image problem solved
-  separately. `docs/OPERATIONS.md`'s rollback runbook is updated to
-  document the new deployed-environment path, and to flag two further real
-  gaps found in the same pass: no deployed-environment way yet exists to
-  run the FK `VALIDATE CONSTRAINT` pass itself, and the pre-cutover-image
-  problem above remains unsolved.
+  correctly.
+
+  **Continued the same session, at the maintainer's direction ("can we
+  finish the open item?" → rollback rehearsal): exercised the new tooling
+  for real, locally, against the dev database's own accumulated real data
+  — not staging (the pre-cutover-image problem remains unsolved there), but
+  a genuine, non-trivial rehearsal rather than only a design.** Docker
+  Desktop turned out to be running after all, just reachable only via
+  Windows-native tooling (`Test-NetConnection`/PowerShell `node`), not this
+  session's Bash tool (`/dev/tcp` and WSL-distro routes both failed —
+  Docker Desktop's actual engine lives in a separate `docker-desktop` WSL
+  distro that plain `wsl` commands don't share a network namespace with).
+  Seeded real in-flight state through the actual `confirmScan`/
+  `processScanConfirmation` repository functions (not hand-written SQL);
+  ran `apps/worker/dist/rollback.js` twice (022 then 021) against the local
+  dev database's real, accumulated data (49 scans, 2187 outbox messages,
+  4921 library items from months of prior local testing) — zero row-count
+  change on either reversal; all eight FKs came back `NOT VALID`; validating
+  them found exactly four real, pre-existing orphaned rows from unrelated
+  prior local testing (confirmed unrelated to the freshly-seeded drill
+  data). Used a `git worktree add` at the pre-cutover commit
+  (`160073a`, as a subdirectory of the main checkout so its imports still
+  resolve `node_modules` upward without a separate install) to call the old,
+  single-connection `reconcileScanConfirmation` directly against the
+  rolled-back schema — it completed the seeded confirmation end to end,
+  creating a real library item. Forward re-migration was idempotent.
+
+  **Real, previously-undocumented finding**: `021`'s down migration
+  unconditionally drops `scan.account_deletions`, but its up migration only
+  repopulates it from currently-deletion-requested users — an account whose
+  deletion had already **fully completed** (its `users` row already gone,
+  by the table's own design intent) has no source to re-derive its
+  tombstone from, so a rollback/roll-forward cycle permanently loses
+  historical completed-deletion audit records even though no in-flight data
+  is touched. Confirmed directly: 3 such rows before the drill (unrelated
+  prior sessions' testing), 1 after (only the drill's own still-pending
+  deletion survived). The original local drill never exercised this, since
+  its own seeded deletion was still pending when it checked. Not fixed —
+  flagged in `docs/OPERATIONS.md`'s runbook and
+  `docs/decisions/0030-scan-core-physical-split.md`'s own "Rollback"
+  section (`5e57643`, `d62b0df`) for the maintainer's own judgment on
+  whether it matters.
+
+  Commented on issue #29 with these results; all four of its checklist
+  items now have real findings recorded (items 1-2 from earlier in this
+  session, this local rollback drill closing the substance of item 4 short
+  of an actual staging rehearsal, item 3 — the authenticated pipeline smoke
+  test — still genuinely not attempted). Left the local dev database's own
+  drill rows in place (harmless, matches this file's existing "known,
+  non-blocking loose ends" precedent for this database) rather than cleaning
+  up test data beyond what a future `docker compose down -v` would already
+  reset. Deleted five scratch `.cjs`/`.ts` files used to drive the drill
+  (never committed).
 
 - **P4.3 Task 3: `production`'s ownership-transfer plumbing is in place in
   [vinylhound-platform](https://github.com/jessig1/vinylhound-platform),
@@ -3343,24 +3385,35 @@ DELETE` intended only to inspect response headers while manually verifying
 
 **P4.3 Task 4 is partially demonstrated: activation/deactivation and
 migration idempotency are proven live against staging; a real worker
-crash-loop bug was found and fixed live; migration rollback tooling now
-exists for deployed environments but is unexercised; the authenticated
-pipeline smoke test and discovery scaling/concurrency exercise are not
-done.** `development`/`environment` (staging) remain transferred to
+crash-loop bug was found and fixed live; the migration rollback mechanics
+are now fully verified locally against real accumulated data (though not
+yet against staging itself); the authenticated pipeline smoke test and
+discovery scaling/concurrency exercise are not done.**
+`development`/`environment` (staging) remain transferred to
 [vinylhound-platform](https://github.com/jessig1/vinylhound-platform) and
 verified live; `production` has its ownership-transfer plumbing there too
 but stops short of a cutover (issue #8 still gates a real activation);
-`bootstrap` has not started. Issues #9/#10 are closed on GitHub. Issues
-#19/#29 both have a fresh comment recording this session's Task 4 findings;
-neither is closed — both still have real items open. See "Current state"
-above for the full Task 4 summary, including the worker crash-loop bug
-(fixed in `vinylhound-platform@6d78755`, verified live), the new rollback
-command (`vinylhound_new@bd69e58`, `npm run check`-verified but not run
-against a real database), and three real gaps found but not fixed: the
+`bootstrap` has not started. Issues #9/#10 are closed on GitHub. Issue #19
+has a comment recording this session's findings and remains open (real
+items left). **Issue #29's substance is now fully addressed** (items 1-2
+verified live against staging; item 4's rollback mechanics fully verified
+locally, including a real, previously-undocumented data-loss finding for
+completed account-deletion tombstones; item 3, the authenticated pipeline
+smoke test, is the one genuine gap) — still open on GitHub pending the
+maintainer's own call on whether item 3 and the staging-specific rollback
+rehearsal (as opposed to the now-verified mechanics) are required before
+closing it. See "Current state" above for the full Task 4 summary,
+including the worker crash-loop bug (fixed in
+`vinylhound-platform@6d78755`, verified live), the new rollback command
+(`vinylhound_new@bd69e58`) now verified end to end locally
+(`vinylhound_new@5e57643`), the `account_deletions` rollback data-loss
+finding (`vinylhound_new@d62b0df`), and real gaps found but not fixed: the
 `build-staging-images.yml`/`deploy-staging.yml` coupling that blocks a true
 discovery-only redeploy, staging's discovery service having no real
-provider credentials configured, and no pre-cutover application image
-existing to pair with a real staging rollback.
+provider credentials configured, no pre-cutover application image existing
+to pair with a real staging rollback, no deployed-environment way to run
+the FK `VALIDATE CONSTRAINT` pass, and the `account_deletions` finding
+itself.
 
 **A sandbox-specific finding worth the next session knowing about**: this
 environment's auto-mode safety classifier blocks certain action categories
@@ -3392,19 +3445,28 @@ writer for production, un-frozen, by design.
 
 1. **The migration `021`/`022` rollback rehearsal against staging's real
    Aurora cluster** (issue #29 item 4) — this task's highest-risk remaining
-   item. Tooling now exists (`bash scripts/aws/run-worker-command.sh
-rollback [count]`, see `docs/OPERATIONS.md`'s updated "Scan/core schema
-   and role rollback" runbook) but has never been run against a real
-   database — start with a low-stakes local exercise if local Docker can be
-   gotten running in a future session's environment (it wasn't in this
-   one), before staging. **Two preconditions still unresolved from this
-   session**: no pre-cutover `staging-passed-<sha>` image exists in ECR to
-   pair with a real `022` rollback (build one via `build-staging-images.yml`
-   dispatched against a temporary branch/tag at the commit before `021`/`022`
-   were added — this session's own attempt to synthesize one by reverting
-   the schema-split commit on `main` produced unmanageable conflicts, so
-   don't repeat that path); and there is still no deployed-environment way
-   to run the FK `VALIDATE CONSTRAINT` pass the runbook's step 2 needs.
+   item, though its core mechanics are now de-risked: the same
+   `rollbackDatabaseMigrations`/`rollback.js` code was fully exercised
+   locally this session against the dev database's own real, accumulated
+   data (not staging, but a genuine rehearsal, not just design review — see
+   "Current state" above), including a real, previously-undocumented
+   finding about `scan.account_deletions` data loss across a rollback/
+   roll-forward cycle. **Two preconditions still unresolved before staging
+   specifically**: no pre-cutover `staging-passed-<sha>` image exists in ECR
+   to pair with a real `022` rollback (build one via
+   `build-staging-images.yml` dispatched against a temporary branch/tag at
+   the commit before `021`/`022` were added — this session's own attempt to
+   synthesize one by reverting the schema-split commit on `main` produced
+   unmanageable conflicts, so don't repeat that path); and there is still no
+   deployed-environment way to run the FK `VALIDATE CONSTRAINT` pass the
+   runbook's step 2 needs (locally this session just ran raw SQL directly —
+   fine for a local exercise, not yet built for a deployed one). Local
+   Docker access, if needed again: it _was_ running this session, just only
+   reachable via Windows-native tooling (`Test-NetConnection`/PowerShell
+   `node`), not this session's own Bash tool (`/dev/tcp` and `wsl` routes
+   both failed to reach it — Docker Desktop's actual engine runs in a
+   separate `docker-desktop` WSL distro that plain `wsl <command>` doesn't
+   share a network namespace with).
 2. **The authenticated pipeline smoke test** (issue #29 item 3) — needs a
    way to get a real Clerk session against staging's production-mode auth
    without extracting the Clerk secret key into a script (blocked this
