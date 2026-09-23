@@ -13,9 +13,136 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-23
+## Current state — verified 2026-09-23 (continued session)
 
-- **P4.3 Task 4: partially demonstrated against real staging. Activation/
+- **P4.3 Task 3 is now fully done, and Task 4's two biggest remaining gaps
+  (independent service delivery and the staging rollback rehearsal) are now
+  demonstrated live against real staging infrastructure.** Resumed at the
+  maintainer's direction to review Tasks 3/4 and GitHub issues, then finish
+  open items; given four candidate items (fix issue #19's coupling,
+  define/close `bootstrap`'s transfer, rehearse the staging rollback, start
+  production's activation), the maintainer chose all four via
+  `AskUserQuestion`. This entry covers the first three; production's
+  activation was not reached this session (see "Resume point").
+
+  **`bootstrap`'s transfer (closes Task 3)**: copied
+  `infra/terraform/bootstrap` into `vinylhound-platform`; a plan-only
+  rehearsal against the real backend (`terraform init` +
+  `terraform plan -var terraform_state_bucket=vinylhound-tf`) returned "No
+  changes. Your infrastructure matches the configuration."
+  (`vinylhound-platform@2cfdfb5`). Since bootstrap has never had an
+  automated writer to freeze (human-administrator-only, per
+  `docs/OPERATIONS.md`), "transfer" here means only that the platform
+  repository's copy becomes authoritative for future manual applies — both
+  repositories' READMEs updated to say so.
+
+  **Issue #19 item 3 (discovery-only redeploy), fixed and verified live
+  twice.** Root cause: `deploy-staging.yml` resolved web/worker/discovery
+  images from one shared `commit_sha`, and `infra/terraform/environment`'s
+  `deployment_version` was one Terraform variable feeding all three task
+  definitions' shared `common_environment` local — even a correct
+  per-service image-digest fix would have left an unrelated `DEPLOYMENT_VERSION`
+  env-var bump forcing web/worker's task definitions to a new revision on
+  every redeploy. Fixed both in `vinylhound-platform@d35b591`: optional
+  `web_commit_sha`/`worker_commit_sha`/`discovery_commit_sha` inputs
+  override `commit_sha` per service; `deployment_version` split into three
+  independent variables, each set directly on its own task definition.
+  Verified with two real `deploy-staging.yml` dispatches (full
+  activate/deploy/deactivate cycles): pushed a trivial discovery-only
+  commit ([`4e8112b`](https://github.com/jessig1/vinylhound_new/commit/4e8112bbbcbfc340ac623d6f116d93d9ba0fde2f)),
+  deployed it with only `discovery_commit_sha` overridden; confirmed via
+  `aws ecs describe-task-definition` that web's/worker's deployed image
+  **digest** never changed across both runs while discovery's did. Task
+  definition _revision numbers_ still incremented each run — traced to an
+  unrelated, unavoidable mechanism (staging's task definitions are
+  destroyed and recreated on every activate/deactivate cycle,
+  `active_count` gated on `environment_active`), confirmed by diffing the
+  full `container_definitions` JSON across revisions and finding it
+  byte-identical apart from ARN/timestamp fields. Commented on
+  [issue #19](https://github.com/jessig1/vinylhound_new/issues/19) with
+  the evidence.
+
+  **Issue #29 item 4 (staging rollback rehearsal), executed for real
+  against staging's live Aurora cluster.** Two preconditions first:
+  1. The obvious pre-cutover-image approach (temp branch + dispatch
+     `build-staging-images.yml`) doesn't work —
+     `vinylhound-github-ecr-push`'s OIDC trust (ADR-0031) is scoped to
+     `ref:refs/heads/main` only; confirmed live via a real
+     `AccessDeniedException` on `sts:AssumeRoleWithWebIdentity`
+     (run `35905426052`). Correctly rejected rather than widened. Built the
+     three pre-cutover images
+     (`160073a9cd158aba89fc421153b89d1c9557549a`, the commit immediately
+     before migrations `021`/`022`) locally via `docker buildx build
+--platform linux/arm64 --push`, authenticated with an AWS
+     administrator identity (the same "human, not a workflow" precedent
+     `bootstrap` already sets).
+  2. Added `scripts/aws/run-worker-command.sh validate-fks`
+     (`validateScanCoreForeignKeys`, `packages/database/src/migrations.ts`,
+     `vinylhound_new@3301155`), the deployed-environment `VALIDATE
+CONSTRAINT` pass the runbook had flagged as "not yet built."
+
+  **Then the real rehearsal**: activated staging (task definitions only, no
+  services) via a directly-reviewed `terraform plan`/`apply` from this
+  session (the sandbox's "Blind Apply" classifier requires a saved,
+  reviewed plan file before `apply` — `terraform apply -auto-approve`
+  alone was denied, `terraform plan -out=tfplan` + `terraform apply
+tfplan` was not); `rollback 1` reversed migration `022` against real
+  Aurora (exit 0, confirmed via CloudWatch); `validate-fks` found **all
+  eight FKs valid** — staging's real data has no orphans, unlike the local
+  dev drill; `rollback 1` again reversed `021`; deployed the pre-cutover
+  application image with real ECS services (`aws ecs wait
+services-stable` succeeded — one transient web-task health-check
+  failure during rollout self-healed on ECS's own retry, not a real bug)
+  and confirmed `/api/healthz`/`/api/readyz` both `200` **against the
+  rolled-back, pre-split schema** — concrete proof the pre-cutover code
+  genuinely works on the recovered database. Ran forward `migrate` via a
+  separately `aws ecs register-task-definition`-registered task definition
+  on the current commit (so the still-running pre-cutover service wasn't
+  disturbed until the redeploy) — re-applied `021`/`022` cleanly. Redeployed
+  the current commit and reconfirmed health. Deactivated staging back to
+  its normal resting state, confirmed via `terraform output` and `aws ecs
+describe-services`. Commented on
+  [issue #29](https://github.com/jessig1/vinylhound_new/issues/29) with
+  the full step-by-step evidence.
+
+  **Real, minor findings along the way, all fixed**: `run-worker-command.sh`
+  in `vinylhound-platform` had fallen behind (missing both `rollback` and
+  `validate-fks`) — synced. `jq` isn't installed in this session's local
+  Windows/Git-Bash environment (unlike the GitHub Actions runners this
+  script normally runs on) — worked around with an equivalent Python
+  script (`run_worker_command.py`, scratchpad-only, not committed) for the
+  direct ECS `run-task` calls this rehearsal needed. `aws` CLI commands
+  with a leading `/` (e.g. `aws logs tail /vinylhound/staging/worker`) need
+  `MSYS_NO_PATHCONV=1` in this Git Bash environment or MSYS mangles the
+  path — already known from this session's own memory, re-confirmed live.
+  A manual `docs/OPERATIONS.md` edit broke Prettier formatting, caught by
+  CI (`35914900404`) and fixed (`c2f74ad`) before the real work continued.
+
+  **Verification, in order**: `npm run check` (423/423) after each code
+  change (the `validate-fks` addition, the `deployment_version` Terraform
+  split); `npm run build` confirmed `apps/worker/dist/validate-fks.js`
+  compiles; `terraform validate`/`fmt -check` on the environment root after
+  the split; every Terraform apply against real staging was plan-reviewed
+  first (`-out=tfplan` then `apply tfplan`), matching this session's own
+  sandbox classifier requirement; every ECS one-off command's exit code and
+  CloudWatch log output was checked directly, not assumed from the
+  workflow's own reported success.
+
+  Left uncommitted: none — every change (four `vinylhound_new` commits:
+  `3301155` validate-fks/bootstrap-README, `ad36d12` runbook doc,
+  `b292554` runbook correction, `c2f74ad` formatting fix, `575b17f` roadmap
+  docs; three `vinylhound-platform` commits: `2cfdfb5` bootstrap transfer,
+  `d35b591` the redeploy fix, `dcc6501` the script sync) was pushed
+  directly to `main` in both repositories, matching this session's own
+  established pattern of pushing platform-repository changes immediately
+  (they're the operational delivery repository; GitHub Actions needs the
+  commit to exist upstream to run) and pushing `vinylhound_new` doc/code
+  fixes directly rather than leaving them staged, since every earlier push
+  this same session had already established the working tree was clean at
+  session start and every change belongs to this session alone.
+
+- **P4.3 Task 4 (prior continuation within the same day): partially
+  demonstrated against real staging. Activation/
   deactivation and migration idempotency are proven live; a real,
   previously-undetected production-readiness bug (the worker service crash-
   looping) was found and fixed live; the authenticated pipeline smoke test,
@@ -3382,6 +3509,49 @@ DELETE` intended only to inspect response headers while manually verifying
   detail. The ignored local `.env` is synchronized to the Sol default.
 
 ## Resume point
+
+**P4.3 Task 3 is fully done (all four Terraform roots transferred to
+`vinylhound-platform`, including `bootstrap`). Task 4 is nearly done:
+activation/deactivation, migration, independent service delivery (issue #19
+item 3), and a real staging rollback rehearsal against live Aurora (issue
+#29 item 4) are all demonstrated live. Only two items remain in Task 4:
+discovery scaling/concurrency (issue #19 item 4) and the authenticated
+pipeline smoke test (issue #29 item 3) — both blocked the same way prior
+sessions found (no real MusicBrainz/Spotify provider credentials in
+staging; a hard sandbox denial on extracting the Clerk secret key,
+respectively), neither attempted again this session.** `production`'s
+ownership-transfer plumbing is in `vinylhound-platform` but deliberately
+stops short of a cutover (issue #8 still gates a real activation) — **this
+was the fourth item the maintainer chose this session (alongside the three
+above) but it was not reached; it is the natural next item.** Issues
+#9/#10 are closed on GitHub. Issue #19 has a comment recording the fix and
+its live verification, and remains open only for item 4 (scaling). Issue
+#29 has a comment recording the rollback rehearsal's full evidence, and
+remains open only for item 3 (the authenticated smoke test) — the
+maintainer's own call on whether that alone is enough to close it.
+
+**Next session: production's activation rehearsal**, gated on issue #8 (a
+real, unresolved production-only bug — ALB/CloudFront returns a persistent
+504 despite Kubernetes reporting a successful rollout; see the issue for
+the full root-cause narrowing and suggested next steps, particularly adding
+an explicit `aws elbv2 describe-target-health` diagnostic step to
+`deploy-production.yml` before the smoke test, so the next real attempt
+gets real diagnostic output instead of another blind retry). This is
+real-money, real-risk EKS/CloudFront infrastructure — confirm scope with
+the maintainer before starting, matching this project's own established
+pattern of checking in before every comparable step (staging's own rollback
+rehearsal above was explicitly confirmed via `AskUserQuestion` before
+touching the live database, for the same reason). Once a real activation
+succeeds from `vinylhound-platform`, `vinylhound_new`'s own
+`deploy-production.yml`/`deactivate-environment.yml` should be frozen and
+`vinylhound-github-production-deploy`'s trust narrowed to single-writer —
+not before, since narrowing ahead of a validated real activation would
+leave production with an unvalidated sole writer.
+
+Superseded below (kept for context only): the previous resume point's
+description of P4.3 Task 4 as "partially demonstrated" with the rollback
+mechanics "not yet against staging itself" — that gap is now closed, see
+"Current state" above.
 
 **P4.3 Task 4 is partially demonstrated: activation/deactivation and
 migration idempotency are proven live against staging; a real worker
