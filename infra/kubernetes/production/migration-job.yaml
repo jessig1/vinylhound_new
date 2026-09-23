@@ -16,8 +16,18 @@ spec:
       containers:
         - name: migrate
           image: vinylhound.invalid/worker:deployment-required
+          # --experimental-transform-types: a Kubernetes command override
+          # replaces the image's own CMD entirely (Dockerfile.worker's CMD,
+          # not ENTRYPOINT), so this flag must be repeated here or the
+          # cross-package .ts resolution this code hits (packages/*'s
+          # constructor parameter properties, e.g. scan-repository.ts's
+          # DatabaseCommandError) throws ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX in
+          # Node's default strip-only mode -- the same bug already found and
+          # fixed for the ECS equivalent (scripts/aws/run-worker-command.sh),
+          # found here live during production's first real migration attempt.
           command:
             - node
+            - --experimental-transform-types
             - apps/worker/dist/migrate.js
           envFrom:
             - configMapRef: { name: runtime }
