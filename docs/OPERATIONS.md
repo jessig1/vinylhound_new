@@ -550,14 +550,22 @@ vinylhound_migrations` (from `packages/database`, or with
    attempting this step there, e.g. via `build-staging-images.yml` at the
    commit immediately before `021`/`022` were added
    (`git log --oneline --diff-filter=A -- packages/database/migrations/021_scan_core_schema_split.sql`'s
-   parent). Dispatching that workflow needs a ref where it exists, which the
-   pre-cutover commit predates — push a temporary branch at that commit with
-   only the current workflow file added (no application source changed)
-   rather than reverting the schema-split commit forward onto `main` (an
-   earlier session's attempt at that produced unmanageable conflicts across
-   nearly every file in `apps/web`). This step is straightforward against a
-   local checkout, which just runs whatever commit is checked out directly,
-   no image involved.
+   parent). **That workflow cannot be dispatched against this commit
+   directly**: `vinylhound-github-ecr-push`'s OIDC trust (ADR-0031's
+   narrowing) is scoped to `ref:refs/heads/main` only, so a temporary branch
+   at the pre-cutover commit gets `Not authorized to perform
+sts:AssumeRoleWithWebIdentity` even with the current workflow file added —
+   confirmed live, not by inspection. Correctly rejected: widening that
+   trust for a one-off would undo the hardening this project did. Instead,
+   build and push with a local `docker buildx build --platform linux/arm64
+   ... --push` per service (`Dockerfile.web`/`Dockerfile.worker`/
+   `Dockerfile.discovery`), authenticated with an AWS administrator identity
+   via `aws ecr get-login-password`, from a checkout of the pre-cutover
+   commit — the same "human administrator, not a workflow" pattern
+   `bootstrap` already uses, appropriate here since this is a one-off
+   historical image outside the normal build pipeline's own scope. This
+   step is straightforward against a local checkout, which just runs
+   whatever commit is checked out directly, no image involved.
    **2026-09-23 re-run**: used a `git worktree add` checked out at that
    parent commit (`160073a9cd158aba89fc421153b89d1c9557549a`) as a
    subdirectory of the main checkout (so its bare-specifier imports still
