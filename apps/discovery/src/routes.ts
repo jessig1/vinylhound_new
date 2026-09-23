@@ -36,6 +36,8 @@ function requireDiscovery(context: DiscoveryServiceContext) {
   return context.discovery;
 }
 
+// P4.3 Task 4 / issue #19: discovery-only source change, used to verify a
+// real discovery-only staging redeploy through the fixed pipeline.
 export function healthzRoute() {
   return new Response(JSON.stringify({ status: "ok" }), {
     status: 200,
