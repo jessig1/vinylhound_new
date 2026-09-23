@@ -283,6 +283,27 @@ layout — is documented as a runbook in `docs/OPERATIONS.md` and exercised
 locally as part of this task's own verification, satisfying the roadmap's
 "test rollback with in-flight events and reconciliation."
 
+**P4.3 Task 4 (2026-09-23) re-ran this drill against the local dev
+database's own real, accumulated data (months of prior testing, not a
+fresh database) and found one gap this ADR's own description above
+doesn't account for**: 021's down migration unconditionally drops
+`scan.account_deletions`, but its up migration only repopulates it from
+`core.users` rows that currently have `deletion_requested_at` set. An
+account whose deletion had already **fully completed** before the rollback
+(its `core.users` row already gone — this table's whole purpose per the
+section above is to survive exactly that) has no source row left to
+re-derive its tombstone from, so a rollback/roll-forward cycle permanently
+loses historical completed-deletion audit records, even though no
+in-flight data is touched. Confirmed directly: 3 such rows existed before
+the drill (from unrelated prior sessions' completed-deletion testing), 1
+after a full rollback and forward re-apply (only the drill's own
+still-pending deletion survived). The original local drill never exercised
+this, since its own seeded deletion request was still pending when it
+checked the table. Not fixed as part of this task — this table reads as an
+internal audit aid rather than user-facing state, but the loss is real and
+worth a conscious call rather than a silent gap; see `docs/OPERATIONS.md`'s
+rollback runbook for the same finding in more detail.
+
 ## Consequences
 
 - `docs/ARCHITECTURE.md`'s "Scan and core services" section is updated to
