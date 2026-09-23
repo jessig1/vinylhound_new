@@ -108,24 +108,17 @@ locals {
   ]
 
   # Which repository subject may assume each environment's deploy role.
-  # "development" was transferred to the platform repository (P4.3 Task 3,
-  # 2026-09-22): the old repository's writer is frozen
-  # (deploy-development.yml disabled in vinylhound_new) and the cutover
-  # deploy from vinylhound-platform is verified live, so only the platform
-  # repository is trusted now — single-writer discipline, no dual trust left
-  # over. "staging" is mid-transfer (P4.3 Task 3, 2026-09-23): dual-trusted
-  # while vinylhound-platform's deploy-staging.yml is rehearsed and cut over;
-  # narrow to the platform prefix alone (delete the application-repo entry)
-  # once the cutover deploy is verified live. "production" is untouched,
-  # still trusting only the application repository, pending its own future
-  # transfer.
+  # "development" and "staging" were both transferred to the platform
+  # repository (P4.3 Task 3, 2026-09-22/23): each old writer is frozen
+  # (deploy-development.yml/deploy-staging.yml disabled in vinylhound_new)
+  # and each cutover deploy from vinylhound-platform is verified live, so
+  # only the platform repository is trusted now — single-writer discipline,
+  # no dual trust left over. "production" is untouched, still trusting only
+  # the application repository, pending its own future transfer.
   deploy_trusted_subjects = {
     development = ["${var.github_oidc_subject_prefix_platform}:environment:development"]
-    staging = [
-      "${var.github_oidc_subject_prefix}:environment:staging",
-      "${var.github_oidc_subject_prefix_platform}:environment:staging",
-    ]
-    production = ["${var.github_oidc_subject_prefix}:environment:production"]
+    staging     = ["${var.github_oidc_subject_prefix_platform}:environment:staging"]
+    production  = ["${var.github_oidc_subject_prefix}:environment:production"]
   }
 }
 
