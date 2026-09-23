@@ -558,7 +558,7 @@ sts:AssumeRoleWithWebIdentity` even with the current workflow file added —
    confirmed live, not by inspection. Correctly rejected: widening that
    trust for a one-off would undo the hardening this project did. Instead,
    build and push with a local `docker buildx build --platform linux/arm64
-   ... --push` per service (`Dockerfile.web`/`Dockerfile.worker`/
+... --push` per service (`Dockerfile.web`/`Dockerfile.worker`/
    `Dockerfile.discovery`), authenticated with an AWS administrator identity
    via `aws ecr get-login-password`, from a checkout of the pre-cutover
    commit — the same "human administrator, not a workflow" pattern
