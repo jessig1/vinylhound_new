@@ -20,8 +20,12 @@ The four Terraform roots have distinct ownership:
 - `production` retains Aurora/S3/SQS/secrets and creates EKS, NAT, an internal
   ALB, CloudFront VPC origin, WAF, and Kubernetes workloads only while active.
 
-Apply bootstrap once with an AWS administrator identity. All environment work
-then uses GitHub OIDC. Lambda roles, ECS task roles, and EKS Pod Identity roles
+Apply bootstrap once with an AWS administrator identity — still true for
+_who_ applies it, though as of 2026-09-22 its own state lives in the same S3
+bucket it creates (`environments/*.tfstate` for the other three roots,
+`bootstrap/terraform.tfstate` for itself), not a local file (see "Platform
+delivery inventory" below for the migration). All environment work then uses
+GitHub OIDC. Lambda roles, ECS task roles, and EKS Pod Identity roles
 provide short-lived AWS credentials; the web role cannot read the OpenAI key.
 Aurora uses `DATABASE_SSL_MODE=verify-full` with the regional RDS CA bundle.
 Keep database pools bounded (two connections per Lambda environment and five
@@ -158,15 +162,27 @@ split) and `docs/roadmap/p4.3-platform-delivery.md` for the task itself.
 
 ### bootstrap
 
-- **Backend**: none — `infra/terraform/bootstrap/versions.tf` declares no
-  `backend` block, so bootstrap's own state is a local `terraform.tfstate`
-  file, not S3. It precedes and sits outside the S3-backend scheme the other
-  three roots use. Applied once, manually, with an AWS administrator
-  identity (`terraform apply -var="terraform_state_bucket=<name>"`,
-  `infra/terraform/bootstrap/README.md`) — **no workflow ever plans or
+- **Backend**: as of 2026-09-22, `s3` — bucket `vinylhound-tf` (its own
+  output, self-referential since bootstrap creates this bucket), key
+  `bootstrap/terraform.tfstate`, region `us-east-1`, hardcoded directly in
+  `infra/terraform/bootstrap/versions.tf` rather than supplied via
+  `-backend-config` at init time like the other three roots, since bootstrap
+  has no workflow to inject it. **Before this date it had no backend block
+  at all** — this checkout had accumulated real AWS resources (OIDC
+  provider, IAM roles, ECR repos, the state bucket itself) with no matching
+  local state file anywhere, discovered and recovered during P4.3 Task 3
+  preparation by importing all 21 bootstrap-owned resources into a fresh
+  local state, then migrating that local state into the new S3 backend
+  (`terraform init -migrate-state`) once real applies were unblocked (see
+  `docs/HANDOFF.md`'s 2026-09-22 entries for the full recovery procedure).
+  Still applied only manually, with an AWS administrator identity
+  (`infra/terraform/bootstrap/README.md`) — **no workflow ever plans or
   applies bootstrap**; `platform.yml`'s `terraform` job only runs `init
-  -backend=false` + `validate` (syntax-only) against it.
-- **Locking**: N/A (local state, single human operator).
+-backend=false` + `validate` (syntax-only) against it.
+- **Locking**: native S3 lockfile (`use_lockfile = true`), same mechanism as
+  the other three roots, key `bootstrap/terraform.tfstate.tflock` in the same
+  shared bucket. Before the 2026-09-22 migration this was N/A (local state,
+  single human operator, no possibility of a second concurrent writer).
 - **IAM / OIDC trust** — bootstrap/main.tf defines every role in the account:
   - GitHub OIDC provider (`aws_iam_openid_connect_provider.github`,
     audience `sts.amazonaws.com`), subject prefix
@@ -318,6 +334,10 @@ push` runs under the same broad, `Resource = "*"` policy as the Terraform
 - **ECR repositories** (`bootstrap/main.tf`): `vinylhound-web`,
   `vinylhound-worker`, `vinylhound-worker-lambda`, `vinylhound-discovery`,
   all `image_tag_mutability = "IMMUTABLE"`, scan-on-push, AES256 encryption.
+  (`vinylhound-discovery` was missing from the real account until the
+  2026-09-22 bootstrap apply below created it — config had included it in
+  the `for_each` since at least P4.1, but bootstrap had never been
+  re-applied since; real drift, not a design change.)
   Lifecycle policy retains only the newest 20 images by count per
   repository — a latent interaction with the promotion contract below that
   ADR-0031 does not discuss: past 20 accumulated tags, an older
@@ -337,6 +357,62 @@ push` runs under the same broad, `Resource = "*"` policy as the Terraform
   locking is Terraform's native S3 lockfile feature, sharing one state
   bucket (bootstrap's `terraform_state_bucket` output) with per-root
   `.tflock` objects keyed by each root's own state key.
+
+## Emergency production deactivation inputs (issue #10 hardening)
+
+`deactivate-environment.yml`'s `skip_activation_check` and `stale_lock_id`
+`workflow_dispatch` inputs are an emergency escape hatch added during the
+[issue #9](https://github.com/jessig1/vinylhound_new/issues/9) incident
+(2026-09-07), when the SSM `/vinylhound/production/active` flag and real AWS
+state drifted out of sync after a crashed run's OIDC session expired
+mid-teardown. This section is the runbook [issue #10](https://github.com/jessig1/vinylhound_new/issues/10)
+asked for, since there is no existing pattern in this repository for testing
+workflow YAML logic directly.
+
+**When to use `skip_activation_check`**: only when `deactivate-environment.yml`'s
+normal path (both the hourly `schedule` and a plain `workflow_dispatch`) is
+reporting production as already inactive while the AWS Console shows
+EKS/ALB/CloudFront/WAF/NAT still live. Confirm this mismatch directly
+(`aws ssm get-parameter --name /vinylhound/production/active`, `aws eks
+list-clusters`) before dispatching — this input bypasses the SSM gate
+entirely, not just a slow check.
+
+**When to use `stale_lock_id`**: only after confirming no other production
+Terraform operation is in flight. The `production-platform` concurrency
+group already serializes every GitHub Actions run of `deploy-production.yml`
+and `deactivate-environment.yml` against each other, so the only real race
+this input can hit is a `terraform apply`/`plan` run from someone's own
+machine against the same backend key
+(`environments/production.tfstate`) outside GitHub Actions entirely. Ask
+before force-unlocking if there's any doubt; `terraform force-unlock` on a
+live lock does not stop the apply holding it, it only lets a second,
+conflicting apply start.
+
+**What changed in this session's hardening (2026-09-22)**: previously,
+`skip_activation_check` skipped straight to the forced Terraform apply with
+no Kubernetes drain at all, because the drain/connect/remove steps are keyed
+off the normal path's `deactivate` output, which `skip_activation_check`
+exists specifically to bypass — worse than the existing `force` input, which
+at least attempts a drain first. A new "Attempt best-effort drain before
+forced teardown" step now runs whenever `skip_activation_check` is set: it
+resolves `eks_cluster_name` from the already-initialized Terraform state,
+skips cleanly (via `continue-on-error: true`, non-fatal either way) if the
+cluster is missing or unreachable, and otherwise scales `web` to zero and
+polls the worker's `drain-check` up to five times over 2.5 minutes (short
+by design — this path exists for genuine emergencies, so it must not block
+the forced teardown for as long as the normal 10-minute drain does) before
+the existing forced-apply step runs regardless of the drain outcome.
+
+**Not changed, and why**: this session did not add automated verification
+that a `stale_lock_id` belongs to a genuinely dead run, since the only
+uncovered race (a manual `terraform apply` outside GitHub Actions) has no
+purely code-side fix — it is an operational discipline question, addressed
+here by documentation rather than by workflow logic. This session also did
+not remove or further restrict either input, per the issue's own "reasonable
+argument for keeping it either way" — now that issue #9's longer OIDC
+session duration (14400s, up from the 3600s default) makes the triggering
+failure mode rarer, but a future crash (network blip, runner failure) can
+still orphan a lock or desync the SSM flag.
 
 ## Scan/core schema and role rollback (P4.2 Task 7, ADR-0030)
 

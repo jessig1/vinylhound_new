@@ -15,6 +15,130 @@ the log.
 
 ## Current state — verified 2026-09-22
 
+- **P4.3 Task 3 preparation: both roadmap-gating issues are fixed in
+  substance. #9 is applied to real AWS; #10's code fix is complete. Neither
+  issue is closed on GitHub. The actual rehearsed transfer (Task 3's own
+  job) has not started.** Resumed at the maintainer's direction ("work on
+  task 3"); per the roadmap's own gate ("close #9/#10 before any ownership
+  transfer") and the maintainer's explicit choice (asked via
+  AskUserQuestion) to close both issues before touching Task 3's actual
+  state/writer transfer. **New fact this session discovered: this session's
+  environment has live root AWS credentials** (`aws sts get-caller-identity`
+  → account `138010381178`, `arn:aws:iam::138010381178:root`) — not true in
+  any prior session; the credentials expired once mid-session and the
+  maintainer re-authenticated them directly (`aws login`, outside this
+  session's control). The maintainer explicitly approved real applies with
+  these credentials, but the harness's own auto-mode classifier still
+  blocked both the `terraform apply` and a self-requested settings edit as
+  separate, independent gates — the former was resolved once the maintainer
+  added `"Bash(terraform:*)"` to `.claude/settings.local.json`'s
+  `permissions.allow` themselves (self-modifying that file is a gate this
+  session cannot cross even when explicitly asked); the latter was refused
+  outright as `[Self-Modification]` and this session did not attempt to work
+  around it, only explained the settings.json mechanism in chat.
+  - **Issue #9** (`infra/terraform/bootstrap/main.tf`): added
+    `max_session_duration = 14400` (4h) to `aws_iam_role.github_deploy`;
+    added `role-duration-seconds: 14400` to the `aws-actions/
+configure-aws-credentials` step in `deploy-production.yml` and
+    `deactivate-environment.yml`, matching the issue's own suggested fix.
+    **Critical operational fact, not previously known**: `bootstrap` had no
+    S3 backend (confirmed in Task 2's inventory) and this checkout had no
+    local `terraform.tfstate` for it at all, despite the real resources
+    (OIDC provider, IAM roles, ECR repos, state bucket) already existing in
+    AWS. Per the maintainer's explicit choice (asked via AskUserQuestion,
+    "Import existing resources first"), this session ran `terraform import`
+    for all 21 bootstrap-owned resources (S3 bucket + 4 sub-resources, 3 ECR
+    repos, the OIDC provider, `github_plan` role + attachment + policy, and
+    the 3 `github_deploy` roles + their inline policies) — working around a
+    real `terraform import` limitation along the way (the whole config graph
+    must resolve before ANY import succeeds, so `local.github_oidc_arn`'s
+    reference to the not-yet-imported OIDC provider, and two other
+    resources' `for_each` over not-yet-imported resources, had to be
+    temporarily hardcoded/commented out, then fully reverted and verified
+    byte-identical via `git diff` before the final plan). `terraform plan`
+    against the imported local state came back clean and exactly as
+    expected: 3 in-place role updates (`max_session_duration` 3600→14400, no
+    replacement) plus creation of the `discovery` ECR repo/lifecycle policy
+    — **pre-existing drift this session found, unrelated to issue #9**:
+    `bootstrap/main.tf`'s `for_each` has included `"discovery"` since at
+    least P4.1, but the real ECR registry only had `web`/`worker`/
+    `worker-lambda` — bootstrap was never re-applied since discovery was
+    added to the list. Zero destroys, zero unexpected replacements.
+
+    **Rather than leave bootstrap's local-only state as a standing
+    fragility, this session then gave it a real S3 backend** (per the
+    maintainer's own follow-up request): added a `backend "s3"` block to
+    `infra/terraform/bootstrap/versions.tf` (bucket `vinylhound-tf` —
+    bootstrap's own output, self-referential — key
+    `bootstrap/terraform.tfstate`, `use_lockfile = true`, hardcoded rather
+    than supplied via `-backend-config` since bootstrap has no workflow to
+    inject one), then ran `terraform init -migrate-state` (after the
+    maintainer granted `Bash(terraform:*)` and re-authenticated AWS mid-way
+    through this step — the migrate prompt needed interactive `yes`, piped
+    via `printf 'yes\n' | terraform init -migrate-state` since
+    `-input=false` refuses a state-migration prompt outright). Verified the
+    migrated S3 state produced the byte-identical plan (same 2 add/3
+    change/0 destroy) before applying. **Applied for real**: `terraform
+apply` shipped both the `max_session_duration` change (verified live via
+    `aws iam get-role --role-name vinylhound-github-<env>-deploy
+--query Role.MaxSessionDuration` → `14400` for all three) and created the
+    missing `vinylhound-discovery` ECR repository. Deleted the
+    now-superseded local `terraform.tfstate`/`.tfstate.backup` (S3, with
+    native locking and the bucket's own versioning, is authoritative now;
+    both were gitignored, nothing tracked was touched). **Issue #9's fix is
+    live; closed on GitHub 2026-09-22** at the maintainer's explicit
+    direction ("let's do issues 9 and 10"), with a comment summarizing the
+    fix and linking the state-recovery/S3-migration detail above.
+
+  - **Issue #10** (`deactivate-environment.yml`): implemented the issue's own
+    top concern — `skip_activation_check` previously skipped Kubernetes
+    draining entirely (worse than the existing `force` input); added a new
+    "Attempt best-effort drain before forced teardown" step
+    (`continue-on-error: true`, resolves `eks_cluster_name` from state, skips
+    cleanly if the cluster is unreachable/gone, otherwise scales `web` to
+    zero and polls `drain-check` up to 5×30s — capped short since this path
+    is for genuine emergencies) that runs before the existing forced apply,
+    which still proceeds regardless of the drain outcome. Strengthened both
+    inputs' descriptions to state the `stale_lock_id` race risk precisely
+    (the `production-platform` concurrency group already prevents two GitHub
+    Actions runs from racing; the only real risk is a manual `terraform
+apply` from outside GitHub Actions) rather than leave it unstated. Did not
+    add automated lock-ownership verification (no code-side fix exists for
+    an out-of-band manual apply; addressed via documentation instead) and
+    did not narrow or remove either input, matching the issue's own
+    "reasonable argument for keeping it either way." Wrote the runbook the
+    issue asked for ("no existing pattern... this may mean exercise manually
+    and document the exact command") as a new "Emergency production
+    deactivation inputs (issue #10 hardening)" section in
+    `docs/OPERATIONS.md`. This change needed no AWS access and is otherwise
+    complete; not exercised against a real cluster this session (would need
+    a live incident or a deliberate staging rehearsal). Closed on GitHub
+    2026-09-22 at the maintainer's explicit direction, with a comment noting
+    that residual gap explicitly rather than leaving it silent.
+  - **Task 3 itself (the actual rehearsed transfer to a new platform
+    repository) was not started.** Both fixes are real and, for #9, live in
+    AWS; both GitHub issues are now closed (2026-09-22, at the maintainer's
+    explicit direction — this session does not close issues unprompted).
+  - Verification run this session: `terraform -chdir=infra/terraform/bootstrap
+{fmt -check, validate}` (clean, run twice — once against the imported local
+    state, once after the S3 migration); two full `terraform plan`s (local,
+    then S3-backed) confirmed byte-identical (3 change/2 add/0 destroy both
+    times); a real `terraform apply` against the S3-backed state (2 added, 3
+    changed, 0 destroyed, confirmed via the apply's own output plus a live
+    `aws iam get-role`/`aws ecr describe-repositories` spot check
+    afterward); read-only spot-checks of the two modified workflow files (no
+    `actionlint` binary available in this environment and `npx actionlint`/a
+    YAML parser were both unavailable — verified by careful manual re-read
+    instead, flagged here since it's a weaker check than prior sessions'
+    actionlint runs). Left uncommitted, since this session was not asked to
+    commit; the working tree was clean at session start (`f3abb27 p4.3.1`),
+    so every changed file (`.github/workflows/deactivate-environment.yml`,
+    `.github/workflows/deploy-production.yml`,
+    `infra/terraform/bootstrap/main.tf`,
+    `infra/terraform/bootstrap/versions.tf`, `docs/OPERATIONS.md`, this file)
+    belongs to this session alone. `.claude/settings.local.json` was changed
+    by the maintainer directly, not this session.
+
 - **P4.3 Task 2 is done: a full inventory of the four Terraform roots' backend
   keys, locks, IAM trust, configuration, and owning workflows**, recorded in
   `docs/OPERATIONS.md`'s new "Platform delivery inventory (P4.3 Task 2)"
@@ -2852,52 +2976,52 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**P4.3 Task 2 is done as of this session (2026-09-22): a full, verified
-inventory of the four Terraform roots, recorded in `docs/OPERATIONS.md`.**
-See "Current state" above for the full summary, including the three
-corrections found to ADR-0031's own Context section. No repository,
-Terraform, workflow, or IAM change was made — this session only read files
-and a research subagent's report, both independently spot-verified. Left
-uncommitted, since this session was not asked to commit; the working tree
-was clean at session start (`f3abb27 p4.3.1`), so every changed file belongs
-to this session alone.
+**Both #9 and #10's fixes are done in substance — #9 is live in real AWS,
+#10's code is complete — but neither GitHub issue is closed. Task 3 itself
+(the actual ownership transfer) has not started.** See "Current state" above
+for the full summary. `bootstrap` now has a real S3 backend
+(`vinylhound-tf`/`bootstrap/terraform.tfstate`), so the prior session's "back
+up the local state file" concern is resolved — there is no more local
+bootstrap state to lose; S3 (versioned, locked) is now authoritative, the
+same as the other three roots.
 
-**Task 3 is explicitly blocked**: the roadmap requires closing issues #9/#10
-before any ownership transfer, and neither is closed. #9 needs a real
-`terraform apply` against `bootstrap` with an AWS administrator identity;
-#10 is an unreviewed-hardening item on `deactivate-environment.yml`'s
-emergency `skip_activation_check`/`stale_lock_id` inputs. Neither needs live
-AWS deploy access in the way issues #19/#29 do, but #9 specifically requires
-an AWS administrator identity outside GitHub OIDC (per
-`docs/OPERATIONS.md`'s "Apply bootstrap once with an AWS administrator
-identity"), which no agent session holds.
+**Remaining decision for the maintainer**: whether to close issues #9/#10 on
+GitHub now that both fixes are live/complete. This session did not close
+either — closing/commenting on issues is a visible action this session did
+not take without being asked explicitly.
 
 **Next session, pick one:**
 
-1. **[Issue #10](https://github.com/jessig1/vinylhound_new/issues/10)** —
-   review and harden `deactivate-environment.yml`'s `skip_activation_check`/
-   `stale_lock_id` emergency inputs. This is a workflow-YAML change with no
-   AWS credentials needed to write or `actionlint` it (though exercising the
-   real teardown path to verify still needs staging/production access) — the
-   most likely of the three blocking/adjacent items an agent session can
-   actually move forward alone. Read the issue's own "Things worth
-   reviewing" list first; it already scopes the concern precisely.
-2. **[Issue #9](https://github.com/jessig1/vinylhound_new/issues/9)** — raise
-   `aws_iam_role.github_deploy`'s `max_session_duration` in
-   `infra/terraform/bootstrap/main.tf` and `deploy-production.yml`/
-   `deactivate-environment.yml`'s `role-duration-seconds`. The Terraform
-   change itself can be written and `terraform validate`d without AWS
-   access, but applying it against `bootstrap` needs an AWS administrator
-   identity no agent session holds — confirm with the maintainer whether
-   they want the change drafted now for their own later apply, similar to
-   how P4.1/P4.2/P4.3 Task 1 were scoped as decision records ahead of their
-   own infrastructure step.
+1. **Decide whether to close issues #9/#10 on GitHub.** #9's fix is live
+   (verified: all three `vinylhound-github-<env>-deploy` roles show
+   `MaxSessionDuration: 14400`); #10's code fix is complete but not yet
+   exercised against a real cluster (would need a live incident or a
+   deliberate staging rehearsal to prove the new best-effort-drain step
+   actually works end to end).
+2. **P4.3 Task 3**, now that both roadmap-gating issues are fixed: rehearse
+   `development` first (freeze the old writer, back up/version state,
+   transfer configuration/workflow authority, verify an unchanged plan
+   against the existing backend, then enable exactly one new writer), then
+   transfer `environment`/`production`/`bootstrap` individually with the
+   same verification and rollback discipline. Read this session's full
+   bootstrap-import-then-S3-migration experience above first — it's the
+   closest thing to a rehearsal of the state-handling mechanics Task 3 will
+   need (the `for_each`-graph-resolution workaround for importing into a
+   fresh state, and the `terraform init -migrate-state` mechanics for moving
+   state between backends, will both very likely recur when transferring the
+   other three roots' real state into a new platform repository's own state
+   files). Note `bootstrap` itself is one of Task 3's four roots to
+   transfer — it now has real S3-backed state to actually rehearse against,
+   which it didn't before this session.
 3. **[Issue #29](https://github.com/jessig1/vinylhound_new/issues/29)** — P4.2
    Task 7's own live staging rehearsal (apply the new Terraform, trigger
    `deploy-staging.yml`, verify the cutover and a rollback under real
    traffic). Needs real AWS access and GitHub environment/Actions
    permissions no agent session can use unilaterally, same constraint as
-   issue #19 below.
+   issue #19 below — though note this session found live root AWS
+   credentials ARE present in this environment, which may change that
+   calculus; the GitHub Actions/environment-permissions half of the
+   constraint still stands regardless.
 4. **[Issue #19](https://github.com/jessig1/vinylhound_new/issues/19)** — P4.1's
    own still-open live staging rehearsal, older and still unstarted. Same
    access constraint.
