@@ -1,16 +1,16 @@
 # Session handoff
 
-> **2026-09-24 P4.4 completion:** P4.3's last concurrent-caller demonstration
+> **2026-09-24 P4.4 fully verified:** P4.3's concurrent-caller demonstration
 > passed twice from a live staging web task after the Service Connect short
-> DNS alias was corrected. Cold calls serialized behind the single-replica
-> limiter; cached repeats took 6 ms. Discovery logged HTTP 200 throughout.
-> P4.4's final audit now passes: the matched benchmark budgets remain met,
-> the authenticated pipeline smoke and rollback were already proven, and a
-> fresh Cost Explorer forecast remains below $25. The optional GitHub-runner
-> ECS Exec probe still loses its Session Manager stream; that CI diagnostic
-> fault is distinct from the successful live service probe. No further
-> activation/build cycle is needed for the P4.4 decision. The roadmap has
-> the detailed evidence and limitation.
+> DNS alias was corrected. A later staging workflow run (`36067767860`) also
+> passed the remote probe, public smoke checks, and deactivation end to end
+> using the same application images. Its cold calls took 634, 1657, and
+> 2777 ms; the cached repeat took 6 ms. The GitHub-runner ECS Exec stdout
+> loss was fixed by persisting the pass result to a short-lived S3 report.
+> P4.4's matched budgets remain met, the authenticated pipeline smoke and
+> rollback were already proven, and Cost Explorer remained below the $25
+> ceiling. The milestone tag is `phase-4-p4.4`; the roadmap records the full
+> keep decision and evidence.
 
 > **2026-09-24 issue #30 investigation:** AWS's Service Connect API defaults
 > an omitted client alias DNS name to `discoveryName.namespace`; the staging
@@ -3775,12 +3775,12 @@ single-writer cutover are resolved.
 
 **Latest resume (2026-09-24): P4.3 Task 4 and P4.4 now pass.** The Service
 Connect alias fix resolved issue #30 live, and the concurrent-caller script
-passed twice from a real staging web task. The optional GitHub-runner ECS Exec
-stream still fails with EOF despite retry, so future CI work should change
-that diagnostic transport rather than repeat staging activations. The
-P4.4 keep/revise/reverse audit and current cost check are in its roadmap
-entry. Both staging runs have zero ECS services after cleanup; production
-remains inactive. The next roadmap task is P4.5.
+passed twice from a real staging web task. The final opt-in staging workflow
+also passed the probe and deactivation after the runner switched to a durable
+S3 result report (`vinylhound-platform@a97dc48`, run `36067767860`). The
+P4.4 keep/revise/reverse audit and cost check are in its roadmap entry. ECS
+has zero staging services after cleanup; production remains inactive. The
+next roadmap task is P4.5.
 
 **Historical handoff below is resolved; do not execute its live-environment
 instructions.** It is retained only as the diagnostic record of the local
@@ -8131,3 +8131,21 @@ discovery`. Broadened the harness's retry to cover it too
   direct live evidence; the runner's ECS Exec stream remains a documented
   diagnostic limitation, not a topology blocker. Updated both roadmap
   entries and the Phase 4 summary.
+
+- **2026-09-24 - Codex. Closed P4.4's last red workflow diagnostic.** The
+  maintainer asked for a fully green P4.4. The GitHub runner's SSM stream
+  lost its final output even when the remote probe completed, so a third
+  platform PR (`vinylhound-platform@a97dc48`) made the web task write a
+  small pass report to its existing staging S3 bucket after the limiter and
+  cache assertions. The runner validates a unique probe ID from that object
+  and removes it; a one-day lifecycle rule expires an orphan after an
+  interrupted job. No application image or IAM change was needed. The local
+  mock covers EOF with a completed report and a missing-report retry, and
+  syntax checks the generated remote program. PR CI `36067573578` passed
+  the mock, Terraform validation, and the active staging plan. Final staging
+  run `36067767860` then passed migrations, stable services, public smoke,
+  the concurrent-caller probe, image verification, and deactivation. Its
+  recorded cold calls took 634/1657/2777 ms and the cached repeat 6 ms.
+  Terraform reported `environment_active=false` afterward; ECS had zero
+  staging services. Updated P4.3/P4.4 roadmap entries and current resume to
+  reflect a green end-to-end workflow rather than the earlier CI caveat.
