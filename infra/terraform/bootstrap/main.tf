@@ -108,22 +108,13 @@ locals {
   ]
 
   # Which repository subject may assume each environment's deploy role.
-  # "development" and "staging" were both transferred to the platform
-  # repository (P4.3 Task 3, 2026-09-22/23): each old writer is frozen
-  # (deploy-development.yml/deploy-staging.yml disabled in vinylhound_new)
-  # and each cutover deploy from vinylhound-platform is verified live, so
-  # only the platform repository is trusted now — single-writer discipline,
-  # no dual trust left over. "production" completed a real activation from
-  # vinylhound-platform on 2026-09-24, but remains dual-trusted until the
-  # scheduled/manual deactivation workflow is moved and the old application-
-  # repository production workflows are frozen in the same cutover.
+  # All three environments have transferred to the platform repository.
+  # Their old application-repository writers are frozen and only this
+  # repository's environment-scoped subjects may assume deploy roles.
   deploy_trusted_subjects = {
     development = ["${var.github_oidc_subject_prefix_platform}:environment:development"]
     staging     = ["${var.github_oidc_subject_prefix_platform}:environment:staging"]
-    production = [
-      "${var.github_oidc_subject_prefix}:environment:production",
-      "${var.github_oidc_subject_prefix_platform}:environment:production",
-    ]
+    production  = ["${var.github_oidc_subject_prefix_platform}:environment:production"]
   }
 }
 

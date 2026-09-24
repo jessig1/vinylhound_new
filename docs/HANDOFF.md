@@ -15,6 +15,16 @@ the log.
 
 ## Current state — verified 2026-09-24 (continued session)
 
+- **Production's single-writer cutover is complete.** The scheduled/manual
+  deactivation workflow moved to `vinylhound-platform@9d8a15c`. A reviewed
+  bootstrap plan (`0 add, 1 change, 0 destroy`) updated only
+  `vinylhound-github-production-deploy`'s trust policy; its sole OIDC subject
+  is now the platform repository's `environment:production` subject. The old
+  `vinylhound_new` deploy and deactivation workflows are both manually
+  disabled and also denied by IAM. Platform verification run `35999817780`
+  authenticated with the narrowed role, observed production inactive, and
+  exited without applying Terraform. Production remained inactive throughout.
+
 - **2026-09-24 continuation: production now deploys end to end, issue #8's
   CloudFront 504 is fixed, the platform-repository path is verified live, and
   production is back in its inactive resting state.** Codex resumed Claude's
@@ -70,10 +80,8 @@ the log.
   four roots, live reviewed apply/no-change plan, platform validation CI, real
   production activation, and normal CI deactivation. Issue #8 was closed with
   the live evidence.
-  The remaining ownership cutover is separate: move scheduled/manual
-  deactivation to `vinylhound-platform`, narrow the production deploy role's
-  OIDC trust to that repository, and freeze the old application-repository
-  production workflows atomically. P4.3 Task 4's two staging-only gaps remain
+  The later continuation completed the ownership cutover; see the newer
+  current-state entry above. P4.3 Task 4's two staging-only gaps remain
   unchanged (issue #19 scaling/concurrency and issue #29 authenticated smoke).
 
 - **P4.3 Task 3 is now fully done, and Task 4's two biggest remaining gaps
@@ -3571,18 +3579,13 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**Current resume (2026-09-24): production is inactive and issue #8 is
-resolved.** The platform repository has now completed a real production
-activation (`35944530419`) and the normal deactivation path completed afterward
-(`35946002486`). The immediate next platform-delivery task is the final
-single-writer cutover: copy the scheduled/manual deactivation workflow into
-`vinylhound-platform`, update its documentation, narrow the production deploy
-role's OIDC trust to that repository, and freeze the two old production
-workflows in `vinylhound_new` as one coordinated change. Do not run either
-production deploy workflow concurrently; they still share the same state key
-and the IAM trust is still dual. Separately, P4.3 Task 4 remains open only for
-issue #19's discovery scaling/concurrency item and issue #29's authenticated
-pipeline smoke test.
+**Current resume (2026-09-24): production is inactive, issue #8 is resolved,
+and the production single-writer cutover is complete.** Activation
+(`35944530419`), normal deactivation (`35946002486`), and the narrowed-role
+inactive deactivation check (`35999817780`) all succeeded from the platform
+delivery path. The next P4.3 work is Task 4's two remaining items: issue #19's
+discovery scaling/concurrency exercise and issue #29's authenticated pipeline
+smoke test.
 
 **Historical handoff below is resolved; do not execute its live-environment
 instructions.** It is retained only as the diagnostic record of the local
@@ -7655,3 +7658,13 @@ file, ADR-0031, and the three docs above) belongs to this session alone.
   docs and issue evidence. `npm run check` passed 423/423; all four Terraform
   roots validated. The remaining next step is production's atomic single-writer
   cutover, not another activation debug cycle.
+
+- **2026-09-24 - Codex. Completed production's atomic single-writer
+  cutover.** Added the scheduled/manual deactivation workflow to
+  `vinylhound-platform` and pushed `9d8a15c`, reviewed and applied a bootstrap
+  plan changing only the production deploy role's OIDC trust, disabled both
+  legacy production workflows in `vinylhound_new`, and verified the platform
+  workflow could assume the narrowed role in run `35999817780`. That run
+  correctly treated production as inactive and made no Terraform change.
+  Synchronized the reference bootstrap copy and operational documentation in
+  both repositories. Production stayed inactive throughout.

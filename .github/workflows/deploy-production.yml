@@ -1,5 +1,11 @@
 name: Deploy production demo
 
+# FROZEN as of P4.3's production ownership cutover (2026-09-24):
+# infra/terraform/production's sole writer is now
+# https://github.com/jessig1/vinylhound-platform. This workflow is disabled
+# (gh workflow disable), and the production deploy role no longer trusts this
+# repository's OIDC subject. Kept for historical rollback reference only.
+
 on:
   workflow_dispatch:
     inputs:

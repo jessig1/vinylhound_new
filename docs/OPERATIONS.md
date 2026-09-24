@@ -305,9 +305,8 @@ discovery service and P4.2 Task 7's scan/core split.
 
 ### production
 
-**As of 2026-09-24, the production activation path in
-[vinylhound-platform](https://github.com/jessig1/vinylhound-platform) is
-rehearsed, but the ownership cutover is not complete.** Platform run
+**As of 2026-09-24, production is sole-owned by
+[vinylhound-platform](https://github.com/jessig1/vinylhound-platform).** Platform run
 `35944530419` provisioned EKS/CloudFront, configured Kubernetes, migrated the
 database, rolled out all three services, and passed both public health checks;
 the normal application-repository deactivation run `35946002486` then drained
@@ -316,13 +315,12 @@ fixed issue #8: the ALB must allow the CloudFront origin-facing managed prefix
 list, not merely the VPC CIDR. It also caught and synced a stale platform copy
 of the migration Job's `--experimental-transform-types` flag.
 
-`vinylhound-github-production-deploy` remains dual-trusted and
-`vinylhound_new`'s production deploy/deactivation workflows remain live until
-the scheduled/manual deactivation workflow is moved to the platform
-repository, trust is narrowed, and the old workflows are frozen as one
-cutover. Coordinate both repositories until then because they share the same
-state key. See `docs/roadmap/p4.3-platform-delivery.md` for the full evidence.
-The inventory below otherwise remains accurate.
+The production deploy role now trusts only the platform repository's
+environment-scoped OIDC subject. Scheduled/manual deactivation moved there,
+and both application-repository production workflows are manually disabled
+and denied by IAM. Cutover verification run `35999817780` authenticated from
+the platform repository, observed the inactive environment, and exited without
+an apply. See `docs/roadmap/p4.3-platform-delivery.md` for the full evidence.
 
 - **Backend**: `backend "s3" {}`, same shape, no `backend.hcl.example`.
   Three workflow steps initialize it against the same key
@@ -354,7 +352,7 @@ The inventory below otherwise remains accurate.
   `database_ca_base64` (sensitive RDS CA bundle), `runtime_secret_arns`
   (map), and a sensitive `kubernetes_runtime` object bundling the values
   `kubectl create configmap` needs.
-- **Owning workflows**: `deploy-production.yml` (`workflow_dispatch` only,
+- **Owning workflows** (in `vinylhound-platform`): `deploy-production.yml` (`workflow_dispatch` only,
   requires `commit_sha`/`ttl_hours`/`break_glass` inputs);
   `deactivate-environment.yml` (hourly `schedule` plus `workflow_dispatch`
   with `force`/`skip_activation_check`/`stale_lock_id` escape-hatch
