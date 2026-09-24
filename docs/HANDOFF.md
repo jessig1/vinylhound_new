@@ -6,6 +6,38 @@ changes files or reaches a decision must update this file before ending. The
 sections above the session log describe current state only; history belongs in
 the log.
 
+> **2026-09-24 P4.4 update:** Task 3 is complete; P4.4 is evaluated as
+> revise/not-ready, so no extraction milestone tag was created or pushed.
+> Matched ingestion stayed at 0/150 errors, 27.72–32.75 scans/s, p50
+> 289.60–338.65 ms and p95 348.24–429.21 ms versus P3.5's 27.89–29.89,
+> 320.01–362.55, and 359.60–415.61. The focused confirmation path was 164 ms
+> versus the <=2 s design budget. Warm full builds (21.95 s and 21.76 s) stayed
+> within P3.5's 19.89–21.83 s cached range to +0.12 s. Six successful staging
+> lifecycles took 19m21s–26m29s, within P3.5's 15–35 minute range; the first
+> successful production activation took 19m30s, but P3.5 had no completed
+> production baseline. The 2026-09-01–24 whole-account Cost Explorer forecast
+> was $10.87, below the $25 ceiling even before known non-project charges are
+> excluded, but is intentionally not treated as a tag-allocated monthly
+> reconciliation. Provider latency/cost gains and P3.5 CI-selection gains are
+> not attributed to extraction. The unresolved exit evidence is P4.3 Task 4:
+> issue #19 scaling/concurrent callers and issue #29 authenticated pipeline
+> smoke. P4.4's roadmap entry has the full keep/revise/reverse table.
+
+> **2026-09-24 P4.3 issue #19 probe continuation:** The first purpose-built
+> staging coordination run (`36011397024`) reached the probe but ECS Exec had
+> been enabled on the service after its web task was already running. ECS Exec
+> is task-start-time state, so `vinylhound-platform@9d9e728` now explicitly
+> forces a web-only deployment before the probe's stability wait. The next
+> run (`36017612755`) proved that repair: services, smoke, Session Manager,
+> and ECS Exec all passed; its failure was inside the concurrent provider
+> probe rather than at the ECS boundary. The platform script now emits a
+> bounded public response excerpt on an HTTP failure without logging its token
+> or shared secret (`d11d53e`). The run's automatic teardown left staging with
+> zero running ECS tasks/services. A further rerun was not dispatched because
+> GitHub began returning an account API-rate-limit 403 after status polling;
+> wait for that limit to clear, dispatch the same workflow input again, and
+> capture the new diagnostic output before marking issue #19 complete.
+
 ## How to resume
 
 1. Read "Current state" and "Resume point" below.
@@ -14,6 +46,62 @@ the log.
 3. Do the work, update this file, and append a session-log entry.
 
 ## Current state — verified 2026-09-24 (continued session)
+
+- **Development sign-in was broken for every new user; now fixed and
+  verified live.** The maintainer reported "this page couldn't load" after
+  submitting Clerk credentials on `dev-vh.siliconforest.io`. Lambda logs
+  showed the real cause: `requireUserId`'s JIT-provisioning `INSERT` into
+  `core.users` failed with `new row violates row-level security policy for
+table "users"` on every attempt in the window checked (2026-09-24
+  13:02–13:06 UTC). Root cause: Supabase (development's database only) has
+  RLS enabled on scan/core tables, but migration 021 only set up plain
+  `GRANT`s for `vinylhound_scan_app`/`vinylhound_core_app` — neither role
+  owns its tables (021's own down-migration comment says so), so once
+  migration 022 switched the app to connect as the non-owner role, every
+  write with no RLS policy in place was silently blocked. This was never
+  caught because verification only checked `/api/healthz`/`/api/readyz`/`/`,
+  never a real first-time Clerk sign-in.
+  Fixed with `packages/database/migrations/023_scan_core_rls_policies.sql`
+  (`vinylhound_new@09aa96a`): `ENABLE ROW LEVEL SECURITY` plus one
+  permissive `FOR ALL` policy per existing scan/core table for that table's
+  own app role — explicit and identical across every environment rather
+  than depending on Supabase dashboard state (a no-op for Aurora
+  staging/production today, since nothing there has RLS enabled yet).
+  **A future migration adding a new table to either schema must add its own
+  `ENABLE ROW LEVEL SECURITY` + `CREATE POLICY` pair — Postgres has no
+  `ALTER DEFAULT PRIVILEGES` equivalent for RLS.**
+  Verified locally before deploying: applied cleanly against the local
+  Postgres, all 423 unit tests and all 9 `schema-boundary.integration.ts`
+  tests passed, and the exact failing insert was reproduced and confirmed
+  fixed directly as the non-owner `vinylhound_core_app` role. A separate,
+  unrelated `prettier --check` failure (an unformatted benchmark-result file
+  from the maintainer's own concurrent `p4.4.1` commit) was blocking
+  `build-development-images.yml`'s CI gate; fixed with a follow-up commit
+  (`09aa96a`). `PLATFORM_DISPATCH_TOKEN` is not configured, so the
+  build workflow's auto-dispatch to `vinylhound-platform`'s
+  `deploy-development.yml` no-ops with a warning; triggered it manually
+  (`gh workflow run deploy-development.yml --repo jessig1/vinylhound-platform
+-f commit_sha=09aa96a... -f web_image=... -f worker_lambda_image=...
+-f plan_only=false`, run `36010388709`). That run's own log confirms
+  migration 023 applied against the live database; `/api/healthz`/
+  `/api/readyz` both `200` afterward, and no further RLS errors appear in
+  Lambda logs since. **Not yet independently confirmed: an actual browser
+  sign-in completing end-to-end post-fix** — only the log absence of the
+  error and a direct role-level SQL reproduction were checked; the
+  maintainer has not yet retried signing in.
+
+- **P4.4 Task 2 is complete: failure/isolation evidence is published in its
+  roadmap entry.** Current local reruns: remote discovery retry/outage tests
+  17/17, database confirmation/backlog/reconciliation integration tests 83/83,
+  and focused mobile scan-flow plus unrelated library-copy journeys 8/8. The
+  browser confirmation reached its library projection in 164 ms. Worker-only
+  scaling reuses Task 1's fixed-total-concurrency 1-versus-2-worker sample;
+  discovery intentionally stays at one replica under ADR-0026, because its
+  in-process provider limiter/cache is not safely independently scalable.
+  P4.3 Task 4's real staging database/service rollback and discovery-only
+  delivery demonstrations supply the infrastructure-specific rollback proof.
+  PostgreSQL explicitly remains shared; role/schema isolation is not an
+  availability boundary. P4.4 Task 3 is next.
 
 - **P4.4 Task 1 is complete: the P3.5 load and fixed-provider-concurrency
   harnesses were rerun unchanged against the current scan/core split with
@@ -3607,16 +3695,25 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**Current resume (2026-09-24): P4.4 Task 1's matched before/after samples are
-published; continue with P4.4 Task 2.** Use the two current result directories
-named in Current state and read the Task 1 limitations before interpreting any
-latency or cost delta. Task 2 still needs the isolated-scaling,
-discovery/provider-outage, scan-backlog, delayed-confirmation, rollback, and
-unrelated-library-journey exercises. Production remains inactive, issue #8 and
-the single-writer cutover are resolved, and P4.3 Task 4's two independent open
-items (issue #19 scaling/concurrency and issue #29 authenticated pipeline smoke)
-remain available evidence/gaps rather than being silently closed by the local
-benchmark.
+**Current resume (2026-09-24): P4.4 Tasks 1-2 are complete; continue with
+Task 3.** Read the published samples and Task 2 exercise table before comparing
+latency, throughput, error, confirmation delay, build/deploy time, operations,
+and monthly cost with P3.5's declared budgets. Keep provider variance, P3.5's
+earlier CI gains, discovery's deliberately single-replica boundary, and shared
+PostgreSQL separate from any claimed extraction benefit. Production remains
+inactive, issue #8 and the single-writer cutover are resolved, and P4.3 Task
+4's two independent open items (issue #19 scaling/concurrency and issue #29
+authenticated pipeline smoke) remain available evidence/gaps rather than being
+silently closed by the local exercises.
+
+**Superseding resume (2026-09-24): P4.4 Tasks 1-3 are complete, but P4.4 is
+not taggable. Continue with P4.3 Task 4's two explicit evidence gaps: issue
+#19 scaling/concurrent callers and issue #29 authenticated pipeline smoke.
+Rerun P4.4's decision audit afterward; do not infer a discovery availability
+gain from its deliberately single-replica design, do not treat shared
+PostgreSQL as isolated, and do not attribute provider variance or P3.5's
+earlier CI gains to the extractions. Production remains inactive; issue #8 and
+the single-writer cutover are resolved.**
 
 **Historical handoff below is resolved; do not execute its live-environment
 instructions.** It is retained only as the diagnostic record of the local
@@ -7736,3 +7833,87 @@ run typecheck`, and `npm run test` passed (423/423). `npm run check` stopped
   `packages/database/migrations/023_scan_core_rls_policies.sql` appeared during
   the final benchmark run and the Docker Compose stack was stopped externally;
   neither is part of this task and neither was modified.
+
+- **2026-09-24 - Codex. Completed P4.4 Task 2 without repeating a costly AWS
+  lifecycle.** Brought the local Compose dependencies back up and confirmed
+  migration state, then ran the remote catalog/discovery transient-outage retry
+  suite (17/17), database integration suite (83/83, including the topic-scoped
+  outbox isolation and both pre-/post-receipt confirmation reconciliation
+  cases), and the focused mobile Chromium scan-flow plus library-copies browser
+  suite (8/8). The real browser confirmation-to-library measurement was 164 ms.
+  The current P4.4 roadmap entry cross-links Task 1's genuine 1-vs-2 worker,
+  fixed-total-concurrency scaling evidence and P4.3 Task 4's actual staging
+  discovery-only delivery plus migration/service rollback rehearsal. It names
+  discovery's intentional non-scalability (ADR-0026) and PostgreSQL's still
+  shared failure boundary rather than claiming either as an extraction win.
+  Updated `docs/ROADMAP.md`, Current state, and Resume point. Final `npm run
+check` passed (423/423). Task 3 remains.
+
+- **2026-09-24 - Codex. Completed P4.4 Task 3 and audited the milestone.**
+  Compared the published P3.5 and P4.4 samples, measured two warm full builds
+  (21.95 s and 21.76 s), read the already-completed staging and production
+  workflow durations, and performed a read-only Cost Explorer forecast. The
+  evidence found no latency, error, confirmation, build, lifecycle, or cost
+  budget failure: 0/150 matched ingestion errors, 164 ms local confirmation,
+  six staging runs in 19m21s-26m29s, production activation in 19m30s, and a
+  $10.87 whole-account September forecast versus the $25 ceiling. It also
+  correctly leaves provider variance, P3.5 CI selection, and non-project
+  account charges out of extraction-benefit claims. The keep/revise/reverse
+  decision is published in P4.4: keep discovery with its single-replica
+  constraint, keep scan/core, revise/hold platform delivery. No tag or push:
+  P4.3 Task 4 still explicitly requires issue #19's scaling/concurrent-caller
+  proof and issue #29's authenticated pipeline smoke.
+
+- **2026-09-24 - Claude. Live-debugged and fixed development sign-in
+  (RLS blocked every JIT user-provisioning insert), then deployed the fix
+  through the full CI/platform pipeline.** Started from the maintainer's
+  report of "this page couldn't load" after submitting Clerk credentials on
+  `dev-vh.siliconforest.io`. Ruled out an outage (site, `/sign-in`, and
+  Clerk's own frontend API all healthy; CORS correct for the app's origin)
+  before finding the real cause directly in Lambda logs: every sign-in
+  attempt failed `requireUserId`'s JIT-provisioning `INSERT` into
+  `core.users` with `new row violates row-level security policy for table
+"users"`. Traced this to a gap in migration 021/022 (P4.2's scan/core
+  split): Supabase (development only) has RLS enabled on these tables, but
+  021 only `GRANT`ed the new non-owner app roles rather than creating RLS
+  policies or transferring ownership, so 022's writer-role switch silently
+  broke every write with no policy defined -- undetected because
+  verification only ever checked health endpoints, never a real first
+  sign-in. Given a choice between an RLS-policy fix and an ownership
+  transfer, the maintainer chose the RLS-policy approach as the smaller
+  deviation from ADR-0030's GRANT-only design. Wrote
+  `packages/database/migrations/023_scan_core_rls_policies.sql` and verified
+  it fully against the local Postgres before touching anything live:
+  applied cleanly, 423/423 unit tests, 9/9 `schema-boundary.integration.ts`
+  tests, and a direct reproduction of the exact failing insert as the
+  non-owner `vinylhound_core_app` role, confirmed fixed.
+
+  Getting the fix live required working through the actual deploy path end
+  to end, which had two unrelated blockers. First, `git add` staged the
+  migration locally, but the maintainer's own concurrent commit (`p4.4.1`,
+  `d3b328b`) swept it in and pushed directly -- confirmed via `git log`/
+  `git fetch` rather than assumed. That push then failed
+  `build-development-images.yml`'s CI gate on a `prettier --check` failure
+  from the maintainer's own benchmark-result file (unrelated to the
+  migration); fixed with a follow-up commit (`vinylhound_new@09aa96a`,
+  confirmed `prettier --check .` clean first). Second, that build succeeded
+  but `PLATFORM_DISPATCH_TOKEN` is not configured, so its auto-dispatch to
+  `vinylhound-platform`'s `deploy-development.yml` no-oped with a warning
+  instead of deploying -- caught by reading the job's own annotations rather
+  than assuming success from a green check, then triggered manually with the
+  exact image digests from that job's log
+  (`vinylhound-platform` run `36010388709`, `workflow_dispatch`, 2m59s).
+  That run's log confirms migration 023 applied
+  (`### MIGRATION 023_scan_core_rls_policies (UP) ###` / `[db] migrations
+applied`) against the live database. Post-deploy: `/api/healthz` and
+  `/api/readyz` both `200`, and a fresh Lambda log tail since the deploy
+  shows no further RLS errors. **Not independently confirmed: an actual
+  browser sign-in completing end-to-end post-fix** -- verification stopped
+  at the log-level and direct-SQL evidence above; the maintainer has not yet
+  retried signing in through the real UI. Updated this file's "Current
+  state" to match. Left the migration and formatting-fix commits pushed
+  (both already on `origin/main` per the maintainer's explicit go-ahead at
+  each step: committing/pushing the migration, then triggering the platform
+  deploy); this file's own edit is uncommitted, matching this repo's
+  precedent of leaving handoff updates for the maintainer or next session to
+  commit.
