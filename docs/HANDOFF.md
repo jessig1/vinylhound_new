@@ -3510,6 +3510,165 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
+**HANDOFF MID-TASK (2026-09-23, ~23:00-03:02 UTC window): production is
+LIVE RIGHT NOW as a hands-on debugging session for issue #8, started by
+Claude, continuing with Codex because Claude hit a usage limit.** Read this
+whole entry before touching anything — it describes real, currently-running
+AWS infrastructure, not a design note.
+
+**What's live right now, exactly:**
+
+- `vinylhound-production`'s EKS cluster, node group (`application`, 2 nodes),
+  ALB, CloudFront distribution, and WAF are all up. Applied via a **local**
+  `terraform apply` from this session (not through
+  `deploy-production.yml`), using commit
+  `3cd518ccad5cc15b86220976c427bfd9925ffa30`'s already staging-verified
+  images (`staging-passed-3cd518c...` tags exist for all three services).
+  Current `web_target_group_arn` output:
+  `arn:aws:elasticloadbalancing:us-east-1:138010381178:targetgroup/vinylhound-production-web/7cfe1181dbfd8dbf`
+  (this ARN changes every activation — always re-read it from `terraform
+output`, don't hardcode the one above).
+- **Kubernetes workloads are NOT deployed yet.** The local `terraform
+apply` only provisions the AWS-level infrastructure (EKS/ALB/CloudFront/
+  WAF/IAM) — it does not run `deploy-production.yml`'s later steps
+  ("Configure Kubernetes runtime", "Migrate database", "Deploy Kubernetes
+  workloads"). Those still need to be run by hand, following that
+  workflow's own steps exactly (`.github/workflows/deploy-production.yml`,
+  the "Configure Kubernetes runtime" step onward) — `kubectl create
+configmap runtime`/`kubectl create secret`, the migration Job, then the
+  three Deployments.
+- **A real, previously-undetected production bug was found and fixed
+  already, verified through a real staging cycle**: production's
+  Kubernetes migration Job (`infra/kubernetes/production/migration-job.yaml`)
+  overrode the container's command without
+  `--experimental-transform-types`, crashing with
+  `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` on production's first-ever real
+  migration attempt (run `35922801302`) — the same class of bug already
+  fixed for the ECS equivalent. Fixed in `vinylhound_new@3cd518c`, already
+  staging-verified via a real `deploy-staging.yml` run
+  (`vinylhound-platform` run `35929351661`, succeeded). This fix is real
+  and done; it is not what's still being debugged.
+- **What's still being debugged is issue #8 itself (the CloudFront 504),
+  reproduced again on this activation.** Diagnostics confirmed directly
+  against real AWS, ruling out several of issue #8's own candidates:
+  - ALB target health: both targets `healthy` (confirmed via
+    `aws elbv2 describe-target-health` directly, and via a new "Wait for
+    ALB target health" step added to `deploy-production.yml` itself,
+    `vinylhound_new@3664fde` — this step passed on the retry run).
+  - ALB listener → target group: correctly configured (port 80 → healthy
+    target group).
+  - Security group ALB←CloudFront (`node_from_alb`'s sibling rule on the
+    ALB's own SG): present, port 80, source `10.50.0.0/16` (whole VPC
+    CIDR).
+  - Security group node←ALB (`aws_vpc_security_group_ingress_rule.node_from_alb`,
+    `infra/terraform/production/edge.tf`): present, port 30080, correctly
+    scoped to the ALB's SG.
+  - CloudFront VPC origin: reports `Deployed`, correctly configured
+    (`http-only`, port 80).
+  - A direct `curl --max-time 75` (long enough to let CloudFront's own
+    60-second `OriginReadTimeout` actually fire) gets a **real** `504
+Gateway Timeout` with `X-Cache: Error from cloudfront` — meaning
+    CloudFront does reach the origin but never gets an HTTP response back
+    within 60 seconds, from a target AWS itself reports healthy.
+
+  **This rules out candidate #1 (ALB target registration delay) from
+  issue #8's own list.** The leading remaining candidate is **#3: NodePort
+  routing itself (kube-proxy) isn't forwarding port 30080 traffic to the
+  pod** — the ALB's own health checker succeeds against the same target/
+  port, but a real client request routed the identical path hangs. This
+  was never confirmed directly in any prior session (including this one's
+  first two attempts) because **no session before this had `kubectl`
+  access to the production cluster** — the GitHub Actions deploy role has
+  cluster access, but no human/local identity did.
+
+  **That access gap is now closed for this activation specifically**:
+  `infra/terraform/production/eks.tf` sets
+  `bootstrap_cluster_creator_admin_permissions = true`, which grants
+  cluster-admin to whichever IAM identity's `terraform apply` created the
+  cluster. Since this session's own root AWS credentials ran the apply
+  above, `aws eks update-kubeconfig --name vinylhound-production --region
+us-east-1` followed by plain `kubectl` **works right now** (confirmed:
+  `kubectl get nodes` returned both nodes `Ready`). This is the concrete
+  opportunity this handoff exists to hand off: **use `kubectl get
+endpoints -n vinylhound web`, `kubectl logs`, and/or a debug pod curling
+  the NodePort directly from inside the cluster to confirm or rule out the
+  kube-proxy theory** — something no prior session could actually check.
+  (Whoever picks this up needs to run their own `terraform apply` — or at
+  minimum needs their own IAM identity added via an EKS access entry — if
+  their session's identity isn't the same one that created this cluster;
+  the admin-on-create grant is per-identity, not universal.)
+
+**The plan in progress, as told to the maintainer before this handoff**:
+finish deploying the Kubernetes workloads by hand (fast local iteration,
+no pipeline wait), use the now-available `kubectl` access to actually
+diagnose and fix the real cause of the 504, apply that fix directly against
+the live cluster to confirm it works, **then port the same fix into the
+Terraform/Kubernetes config in the repository and re-run `terraform plan`
+against production's real state — it should show "no changes" (or exactly
+the intended diff) once the persisted state matches the fix** — the same
+verification pattern this whole project uses everywhere else (every prior
+Task 3/4 transfer and fix in this file was confirmed via a real plan/apply
+against live state, not assumed from local testing alone). Once verified,
+commit the fix so future runs of `deploy-production.yml` (the real,
+GitHub-Actions-driven path) pick it up automatically — no separate "update
+the CI" step should be needed beyond that, since the workflow already
+reads the same Terraform/Kubernetes files being fixed.
+
+**Safety net already in place — a 3-hour auto-teardown, set explicitly
+because this session was ending on a usage limit and could not stay
+attached to watch this live spend**:
+`aws ssm get-parameter --name /vinylhound/production/expires-at` is set to
+`2026-09-24T03:02:46Z` (confirmed via `MSYS_NO_PATHCONV=1 aws ssm
+get-parameter ...` — the leading `/` needs that env var in this Windows
+Git Bash environment or MSYS mangles the path into something invalid).
+`.github/workflows/deactivate-environment.yml` runs on an hourly
+`schedule: cron: "17 * * * *"` and reads exactly this parameter — once it
+reads a timestamp in the past, it tears production down automatically, no
+human action required. **This means production will auto-destroy by
+approximately 2026-09-24T04:17 UTC at the latest** (the first hourly sweep
+tick after the 3-hour mark) **unless whoever picks this up either extends
+it (re-run `aws ssm put-parameter ... --overwrite` with a later time, or
+re-apply Terraform with a later `TF_VAR_expires_at`) or tears it down
+sooner on purpose once done debugging** (prefer a clean `terraform apply
+-var environment_active=false` from the same local session, mirroring how
+this session cleanly reconciled the previous interrupted deactivation
+below — don't just let the sweep do it if you're mid-debugging and want a
+controlled stop).
+
+**Two earlier attempts this same session, for context on how we got
+here**: the first production activation (run `35922801302`, before the
+migration-job fix existed) failed at the migration step with the bug
+described above. The second (run `35931140653`, after the fix) got all the
+way to the CloudFront smoke test and hit the 504 there; the maintainer
+asked to cancel it and keep the infrastructure up rather than let it
+auto-deactivate, to avoid a full EKS rebuild for the next attempt — but
+**the cancellation landed after the EKS node group's `DeleteNodegroup` API
+call had already been issued by the in-flight "Deactivate after failed
+runtime deployment" step**, which cannot be stopped once started (AWS does
+not support cancelling an in-progress node group deletion), so that
+specific infrastructure was lost anyway. That interrupted deactivation
+also left a stale Terraform state lock
+(`environments/production.tfstate.tflock`, lock ID
+`eee9028d-c5eb-7d13-5b62-9a6ca02d3a45`, held by a GitHub Actions runner VM
+that no longer existed) — cleared with `terraform force-unlock -force
+<id>` before reconciling the rest of the interrupted deactivation cleanly
+(`0 add, 18 change, 8 destroy`, confirmed `environment_active = false`,
+EKS cluster and SSM `active` parameter both gone). Only then was the
+**third** activation — the one currently live — started fresh, this time
+directly via local `terraform apply` from the start (per the maintainer's
+explicit request, specifically to enable faster iteration without
+pipeline round-trips).
+
+**Also fixed this same session, unrelated to #8 directly but part of the
+same P4.3 Task 4 continuation**: bootstrap's transfer (closing P4.3
+Task 3), issue #19 item 3 (discovery-only redeploy, fixed and verified live
+twice), and issue #29 item 4 (a real staging rollback rehearsal against
+live Aurora) — all fully committed, pushed, and documented earlier in this
+same file and in `docs/roadmap/p4.3-platform-delivery.md`. None of that is
+in-flight; only the production activation described above is.
+
+---
+
 **P4.3 Task 3 is fully done (all four Terraform roots transferred to
 `vinylhound-platform`, including `bootstrap`). Task 4 is nearly done:
 activation/deactivation, migration, independent service delivery (issue #19
