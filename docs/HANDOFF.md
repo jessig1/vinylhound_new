@@ -15,6 +15,34 @@ the log.
 
 ## Current state — verified 2026-09-24 (continued session)
 
+- **P4.4 Task 1 is complete: the P3.5 load and fixed-provider-concurrency
+  harnesses were rerun unchanged against the current scan/core split with
+  matched inputs.** Published current samples:
+  `scripts/benchmark/results/2026-09-24T13-09-45-226Z/` and
+  `scripts/concurrency/results/2026-09-24T13-12-47-452Z/`; the paired P3.5
+  samples remain `2026-09-17T21-07-11-939Z` and
+  `2026-09-18T16-22-43-565Z`. Same laptop/Node version, local
+  PostgreSQL/Redis/MinIO, user/batch distribution, warm-process state,
+  fixtures, 25/5 stub/live scan counts, 1/2 worker counts, and total provider
+  concurrency 2 were preserved. The ingestion run passed 150/150 with zero
+  errors; the concurrency run passed 50/50 stub and 10/10 live analyses. The
+  final published live sample cost an estimated $0.0293; exploratory runs used
+  to diagnose isolation and restore exact workload parity bring this session's
+  total estimated provider spend to about $0.0885.
+
+  The run found one post-split harness limitation without changing the
+  scripts: migration 022 removed the user FKs on which the old
+  `truncate users, albums cascade` reset depended, so scan rows and the live
+  cost total accumulate across concurrency legs. The final run starts from a
+  freshly recreated dedicated benchmark database; timing records remain
+  per-leg because they come from each leg's worker stdout, and the second live
+  leg's incremental cost is the cumulative total minus the first leg
+  ($0.0293 - $0.0146 = $0.0147). The roadmap documents this, plus the honest
+  scope gaps: P3.5 has no discovery workload, local development deliberately
+  uses in-process discovery, the unmodified harness cannot target staging, and
+  the old live artifact did not persist its model/detail inputs. Task 3 must
+  not attribute live-provider variance to extraction. P4.4 Tasks 2-3 remain.
+
 - **Production's single-writer cutover is complete.** The scheduled/manual
   deactivation workflow moved to `vinylhound-platform@9d8a15c`. A reviewed
   bootstrap plan (`0 add, 1 change, 0 destroy`) updated only
@@ -3579,13 +3607,16 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**Current resume (2026-09-24): production is inactive, issue #8 is resolved,
-and the production single-writer cutover is complete.** Activation
-(`35944530419`), normal deactivation (`35946002486`), and the narrowed-role
-inactive deactivation check (`35999817780`) all succeeded from the platform
-delivery path. The next P4.3 work is Task 4's two remaining items: issue #19's
-discovery scaling/concurrency exercise and issue #29's authenticated pipeline
-smoke test.
+**Current resume (2026-09-24): P4.4 Task 1's matched before/after samples are
+published; continue with P4.4 Task 2.** Use the two current result directories
+named in Current state and read the Task 1 limitations before interpreting any
+latency or cost delta. Task 2 still needs the isolated-scaling,
+discovery/provider-outage, scan-backlog, delayed-confirmation, rollback, and
+unrelated-library-journey exercises. Production remains inactive, issue #8 and
+the single-writer cutover are resolved, and P4.3 Task 4's two independent open
+items (issue #19 scaling/concurrency and issue #29 authenticated pipeline smoke)
+remain available evidence/gaps rather than being silently closed by the local
+benchmark.
 
 **Historical handoff below is resolved; do not execute its live-environment
 instructions.** It is retained only as the diagnostic record of the local
@@ -7668,3 +7699,40 @@ file, ADR-0031, and the three docs above) belongs to this session alone.
   correctly treated production as inactive and made no Terraform change.
   Synchronized the reference bootstrap copy and operational documentation in
   both repositories. Production stayed inactive throughout.
+
+- **2026-09-24 - Codex. Completed P4.4 Task 1 with matched, unchanged P3.5
+  benchmark harnesses.** Ran the ingestion workload against the current
+  scan/core role split after recreating its dedicated database and explicitly
+  targeting both least-privilege URLs there: 150/150 timed pipelines passed,
+  zero errors, with the original 5-user × 2-batch × 5-scan distribution,
+  concurrency 10, discarded warmup, and three warm-process repetitions.
+  Repeated the P3.5 concurrency matrix with its original 25 stub/5 live scans
+  per leg, 1/2 workers, total provider concurrency 2, same fixture, same
+  machine/runtime, and one long-lived web process: 50/50 stub and 10/10 live
+  analyses passed; the published live calls cost an estimated $0.0293.
+  Published the two current result directories and documented parity plus every
+  limitation in `docs/roadmap/p4.4-verify-benefits.md`; updated both P4.4 status
+  cells in `docs/ROADMAP.md`.
+
+  The first diagnostic comparison exposed a real measurement limitation caused
+  by migration 022: without cross-schema user FKs, the unchanged harness's
+  `truncate users, albums cascade` no longer clears scan-owned rows, making the
+  live cost field cumulative across legs. Kept the requested harness source
+  unchanged, recreated only the literal dedicated benchmark databases before
+  final runs, used fresh-user/per-worker-log isolation for timing, and recorded
+  the correct incremental second-leg cost by subtraction. Diagnostic reruns
+  were removed rather than published; their provider calls bring total
+  estimated session spend to about $0.0885. Also recorded that P3.5 never calls
+  discovery, local development intentionally remains in-process for discovery,
+  and the old artifact omitted model/detail metadata, so Task 3 must separate
+  those gaps/provider variance rather than overclaim an extraction gain.
+  Scoped Prettier checks and `git diff --check` passed; `npm run lint`, `npm
+run typecheck`, and `npm run test` passed (423/423). `npm run check` stopped
+  only at its first step because the pre-existing, user-owned untracked
+  `scripts/benchmark/results/2026-09-24T13-04-27-092Z/summary.md` is not
+  Prettier-formatted; it was deliberately left untouched. Pre-existing
+  `package-lock.json`, `apps/web/next-env.d.ts`, and that earlier result were
+  preserved. A concurrent, user-owned
+  `packages/database/migrations/023_scan_core_rls_policies.sql` appeared during
+  the final benchmark run and the Docker Compose stack was stopped externally;
+  neither is part of this task and neither was modified.

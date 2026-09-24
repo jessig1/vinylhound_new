@@ -1,0 +1,246 @@
+{
+  "generatedAt": "2026-09-24T13:09:45.158Z",
+  "commit": "df3ea66ce308be6fcc4e4dc7bf42a8c0f4650331",
+  "workingTreeDirty": true,
+  "hardware": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpuModel": "Intel(R) Core(TM) 7 150U",
+    "cpuCount": 12,
+    "totalMemGiB": 15.7,
+    "nodeVersion": "v24.18.0"
+  },
+  "target": {
+    "mode": "local production standalone build (next build, single web replica, single worker replica)",
+    "database": "dedicated local PostgreSQL (docker compose), migrated fresh",
+    "queue": "dedicated local Redis/BullMQ queue",
+    "objectStorage": "local MinIO (real presigned S3-compatible PUT round trip)",
+    "aiAdapter": "synthetic (apps/worker/src/e2e-worker.ts); no OpenAI calls, no provider spend"
+  },
+  "dataset": {
+    "note": "5 distinct synthetic users, 2 batches per user, 5 scans per batch (50 scans/run). Fresh random user IDs every run, so pg_advisory_xact_lock(hashtext(userId)) in enforceScanQuota and the batch row SELECT ... FOR UPDATE in createOrGetScan are both exercised across many independent lock targets rather than one, and no quota state carries over between runs (see docs/PHASE_3_4_PLAN_REVIEW.md).",
+    "image": "one synthetic 600x600 JPEG, reused for every upload"
+  },
+  "warmup": {
+    "config": {
+      "users": 2,
+      "batchesPerUser": 1,
+      "scansPerBatch": 3,
+      "concurrency": 10
+    },
+    "note": "run once immediately after the stack reports ready; discarded from all reported metrics"
+  },
+  "cacheState": "single long-lived web + worker process for the warmup pass and all timed runs below (warm DB/Redis/MinIO connection pools and JIT); no restart between runs",
+  "runs": [
+    {
+      "config": {
+        "users": 5,
+        "batchesPerUser": 2,
+        "scansPerBatch": 5,
+        "concurrency": 10
+      },
+      "totalScans": 50,
+      "wallClockMs": 1804,
+      "throughputScansPerSec": 27.72,
+      "successCount": 50,
+      "errorCount": 0,
+      "errorRate": 0,
+      "pipelineLatencyMs": {
+        "count": 50,
+        "min": 295.55,
+        "p50": 338.65,
+        "p95": 429.21,
+        "p99": 451.97,
+        "max": 451.97,
+        "mean": 346.04
+      },
+      "stepLatencyMs": {
+        "scans.create": {
+          "count": 50,
+          "min": 38.97,
+          "p50": 65.2,
+          "p95": 98.12,
+          "p99": 104.5,
+          "max": 104.5,
+          "mean": 65.23
+        },
+        "uploads.create": {
+          "count": 50,
+          "min": 35.89,
+          "p50": 57,
+          "p95": 77.15,
+          "p99": 93.32,
+          "max": 93.32,
+          "mean": 57.31
+        },
+        "storage.put": {
+          "count": 50,
+          "min": 9.36,
+          "p50": 15.28,
+          "p95": 23.07,
+          "p99": 28.53,
+          "max": 28.53,
+          "mean": 15.52
+        },
+        "uploads.complete": {
+          "count": 50,
+          "min": 61.6,
+          "p50": 132.56,
+          "p95": 189.48,
+          "p99": 222.37,
+          "max": 222.37,
+          "mean": 136.09
+        },
+        "scans.submit": {
+          "count": 50,
+          "min": 25.38,
+          "p50": 70.93,
+          "p95": 102.03,
+          "p99": 110.78,
+          "max": 110.78,
+          "mean": 71.33
+        }
+      }
+    },
+    {
+      "config": {
+        "users": 5,
+        "batchesPerUser": 2,
+        "scansPerBatch": 5,
+        "concurrency": 10
+      },
+      "totalScans": 50,
+      "wallClockMs": 1619.49,
+      "throughputScansPerSec": 30.87,
+      "successCount": 50,
+      "errorCount": 0,
+      "errorRate": 0,
+      "pipelineLatencyMs": {
+        "count": 50,
+        "min": 173.05,
+        "p50": 314.48,
+        "p95": 397.91,
+        "p99": 413.34,
+        "max": 413.34,
+        "mean": 308.12
+      },
+      "stepLatencyMs": {
+        "scans.create": {
+          "count": 50,
+          "min": 39.09,
+          "p50": 59.16,
+          "p95": 100.68,
+          "p99": 104.98,
+          "max": 104.98,
+          "mean": 62.73
+        },
+        "uploads.create": {
+          "count": 50,
+          "min": 24.96,
+          "p50": 46.17,
+          "p95": 72.64,
+          "p99": 95.59,
+          "max": 95.59,
+          "mean": 49.14
+        },
+        "storage.put": {
+          "count": 50,
+          "min": 8.79,
+          "p50": 13.13,
+          "p95": 24.07,
+          "p99": 30.56,
+          "max": 30.56,
+          "mean": 15.02
+        },
+        "uploads.complete": {
+          "count": 50,
+          "min": 48.44,
+          "p50": 117.09,
+          "p95": 168.64,
+          "p99": 170.15,
+          "max": 170.15,
+          "mean": 120.1
+        },
+        "scans.submit": {
+          "count": 50,
+          "min": 15.7,
+          "p50": 61.33,
+          "p95": 91.7,
+          "p99": 92.79,
+          "max": 92.79,
+          "mean": 60.53
+        }
+      }
+    },
+    {
+      "config": {
+        "users": 5,
+        "batchesPerUser": 2,
+        "scansPerBatch": 5,
+        "concurrency": 10
+      },
+      "totalScans": 50,
+      "wallClockMs": 1526.8,
+      "throughputScansPerSec": 32.75,
+      "successCount": 50,
+      "errorCount": 0,
+      "errorRate": 0,
+      "pipelineLatencyMs": {
+        "count": 50,
+        "min": 202.96,
+        "p50": 289.6,
+        "p95": 348.24,
+        "p99": 358.46,
+        "max": 358.46,
+        "mean": 292.82
+      },
+      "stepLatencyMs": {
+        "scans.create": {
+          "count": 50,
+          "min": 35.94,
+          "p50": 57.93,
+          "p95": 87.26,
+          "p99": 105.14,
+          "max": 105.14,
+          "mean": 60.91
+        },
+        "uploads.create": {
+          "count": 50,
+          "min": 31.87,
+          "p50": 47.67,
+          "p95": 64.01,
+          "p99": 68.94,
+          "max": 68.94,
+          "mean": 48.67
+        },
+        "storage.put": {
+          "count": 50,
+          "min": 9.86,
+          "p50": 14.81,
+          "p95": 28.53,
+          "p99": 32.61,
+          "max": 32.61,
+          "mean": 15.69
+        },
+        "uploads.complete": {
+          "count": 50,
+          "min": 53.41,
+          "p50": 110.9,
+          "p95": 138.6,
+          "p99": 141.16,
+          "max": 141.16,
+          "mean": 111.7
+        },
+        "scans.submit": {
+          "count": 50,
+          "min": 19.22,
+          "p50": 55.29,
+          "p95": 76.94,
+          "p99": 80.57,
+          "max": 80.57,
+          "mean": 55.32
+        }
+      }
+    }
+  ]
+}
