@@ -2,17 +2,20 @@ data "aws_cloudfront_cache_policy" "disabled" { name = "Managed-CachingDisabled"
 data "aws_cloudfront_cache_policy" "optimized" { name = "Managed-CachingOptimized" }
 data "aws_cloudfront_origin_request_policy" "all_viewer" { name = "Managed-AllViewer" }
 data "aws_cloudfront_response_headers_policy" "security" { name = "Managed-SecurityHeadersPolicy" }
+data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
 
 resource "aws_security_group" "alb" {
   name_prefix = "${local.name}-alb-"
   description = "Private CloudFront VPC origin"
   vpc_id      = aws_vpc.main.id
   ingress {
-    description = "HTTP from CloudFront VPC-origin ENIs inside the dedicated VPC"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    description     = "HTTP from CloudFront origin-facing managed prefix list"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id]
   }
   egress {
     from_port   = 0

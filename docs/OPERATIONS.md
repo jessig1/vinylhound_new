@@ -305,22 +305,24 @@ discovery service and P4.2 Task 7's scan/core split.
 
 ### production
 
-**As of 2026-09-23, this root's ownership-transfer plumbing exists in
-[vinylhound-platform](https://github.com/jessig1/vinylhound-platform), but
-`vinylhound_new` remains the sole real writer** — deliberately, unlike
-`development`/`environment`, since issue #8 still gates a real production
-activation rehearsal. `vinylhound-github-production-deploy` is dual-trusted
-(both repositories); `vinylhound_new`'s own `deploy-production.yml`/
-`deactivate-environment.yml` are still live and un-frozen. A plan-only
-rehearsal from the platform repository returned "No changes" against
-production's real (inactive) state, after this session applied production's
-own pending foundation-level drift (16 resources: scan/core secrets,
-confirmation queues, `discovery_shared_secret` — the same never-applied
-P4.1/P4.2 Task 7 drift staging had) directly, with `environment_active`
-staying `false` throughout. See `docs/roadmap/p4.3-platform-delivery.md`'s
-Task 3 entry for the full record. The inventory below otherwise still
-describes the current state accurately (backend key, locking,
-configuration are unchanged).
+**As of 2026-09-24, the production activation path in
+[vinylhound-platform](https://github.com/jessig1/vinylhound-platform) is
+rehearsed, but the ownership cutover is not complete.** Platform run
+`35944530419` provisioned EKS/CloudFront, configured Kubernetes, migrated the
+database, rolled out all three services, and passed both public health checks;
+the normal application-repository deactivation run `35946002486` then drained
+work and returned the environment to its inactive resting state. The rehearsal
+fixed issue #8: the ALB must allow the CloudFront origin-facing managed prefix
+list, not merely the VPC CIDR. It also caught and synced a stale platform copy
+of the migration Job's `--experimental-transform-types` flag.
+
+`vinylhound-github-production-deploy` remains dual-trusted and
+`vinylhound_new`'s production deploy/deactivation workflows remain live until
+the scheduled/manual deactivation workflow is moved to the platform
+repository, trust is narrowed, and the old workflows are frozen as one
+cutover. Coordinate both repositories until then because they share the same
+state key. See `docs/roadmap/p4.3-platform-delivery.md` for the full evidence.
+The inventory below otherwise remains accurate.
 
 - **Backend**: `backend "s3" {}`, same shape, no `backend.hcl.example`.
   Three workflow steps initialize it against the same key

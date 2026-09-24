@@ -13,7 +13,68 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
-## Current state — verified 2026-09-23 (continued session)
+## Current state — verified 2026-09-24 (continued session)
+
+- **2026-09-24 continuation: production now deploys end to end, issue #8's
+  CloudFront 504 is fixed, the platform-repository path is verified live, and
+  production is back in its inactive resting state.** Codex resumed Claude's
+  live local activation exactly at the handoff below. AWS login had expired;
+  after reauthentication, Terraform reported `environment_active=true`, both
+  EKS nodes were `Ready`, and the `vinylhound` namespace did not yet exist.
+  Reproduced the workflow manually: created the namespace/config/secrets, ran
+  the production migration Job (`No migrations to run!`), and rolled out web
+  (2 replicas), worker, and discovery using commit
+  `3cd518ccad5cc15b86220976c427bfd9925ffa30`'s staging-verified digests.
+
+  **Issue #8 root cause, proven live:** pod/Service access and the internal ALB
+  returned `200`; both instance targets were healthy; CloudFront alone returned
+  a 60-second `504`. AWS's VPC-origin contract requires origin ingress from
+  either the `com.amazonaws.global.cloudfront.origin-facing` managed prefix
+  list or the service-managed `CloudFront-VPCOrigins-Service-SG`. The ALB SG
+  incorrectly allowed only `10.50.0.0/16`. Adding prefix list `pl-3b927c52`
+  changed CloudFront to `200` immediately. Persisted that rule in both
+  repositories, applied a reviewed targeted Terraform plan (`0 add, 1 change,
+0 destroy`), removed the obsolete CIDR rule, and got a follow-up targeted
+  "No changes" plan. The only full-plan drift was Claude's intentional
+  out-of-Terraform SSM expiry extension. Public `/api/healthz` and
+  `/api/readyz` both returned `200` after the managed apply.
+
+  **CI evidence:** `vinylhound-platform@44032be` contains the ingress fix and
+  adds the production/bootstrap roots that its `platform.yml` validation job
+  had accidentally omitted; validation run `35939216446` passed all four
+  roots. The first real platform activation (`35940327461`) found a transfer
+  drift: the platform copy of `migration-job.yaml` lacked
+  `--experimental-transform-types`, even though `vinylhound_new@3cd518c` had
+  already fixed it. The Job reproduced `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` and
+  automatic cleanup returned the environment inactive. Synced the manifest in
+  `vinylhound-platform@d9ae988`. Retry `35944530419` then passed the cost guard
+  without break-glass, provisioned EKS/CloudFront, configured Kubernetes,
+  migrated, rolled out all three services, and passed both CloudFront smoke
+  tests. Independent checks confirmed both endpoints `200` and only the managed
+  prefix-list ingress on the ALB. Normal deactivation run `35946002486` passed
+  stop/drain (`activeScans=0`, queues empty), removed the namespace, and
+  completed Terraform teardown. Final live checks: Terraform and SSM both say
+  `false`; EKS returns `ResourceNotFoundException`.
+
+  One attempted deactivation (`35939323942`) failed safely before teardown
+  because the locally-created cluster granted bootstrap admin to the local root
+  identity, not the GitHub role. Codex drained it locally and applied a reviewed
+  deactivation plan (`0 add, 42 change, 22 destroy`). The CI-created retry used
+  the shared deploy role as cluster creator, and its later CI deactivation
+  succeeded, proving this was only a local-debug identity boundary, not a
+  production workflow defect.
+
+  Platform commits `44032be` and `d9ae988` are pushed. The matching
+  `vinylhound_new` Terraform/docs changes are the current session's work. Local
+  verification: `npm run check` (423/423), Terraform fmt/validate across all
+  four roots, live reviewed apply/no-change plan, platform validation CI, real
+  production activation, and normal CI deactivation. Issue #8 was closed with
+  the live evidence.
+  The remaining ownership cutover is separate: move scheduled/manual
+  deactivation to `vinylhound-platform`, narrow the production deploy role's
+  OIDC trust to that repository, and freeze the old application-repository
+  production workflows atomically. P4.3 Task 4's two staging-only gaps remain
+  unchanged (issue #19 scaling/concurrency and issue #29 authenticated smoke).
 
 - **P4.3 Task 3 is now fully done, and Task 4's two biggest remaining gaps
   (independent service delivery and the staging rollback rehearsal) are now
@@ -3510,11 +3571,26 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**HANDOFF MID-TASK (2026-09-23, ~23:00-03:02 UTC window): production is
-LIVE RIGHT NOW as a hands-on debugging session for issue #8, started by
-Claude, continuing with Codex because Claude hit a usage limit.** Read this
-whole entry before touching anything — it describes real, currently-running
-AWS infrastructure, not a design note.
+**Current resume (2026-09-24): production is inactive and issue #8 is
+resolved.** The platform repository has now completed a real production
+activation (`35944530419`) and the normal deactivation path completed afterward
+(`35946002486`). The immediate next platform-delivery task is the final
+single-writer cutover: copy the scheduled/manual deactivation workflow into
+`vinylhound-platform`, update its documentation, narrow the production deploy
+role's OIDC trust to that repository, and freeze the two old production
+workflows in `vinylhound_new` as one coordinated change. Do not run either
+production deploy workflow concurrently; they still share the same state key
+and the IAM trust is still dual. Separately, P4.3 Task 4 remains open only for
+issue #19's discovery scaling/concurrency item and issue #29's authenticated
+pipeline smoke test.
+
+**Historical handoff below is resolved; do not execute its live-environment
+instructions.** It is retained only as the diagnostic record of the local
+activation Claude handed to Codex.
+
+**HANDOFF MID-TASK (2026-09-23, ~23:00-03:02 UTC window): production was
+live as a hands-on debugging session for issue #8, started by Claude and
+continued by Codex after Claude hit a usage limit.**
 
 **What's live right now, exactly:**
 
@@ -3679,33 +3755,20 @@ pipeline smoke test (issue #29 item 3) — both blocked the same way prior
 sessions found (no real MusicBrainz/Spotify provider credentials in
 staging; a hard sandbox denial on extracting the Clerk secret key,
 respectively), neither attempted again this session.** `production`'s
-ownership-transfer plumbing is in `vinylhound-platform` but deliberately
-stops short of a cutover (issue #8 still gates a real activation) — **this
-was the fourth item the maintainer chose this session (alongside the three
-above) but it was not reached; it is the natural next item.** Issues
-#9/#10 are closed on GitHub. Issue #19 has a comment recording the fix and
+activation path in `vinylhound-platform` is now verified live; only the final
+single-writer IAM/workflow cutover remains. Issues #8/#9/#10 are closed on
+GitHub. Issue #19 has a comment recording the fix and
 its live verification, and remains open only for item 4 (scaling). Issue
 #29 has a comment recording the rollback rehearsal's full evidence, and
 remains open only for item 3 (the authenticated smoke test) — the
 maintainer's own call on whether that alone is enough to close it.
 
-**Next session: production's activation rehearsal**, gated on issue #8 (a
-real, unresolved production-only bug — ALB/CloudFront returns a persistent
-504 despite Kubernetes reporting a successful rollout; see the issue for
-the full root-cause narrowing and suggested next steps, particularly adding
-an explicit `aws elbv2 describe-target-health` diagnostic step to
-`deploy-production.yml` before the smoke test, so the next real attempt
-gets real diagnostic output instead of another blind retry). This is
-real-money, real-risk EKS/CloudFront infrastructure — confirm scope with
-the maintainer before starting, matching this project's own established
-pattern of checking in before every comparable step (staging's own rollback
-rehearsal above was explicitly confirmed via `AskUserQuestion` before
-touching the live database, for the same reason). Once a real activation
-succeeds from `vinylhound-platform`, `vinylhound_new`'s own
-`deploy-production.yml`/`deactivate-environment.yml` should be frozen and
-`vinylhound-github-production-deploy`'s trust narrowed to single-writer —
-not before, since narrowing ahead of a validated real activation would
-leave production with an unvalidated sole writer.
+**Next platform-delivery session: complete production's single-writer
+cutover.** The prerequisite real activation from `vinylhound-platform` now
+succeeds. Move the scheduled/manual deactivation workflow there, validate a
+normal drain/deactivation from that repository, narrow
+`vinylhound-github-production-deploy` trust to it, and freeze
+`vinylhound_new`'s old production deploy/deactivation workflows atomically.
 
 Superseded below (kept for context only): the previous resume point's
 description of P4.3 Task 4 as "partially demonstrated" with the rollback
@@ -7573,3 +7636,22 @@ Updated this file's "Current state" and "Resume point" to match. Left
 uncommitted, since this session was not asked to commit; the working tree
 was clean at session start (`da8e29b`), so every changed/new file (this
 file, ADR-0031, and the three docs above) belongs to this session alone.
+
+- **2026-09-24 - Codex. Resumed Claude's live production-debug handoff,
+  fixed issue #8, and proved the platform-repository production path through
+  CI.** Restored the expired AWS login, finished the manual Kubernetes runtime
+  deployment, and isolated CloudFront from the healthy pod/Service/NodePort/ALB
+  path. AWS's documented VPC-origin ingress contract exposed the root cause:
+  the ALB allowed the VPC CIDR instead of CloudFront's origin-facing managed
+  prefix list. Verified the rule live (`504` → `200`), applied it through a
+  reviewed Terraform plan, synced both repositories, and got a no-change
+  targeted plan. Added missing production/bootstrap validation to the platform
+  CI (`44032be`, run `35939216446`). The first real platform activation
+  (`35940327461`) found its migration manifest copy had missed the already-fixed
+  `--experimental-transform-types` flag; synced it (`d9ae988`). Retry
+  `35944530419` passed provision, migration, all rollouts, and both public smoke
+  tests. Normal deactivation `35946002486` passed drain and teardown; final
+  state is inactive with no EKS cluster. Updated operations/roadmap/platform
+  docs and issue evidence. `npm run check` passed 423/423; all four Terraform
+  roots validated. The remaining next step is production's atomic single-writer
+  cutover, not another activation debug cycle.
