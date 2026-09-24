@@ -1,5 +1,17 @@
 # Session handoff
 
+> **2026-09-24 P4.4 completion:** P4.3's last concurrent-caller demonstration
+> passed twice from a live staging web task after the Service Connect short
+> DNS alias was corrected. Cold calls serialized behind the single-replica
+> limiter; cached repeats took 6 ms. Discovery logged HTTP 200 throughout.
+> P4.4's final audit now passes: the matched benchmark budgets remain met,
+> the authenticated pipeline smoke and rollback were already proven, and a
+> fresh Cost Explorer forecast remains below $25. The optional GitHub-runner
+> ECS Exec probe still loses its Session Manager stream; that CI diagnostic
+> fault is distinct from the successful live service probe. No further
+> activation/build cycle is needed for the P4.4 decision. The roadmap has
+> the detailed evidence and limitation.
+
 > **2026-09-24 issue #30 investigation:** AWS's Service Connect API defaults
 > an omitted client alias DNS name to `discoveryName.namespace`; the staging
 > web application and coordination probe instead call the short host
@@ -3760,6 +3772,15 @@ confirmed; issue #30 has the open question. Ten staging activate/deactivate
 cycles ran this session; the maintainer chose to stop debugging #30 live and
 write it up instead. Production remains inactive; issue #8 and the
 single-writer cutover are resolved.
+
+**Latest resume (2026-09-24): P4.3 Task 4 and P4.4 now pass.** The Service
+Connect alias fix resolved issue #30 live, and the concurrent-caller script
+passed twice from a real staging web task. The optional GitHub-runner ECS Exec
+stream still fails with EOF despite retry, so future CI work should change
+that diagnostic transport rather than repeat staging activations. The
+P4.4 keep/revise/reverse audit and current cost check are in its roadmap
+entry. Both staging runs have zero ECS services after cleanup; production
+remains inactive. The next roadmap task is P4.5.
 
 **Historical handoff below is resolved; do not execute its live-environment
 instructions.** It is retained only as the diagnostic record of the local
@@ -8084,3 +8105,29 @@ discovery`. Broadened the harness's retry to cover it too
   passed Terraform validation and an active-topology read-only plan with a
   JSON assertion for the `discovery` DNS alias. No staging resources were
   activated. PR merge, one live DNS/probe check, and re-audit of P4.4 remain.
+
+- **2026-09-24 - Codex. Completed the P4.3 concurrent-caller demonstration
+  and P4.4 final audit without rebuilding application images.** Merged
+  platform PR #1 and activated staging once with existing `4e8112b` images.
+  Run `36060987511` passed provisioning, migrations, service stability, and
+  public health/readiness checks. The web task resolved `discovery` through
+  Service Connect. Running the exact coordination script directly against
+  the live web task passed twice: cold calls at 469/1470/2578 ms with a 6 ms
+  cached repeat, then 1468/2571/3782 ms sorted with another 6 ms cached
+  repeat. Discovery logged HTTP 200 for each call. The GitHub runner's
+  optional probe failed because its Session Manager stream returned
+  `Cannot perform start session: EOF` after DNS resolved; that five-second
+  failure was a transport interruption, not a failed limiter/cache test.
+  Platform PR #2 added a narrow EOF retry, a fresh random query per remote
+  attempt, and a local mock reproducing the AWS CLI's exit-0/EOF behavior.
+  CI run `36063878115` passed the mock, Terraform validation, and an active
+  staging topology plan. A second staging run (`36064094477`) still failed
+  the runner's optional ECS Exec step after eight attempts, each resolving
+  `discovery` before the same Session Manager EOF. CloudWatch recorded repeated
+  HTTP 200 concurrent batches and cached responses. Stopped the lifecycle
+  loop there; both runs' cleanup removed all staging ECS services. Cost
+  Explorer showed $10.25 month to date and a $10.87 whole-account September
+  forecast against P4.4's $25 ceiling. P4.3 Task 4 and P4.4 now pass on
+  direct live evidence; the runner's ECS Exec stream remains a documented
+  diagnostic limitation, not a topology blocker. Updated both roadmap
+  entries and the Phase 4 summary.
