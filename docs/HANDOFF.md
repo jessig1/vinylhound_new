@@ -38,6 +38,19 @@ the log.
 > wait for that limit to clear, dispatch the same workflow input again, and
 > capture the new diagnostic output before marking issue #19 complete.
 
+> **2026-09-24 P4.3 Task 4 conclusion (later same session, Claude):** issue
+> #29 item 3 is genuinely done -- a real Clerk sign-in and scan/confirm
+> pipeline against staging, watched live via CloudWatch logs, evidence in the
+> issue and in P4.3's roadmap file. Issue #19 item 4 found and fixed three
+> real bugs in the probe harness itself (`vinylhound-platform@369b83f`,
+> `d6241c6`, `7c5df19`: a read-only root filesystem silently blocking ECS
+> Exec's agent install, the harness trusting an AWS CLI exit code that does
+> not reflect the remote command's real result, and a broken shell-quoting
+> diagnostic), then surfaced a genuine, new, unresolved blocker: the web
+> task's Service Connect proxy is healthy but never routes DNS, tracked as
+> issue #30. P4.4 remains not taggable. Full detail in P4.3's roadmap file
+> and the Resume point below.
+
 ## How to resume
 
 1. Read "Current state" and "Resume point" below.
@@ -3714,6 +3727,24 @@ gain from its deliberately single-replica design, do not treat shared
 PostgreSQL as isolated, and do not attribute provider variance or P3.5's
 earlier CI gains to the extractions. Production remains inactive; issue #8 and
 the single-writer cutover are resolved.**
+
+**Current resume (2026-09-24, later same day): issue #29 item 3 is genuinely
+done (real evidence in the issue and in P4.3's roadmap file); issue #19 item
+4 is not, and now has a specific, real blocker instead of the two sandbox
+limitations recorded above. Continue with issue #30 (Service Connect proxy
+is healthy but never routes DNS for the client-only web task), then retry
+`scripts/aws/probe-discovery-coordination.sh` (itself now fixed and working
+end-to-end -- `vinylhound-platform@369b83f`/`d6241c6`/`7c5df19`) once #30 is
+resolved, then rerun P4.4's decision audit.** Do not re-attribute the
+Service Connect DNS failure to a startup race or the exec harness -- both
+were ruled out directly (8 retries over 2 minutes; a working, judged-by-
+output-not-exit-code harness). Do not infer that real catalog/discovery
+traffic is broken in staging from this alone either -- that is plausible
+(`web` uses the same DNS alias for real traffic) but not yet independently
+confirmed; issue #30 has the open question. Ten staging activate/deactivate
+cycles ran this session; the maintainer chose to stop debugging #30 live and
+write it up instead. Production remains inactive; issue #8 and the
+single-writer cutover are resolved.
 
 **Historical handoff below is resolved; do not execute its live-environment
 instructions.** It is retained only as the diagnostic record of the local
@@ -7917,3 +7948,108 @@ applied`) against the live database. Post-deploy: `/api/healthz` and
   deploy); this file's own edit is uncommitted, matching this repo's
   precedent of leaving handoff updates for the maintainer or next session to
   commit.
+
+- **2026-09-24 (later session) - Claude. Reviewed P4.4's state at the
+  maintainer's request, committed Codex's pending P4.4 Tasks 1-3 work, then
+  closed issue #29 item 3 for real and made genuine progress (but not a
+  close) on issue #19 item 4.** Committed and pushed the uncommitted P4.4
+  doc updates from the prior session (`vinylhound_new@128290a`) after
+  spot-checking their claims against commits/test counts/workflow runs.
+
+  **Confirmed the browser sign-in fix from the prior entry above**: the
+  maintainer signed in through the real UI during this session's staging
+  window without incident -- the "not independently confirmed" caveat above
+  no longer applies.
+
+  **Issue #29 item 3 (authenticated pipeline smoke test), genuinely done.**
+  Reintroduced `deploy-staging.yml`'s `hold_minutes` input (same pattern as
+  its prior, since-reverted 2026-09-23 use) so staging could stay active
+  long enough for a real browser walkthrough. The maintainer signed in for
+  real and ran a scan through confirmation while this session watched
+  `/vinylhound/staging/worker` directly via `aws logs filter-log-events`
+  (`MSYS_NO_PATHCONV=1` needed -- Git Bash otherwise mangles the leading
+  `/vinylhound/...` log group name as a Windows path). Evidence:
+  `scan_analysis_timing` (`identified`), the full
+  `scan_confirmed_event_published` → `scan_confirmation_processed` →
+  `confirmation_completion_applied` → `confirmation_receipt_published`
+  chain with matching `idempotencyKey`/`scanId` and zero errors, and
+  `confirmationToLibraryLatencyMs` of 262 ms and 29 ms across two confirmed
+  scans -- comfortably inside the <=2 s design budget, against staging's
+  real Aurora cluster and scan/core role split, not a health-check proxy.
+  Posted in full to issue #29.
+
+  **Issue #19 item 4 (concurrent-caller probe): three real harness bugs
+  found and fixed, then a genuine new infrastructure blocker found and
+  handed off as issue #30.** This session had real AWS credentials
+  available locally (`aws sts get-caller-identity` resolves to the account
+  root -- confirmed before using it, same access pattern the 2026-09-23
+  rollback rehearsal used) and used them directly to run ten staging
+  activate/deactivate cycles diagnosing this. In order, each confirmed live
+  against real staging before moving to the next:
+  1. The prior session's `9d9e728` fix (force a web redeploy before the
+     probe) didn't hold up on rerun: `execute-command was not enabled when
+     the task was run`, persisting through the wait it was meant to cover.
+  2. Root cause: the web container's `readonlyRootFilesystem: true`
+     silently blocks Fargate from ever installing the ECS Exec agent
+     sidecar into the container's own filesystem -- `enableExecuteCommand`
+     stays `true` at the task level, `describe-tasks`' `managedAgents` field
+     never appears at all (confirmed directly, repeatedly, over a minute-plus
+     wait), and every attempt fails with the identical error with no way to
+     distinguish it from an ordinary startup race. Fixed in
+     `vinylhound-platform@369b83f`: `readonlyRootFilesystem =
+     !var.enable_execute_command`, relaxed only for this same one-time
+     diagnostic window `enable_execute_command` already gates.
+  3. That got ECS Exec itself genuinely working (a real session connected
+     and ran code inside the container) but surfaced `getaddrinfo ENOTFOUND
+     discovery`. Broadened the harness's retry to cover it too
+     (`2ab4cfb`) -- then found a real bug in the retry logic itself while
+     investigating why retries weren't helping: `aws ecs execute-command
+     --interactive`'s own exit status reflects only whether the SSM session
+     connected/ended, not the remote script's actual exit code. A run whose
+     remote script crashed with the uncaught DNS error still returned exit 0
+     from the CLI call, so the retry loop broke out on attempt 1 and
+     reported "success" despite the remote assertions never actually
+     running -- meaning every earlier "probe passed" this harness had ever
+     reported, across this and prior sessions, was not real evidence. Fixed
+     in `d6241c6`: judge success from the remote script's own printed output
+     (one JSON marker line, with no `Error: ` anywhere in the output)
+     instead of the CLI's exit code.
+  4. Added a shell-level diagnostic prefix to print `/etc/resolv.conf` and a
+     direct `getent hosts discovery` lookup before the real probe --
+     confirmed live that this broke the ECS Exec session entirely under a
+     third layer of shell quoting (this script's bash -> the AWS CLI's own
+     argument handling -> the remote shell SSM invokes), not a finding about
+     anything real. Reverted that approach in `7c5df19`, moved the same
+     diagnostic inside the already-working `--eval` (`readFileSync` +
+     `dns.promises.lookup`) instead, which needs no additional shell
+     quoting.
+  5. With the harness now genuinely correct and its own diagnostic in
+     place, got a definitive answer: `resolv.conf: "nameserver
+     10.40.0.2\nsearch ec2.internal\n"` (the plain VPC-provided resolver)
+     and `lookup(discovery) failed: getaddrinfo ENOTFOUND discovery`, even
+     though a separate `describe-tasks` check on an earlier stopped task
+     confirmed the `ecs-service-connect-<suffix>` proxy sidecar is present
+     and reports `healthy`. Reproduced across 3 fresh deployments (each a
+     brand-new service create, staging's services are destroyed/recreated
+     every activate cycle by design) with an 8-attempt/2-minute retry window
+     that rules out a startup race. The proxy exists and is healthy; DNS is
+     never routed through it for this client-only (`no service{} block`)
+     consumer. This is a genuine, previously-undetected infrastructure gap,
+     not a probe artifact -- and because `web`'s own application code uses
+     this exact same `DISCOVERY_SERVICE_URL=http://discovery:4001` alias for
+     real catalog/discovery traffic (`apps/web/src/server/context.ts`, `GET
+     /api/v1/catalog/releases`), this may mean real app traffic is affected
+     too, not yet independently confirmed either way. Opened
+     [issue #30](https://github.com/jessig1/vinylhound_new/issues/30) with
+     full evidence and what's needed next; commented on issue #19 linking
+     it. At the maintainer's explicit choice, stopped live debugging here
+     (ten staging cycles run this session) rather than continuing further
+     tonight.
+
+  **P4.4 remains not taggable**: its exit is still held on P4.3 Task 4,
+  which is still open, now specifically on issue #30 rather than the two
+  sandbox limitations the prior entries recorded. Updated
+  `docs/roadmap/p4.3-platform-delivery.md`'s Task 4 section and this file's
+  Resume point to match; did not touch P4.4's own roadmap file or
+  keep/revise/reverse table, since Task 3's conclusions there are unaffected
+  by this session's P4.3 Task 4 work.
