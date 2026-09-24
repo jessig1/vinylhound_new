@@ -1,5 +1,20 @@
 # Session handoff
 
+> **2026-09-24 issue #30 investigation:** AWS's Service Connect API defaults
+> an omitted client alias DNS name to `discoveryName.namespace`; the staging
+> web application and coordination probe instead call the short host
+> `discovery`. A platform fix explicitly sets `dns_name = "discovery"` and moves
+> the probe's pass marker after its assertions. It is in
+> [vinylhound-platform PR #1](https://github.com/jessig1/vinylhound-platform/pull/1),
+> commit `c8acea2`. Local Terraform validate, shell syntax, and diff checks
+> passed. CI run `36060198394` passed all Terraform roots and a read-only
+> active-topology staging plan whose JSON assertion found the intended alias.
+> CI plan preview initially exposed two independent pre-existing workflow
+> gaps (missing `TF_VAR_environment`; a plan role unable to refresh secret
+> values); the PR fixes the former and uses saved state for the read-only plan,
+> preserving least privilege. **Runtime DNS and the concurrent-caller probe
+> remain unverified** until the PR is merged and one staging activation runs.
+
 Live state shared between the agents working in this repository (OpenAI Codex,
 primary; Claude, secondary) and the maintainer. Every agent session that
 changes files or reaches a decision must update this file before ending. The
@@ -7988,7 +8003,7 @@ applied`) against the live database. Post-deploy: `/api/healthz` and
   against real staging before moving to the next:
   1. The prior session's `9d9e728` fix (force a web redeploy before the
      probe) didn't hold up on rerun: `execute-command was not enabled when
-     the task was run`, persisting through the wait it was meant to cover.
+the task was run`, persisting through the wait it was meant to cover.
   2. Root cause: the web container's `readonlyRootFilesystem: true`
      silently blocks Fargate from ever installing the ECS Exec agent
      sidecar into the container's own filesystem -- `enableExecuteCommand`
@@ -7997,14 +8012,14 @@ applied`) against the live database. Post-deploy: `/api/healthz` and
      wait), and every attempt fails with the identical error with no way to
      distinguish it from an ordinary startup race. Fixed in
      `vinylhound-platform@369b83f`: `readonlyRootFilesystem =
-     !var.enable_execute_command`, relaxed only for this same one-time
+!var.enable_execute_command`, relaxed only for this same one-time
      diagnostic window `enable_execute_command` already gates.
   3. That got ECS Exec itself genuinely working (a real session connected
      and ran code inside the container) but surfaced `getaddrinfo ENOTFOUND
-     discovery`. Broadened the harness's retry to cover it too
+discovery`. Broadened the harness's retry to cover it too
      (`2ab4cfb`) -- then found a real bug in the retry logic itself while
      investigating why retries weren't helping: `aws ecs execute-command
-     --interactive`'s own exit status reflects only whether the SSM session
+--interactive`'s own exit status reflects only whether the SSM session
      connected/ended, not the remote script's actual exit code. A run whose
      remote script crashed with the uncaught DNS error still returned exit 0
      from the CLI call, so the retry loop broke out on attempt 1 and
@@ -8025,7 +8040,7 @@ applied`) against the live database. Post-deploy: `/api/healthz` and
      quoting.
   5. With the harness now genuinely correct and its own diagnostic in
      place, got a definitive answer: `resolv.conf: "nameserver
-     10.40.0.2\nsearch ec2.internal\n"` (the plain VPC-provided resolver)
+10.40.0.2\nsearch ec2.internal\n"` (the plain VPC-provided resolver)
      and `lookup(discovery) failed: getaddrinfo ENOTFOUND discovery`, even
      though a separate `describe-tasks` check on an earlier stopped task
      confirmed the `ecs-service-connect-<suffix>` proxy sidecar is present
@@ -8038,7 +8053,7 @@ applied`) against the live database. Post-deploy: `/api/healthz` and
      not a probe artifact -- and because `web`'s own application code uses
      this exact same `DISCOVERY_SERVICE_URL=http://discovery:4001` alias for
      real catalog/discovery traffic (`apps/web/src/server/context.ts`, `GET
-     /api/v1/catalog/releases`), this may mean real app traffic is affected
+/api/v1/catalog/releases`), this may mean real app traffic is affected
      too, not yet independently confirmed either way. Opened
      [issue #30](https://github.com/jessig1/vinylhound_new/issues/30) with
      full evidence and what's needed next; commented on issue #19 linking
@@ -8053,3 +8068,19 @@ applied`) against the live database. Post-deploy: `/api/healthz` and
   Resume point to match; did not touch P4.4's own roadmap file or
   keep/revise/reverse table, since Task 3's conclusions there are unaffected
   by this session's P4.3 Task 4 work.
+
+- **2026-09-24 - Codex. Investigated issue #30 locally before another staging
+  lifecycle.** Cross-checked the Terraform Service Connect blocks and the
+  `http://discovery:4001` caller against AWS's documented alias default:
+  without `dnsName`, the endpoint is `discoveryName.namespace`, so the app's
+  short host has no matching alias. Added the explicit `discovery` alias in
+  `vinylhound-platform` PR #1 and moved the probe's success event after its
+  limiter/cache assertions. Terraform validation, shell syntax, and diff
+  checks passed locally. PR CI first exposed that its staging plan omitted
+  `TF_VAR_environment`, then that the read-only plan role cannot refresh
+  secret values. Corrected the variable and made the PR plan use saved state;
+  then changed it to preview the active ECS topology, since an inactive plan
+  reports no changes and cannot inspect discovery. CI run `36060198394`
+  passed Terraform validation and an active-topology read-only plan with a
+  JSON assertion for the `discovery` DNS alias. No staging resources were
+  activated. PR merge, one live DNS/probe check, and re-audit of P4.4 remain.
