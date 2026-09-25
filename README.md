@@ -4,9 +4,11 @@
 [![Security](https://github.com/jessig1/vinylhound_new/actions/workflows/security.yml/badge.svg)](https://github.com/jessig1/vinylhound_new/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Project status:** Phase 1 MVP complete. Phase 2 adds a public contribution
-> workflow and just-in-time AWS deployment. The demonstration environment may
-> be offline outside scheduled portfolio demos.
+> **Project status:** Phase 4 service extraction is complete. Phase 5 plans
+> reliable hands-free capture, a private AI baseline, and measured
+> collection-aware discovery. Phase 2's remaining manual gates and P3.4's
+> open task remain separately tracked. The demonstration environment may be
+> offline outside scheduled portfolio demos.
 
 VinylHound is a mobile-first application for identifying vinyl albums from cover photos and organizing the results into a collection or wishlist. It supports camera capture, single-photo upload, and batch ingestion.
 
@@ -141,6 +143,7 @@ architecture changes before implementation.
 - [Private model evaluation runner](docs/EVALUATION.md)
 - [Catalog source evaluation](docs/CATALOG_EVALUATION.md)
 - [Delivery roadmap](docs/ROADMAP.md)
+- [Phase 5 plan](docs/roadmap/phase-5-capture-ai-discovery.md)
 - [Architecture decisions](docs/decisions/README.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Security reporting](SECURITY.md)

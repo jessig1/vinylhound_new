@@ -923,7 +923,7 @@ discourage (`OPENAI_API_KEY` should stay empty outside deliberate manual
 verification). The real enforced ceiling everywhere real spend can happen is
 **$5/user/month**, not $20.
 
-**Reconciled total, current scale (single tester, pre-public-usage — P4.5
+**Reconciled total, current scale (single tester, pre-public-usage — P5.3
 gates public usage):** persistent baseline $5.60 + the $5 AI ceiling = **$10.60
 /month** steady state with development always-live and staging/production
 both inactive, as they are today. Headroom to the $25 target: **$14.40
@@ -959,7 +959,7 @@ production rehearsal) ≈ **$21/month — under the $25 target with roughly $4
 of margin.** No scope, hour, or allowance reduction is needed at today's
 single-tester scale; the $20-vs-$5 correction above is what closes the gap
 the plan review flagged, not a new restriction. This margin assumes the
-AI-cap contribution stays at one active tester — re-check it before P4.5
+AI-cap contribution stays at one active tester — re-check it before P5.3
 enables public usage, since aggregate AI spend scales with real user count
 while the $5-per-user ceiling stays fixed per user, not per account.
 

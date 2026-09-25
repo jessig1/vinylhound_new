@@ -1,5 +1,14 @@
 # Session handoff
 
+> **2026-09-25 roadmap decision:** Phase 4 closes at P4.4. The unfinished
+> P4.5 private image/AI baseline moved intact to Phase 5 P5.3; only its
+> manifest-scaffolding tooling is complete. Phase 5 leads with capture
+> feasibility and reliable hands-free scanning, then collection-aware
+> discovery and a measured embeddings decision. See
+> `docs/roadmap/phase-5-capture-ai-discovery.md`. No Phase 5 product feature,
+> private dataset, billable evaluation, or vector service was created by
+> this roadmap change.
+
 > **2026-09-24 P4.4 fully verified:** P4.3's concurrent-caller demonstration
 > passed twice from a live staging web task after the Service Connect short
 > DNS alias was corrected. A later staging workflow run (`36067767860`) also
@@ -96,7 +105,15 @@ the log.
 > No private images or labels exist yet; that is maintainer work outside the
 > repository. `npm run check` passed (428/428, +5 new scaffold tests).
 
-## Current state — verified 2026-09-24 (continued session)
+## Current state — updated 2026-09-25
+
+- **Phase 4 is closed at P4.4; Phase 5 is planned, not implemented.** P4.4's
+  measured keep decision remains: discovery is single-replica, scan/core
+  share physical PostgreSQL, and platform delivery passed the final green
+  staging workflow. The former P4.5 is now P5.3 with labeling and held-out
+  evaluation still open. Phase 2 issues #11-#15 and P3.4 Task 4 (issue #20)
+  remain independently open. The private dataset does not exist on this
+  checkout; the maintainer must supply consented photos and verified labels.
 
 - **Development sign-in was broken for every new user; now fixed and
   verified live.** The maintainer reported "this page couldn't load" after
@@ -3809,6 +3826,17 @@ invent labels. Once `npm run eval:ai -- --dry-run` shows a real
 development/holdout batch ready, move to Task 2 (fix sample composition and
 acceptance thresholds before any billable run). Production remains inactive;
 issue #8 and the single-writer cutover are resolved.
+
+**Current resume (2026-09-25): begin Phase 5 P5.1.** Collect consented
+phone/webcam clips and measure current false captures, misses, duplicates,
+latency, and crop coverage against the continuous-capture proposal. Start
+P5.3's maintainer-owned private image labeling in parallel, without
+fabricating cases. P5.2's public release and any AI recognition improvement
+claim wait for the documented device gates and the P5.3 held-out baseline.
+Then evaluate a metadata-based collection suggestion baseline before any
+embeddings or vector-storage commitment. The older resume paragraphs above
+are historical; use `docs/roadmap/phase-5-capture-ai-discovery.md` for
+current tasks and gates. Production remains inactive.
 
 **Historical handoff below is resolved; do not execute its live-environment
 instructions.** It is retained only as the diagnostic record of the local
@@ -8207,3 +8235,19 @@ discovery`. Broadened the harness's retry to cover it too
   not something this session can do.** Working tree changes are uncommitted,
   matching this repo's precedent of leaving commits for the maintainer or
   next session.
+
+- **2026-09-25 - Codex. Closed the Phase 4 roadmap at P4.4 and planned
+  Phase 5.** Updated `docs/ROADMAP.md` and P4.1's closeout note to reflect
+  the already-recorded discovery-only delivery/rollback, concurrent-caller
+  probe, P4.4 measurement, and single-replica constraint. Moved the three
+  unfinished P4.5 private AI baseline tasks into P5.3 in
+  `docs/roadmap/phase-5-capture-ai-discovery.md`; the old P4.5 page now
+  redirects there. The README status and links now reflect the same sequence.
+  Phase 5 orders capture feasibility, hands-free capture,
+  the private baseline, collection-aware metadata suggestions, and an
+  evidence-gated embeddings decision. Updated current roadmap references
+  in Phase 1 and Operations. No application code, contract, provider,
+  infrastructure, private data, or billable evaluation changed. The
+  maintainer must still provide consented photos and verified labels.
+  `npm run check` passed (44 test files, 428 tests); targeted Prettier and
+  `git diff --check` passed after the final documentation edits.

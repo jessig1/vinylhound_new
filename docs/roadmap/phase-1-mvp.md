@@ -24,7 +24,8 @@ Phase 2 platform blockers.
 - [x] **Task 7.** Add phone-sized end-to-end coverage for the capture-to-confirm path.
 - [x] **Task 8.** Validate Sol + `high` + prompt v2 manually and accept its artist/title
       quality for the early build. The formal private AI evaluation is deferred
-      until public application usage or model/cost optimization (see P4.5).
+      until public application usage or model/cost optimization (see
+      [Phase 5, P5.3](phase-5-capture-ai-discovery.md#p53--private-data-and-ai-baseline-former-p45)).
 
 Exit criterion: one phone photo can become a user-confirmed collection or wishlist item, with retry and failure visibility.
 
@@ -108,4 +109,5 @@ Milestone 2 and Milestone 3 are complete except per-copy edit/delete, which
 remains explicitly deferred to a future slice (not currently the next
 recommended task — see `docs/HANDOFF.md`'s resume point for what to pick up
 next). Keep the formal private AI evaluation as a gate before public application usage
-or model/cost optimization (see P4.5).
+or model/cost optimization (see
+[Phase 5, P5.3](phase-5-capture-ai-discovery.md#p53--private-data-and-ai-baseline-former-p45)).
