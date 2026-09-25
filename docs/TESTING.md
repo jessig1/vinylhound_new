@@ -53,6 +53,7 @@ npm run build
 npm run test:integration
 npm run test:e2e
 npm run test:e2e:matrix
+npm run eval:scaffold -- --manifest <private-manifest-path> --image-root <private-image-dir>
 npm run eval:ai -- --manifest <private-manifest-path> --dry-run
 npm run container:build
 terraform -chdir=infra/terraform/bootstrap validate

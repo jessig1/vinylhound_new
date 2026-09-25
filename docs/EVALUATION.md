@@ -26,6 +26,48 @@ provider request. Image paths must be relative to the manifest's `imageRoot` and
 cannot escape it. Image bytes become request-scoped Base64 data URLs and are not
 written to the result file.
 
+## Building the manifest
+
+Store the image folder and `manifest.json` anywhere outside this repository
+(for example `C:\Users\essig\Desktop\albums\`). The scaffolder discovers
+JPEG/PNG/GIF/WebP files under an image root and adds one blank case per new
+image; it never touches a case that already exists, so it is safe to rerun
+every time more photos are added:
+
+```powershell
+npm run eval:scaffold -- --manifest "C:\Users\essig\Desktop\albums\manifest.json" --image-root "C:\Users\essig\Desktop\albums\images"
+```
+
+The first run creates the manifest if it does not exist yet. Each run prints
+how many cases were added and how many still need labeling. A freshly
+scaffolded case is intentionally not runnable: `viewType`, `split`, and every
+`groundTruth`/`consent` field start `null`/`false` so an unlabeled case can
+never be selected by `selectRunnableCases` (see "Prerequisites" above). Open
+the manifest and, for each new case:
+
+- set `viewType` and assign `split` (`development` or `holdout` — keep a real
+  holdout that is not inspected while tuning);
+- fill `groundTruth.artist`/`title` and any verified edition facts you can
+  confirm from the physical copy, not from a provider suggestion;
+- set `groundTruth.expectedOutcome` (`identify`, `needs_review`, or
+  `unresolved`) and add `qualityTags`/notes for anything unusual;
+- set `groundTruth.maintainerVerified: true` only once you have personally
+  confirmed the label;
+- set `consent.allowedForPrivateEvaluation: true` only for images you consent
+  to sending to the provider for this private evaluation, and add
+  `consent.retentionNotes` if retention differs from the dataset default.
+
+`appSuggestions.chatgptWeb`/`geminiWeb` are optional cross-checks: paste
+another tool's read of the cover there before you decide the verified label,
+if you want a second opinion. They are not scored and are never required.
+
+Validate after labeling a batch — this makes no API calls and lists every
+case still missing a required field:
+
+```powershell
+npm run eval:ai -- --manifest "C:\Users\essig\Desktop\albums\manifest.json" --split all --dry-run
+```
+
 ## Workflow
 
 Validate the holdout inputs first. This makes no API calls:

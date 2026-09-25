@@ -85,6 +85,17 @@ the log.
    building on it.
 3. Do the work, update this file, and append a session-log entry.
 
+> **2026-09-24 P4.5 Task 1 tooling (Claude):** added `npm run eval:scaffold`
+> (`packages/evals/src/scaffold.ts`/`scaffold-cli.ts`) to close the gap
+> between the existing eval runner and an empty machine — no private
+> manifest or image folder exists here yet (the 2026-08-31 52-case manifest
+> referenced earlier in this file is not present on this checkout). The
+> scaffolder discovers images under a private root and idempotently adds one
+> blank, unrunnable case per new photo without ever touching an already
+> labeled case. Documented the labeling workflow in `docs/EVALUATION.md`.
+> No private images or labels exist yet; that is maintainer work outside the
+> repository. `npm run check` passed (428/428, +5 new scaffold tests).
+
 ## Current state — verified 2026-09-24 (continued session)
 
 - **Development sign-in was broken for every new user; now fixed and
@@ -3781,6 +3792,23 @@ S3 result report (`vinylhound-platform@a97dc48`, run `36067767860`). The
 P4.4 keep/revise/reverse audit and cost check are in its roadmap entry. ECS
 has zero staging services after cleanup; production remains inactive. The
 next roadmap task is P4.5.
+
+**Later resume (2026-09-24, same day): P4.5 Task 1 tooling is done; labeling
+is not.** No private manifest or image folder exists on this checkout —
+asked the maintainer and they chose to have the scaffolding built now rather
+than pointing at existing data or deferring. Added `npm run eval:scaffold`
+(`packages/evals/src/scaffold.ts`, `scaffold-cli.ts`, `scaffold.test.ts`) and
+documented the labeling workflow in `docs/EVALUATION.md`'s new "Building the
+manifest" section. `npm run check` passed (428/428). **Continue P4.5 Task 1
+by having the maintainer photograph consented album covers into a private
+image folder, run `npm run eval:scaffold`, and hand-label the resulting
+blank cases** (`viewType`, `split`, verified ground truth,
+`maintainerVerified: true`, `allowedForPrivateEvaluation: true`) — this is
+maintainer work the agent cannot do; do not fabricate manifest entries or
+invent labels. Once `npm run eval:ai -- --dry-run` shows a real
+development/holdout batch ready, move to Task 2 (fix sample composition and
+acceptance thresholds before any billable run). Production remains inactive;
+issue #8 and the single-writer cutover are resolved.
 
 **Historical handoff below is resolved; do not execute its live-environment
 instructions.** It is retained only as the diagnostic record of the local
@@ -8149,3 +8177,33 @@ discovery`. Broadened the harness's retry to cover it too
   Terraform reported `environment_active=false` afterward; ECS had zero
   staging services. Updated P4.3/P4.4 roadmap entries and current resume to
   reflect a green end-to-end workflow rather than the earlier CI caveat.
+
+- **2026-09-24 - Claude. Started P4.5 Task 1 by building the missing
+  manifest-scaffolding tooling.** P4.4 is complete and P4.5 (private data
+  and AI baseline) is next per the roadmap. Task 1 requires a private,
+  maintainer-verified, consented image manifest; none exists on this
+  checkout (`C:\Users\essig\Desktop\albums` does not exist, and the
+  2026-08-31 handoff entry's 52-case manifest is not present here). Asked
+  the maintainer how to proceed; they chose to have the manifest-building
+  tooling built now. Added `packages/evals/src/scaffold.ts` and
+  `scaffold-cli.ts` (`npm run eval:scaffold -- --manifest <path>
+--image-root <dir>`): discovers JPEG/PNG/GIF/WebP files under an image
+  root (including subdirectories) and idempotently appends one blank case
+  per new image, continuing `vh-NNN` numbering and never overwriting an
+  existing case's fields. A freshly scaffolded case is intentionally
+  unrunnable (`viewType`/`split`/ground truth start `null`,
+  `maintainerVerified`/`allowedForPrivateEvaluation` start `false`/`null`),
+  so `selectRunnableCases`' existing readiness gate keeps it out of any
+  billable run until the maintainer labels it. Verified with 5 new unit
+  tests (creation, idempotent rerun preserving hand-edited labels, numbering
+  continuation, subdirectory discovery, and the no-images error) plus a
+  manual smoke test: scaffold twice against a throwaway image folder (second
+  run added nothing), then `npm run eval:ai -- --dry-run` correctly listed
+  every required missing field. `npm run check` passed 428/428. Documented
+  the labeling workflow in `docs/EVALUATION.md`'s new "Building the
+  manifest" section and added the command to `docs/TESTING.md`'s command
+  list. Updated P4.5's roadmap file. **No private images or labels exist
+  yet — that step needs the maintainer's own consented photographs and is
+  not something this session can do.** Working tree changes are uncommitted,
+  matching this repo's precedent of leaving commits for the maintainer or
+  next session.

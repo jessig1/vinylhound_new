@@ -41,6 +41,7 @@
     "test:e2e:matrix": "npm run test:e2e:matrix --workspace @vinylhound/web",
     "eval:ai": "npm run eval --workspace @vinylhound/evals --",
     "eval:ai:vision-matrix": "npm run eval:ai -- --models gpt-5.6-terra,gpt-5.6-sol --details high,auto",
+    "eval:scaffold": "npm run scaffold --workspace @vinylhound/evals --",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "lint": "eslint .",

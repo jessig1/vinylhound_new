@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "eval": "tsx --env-file-if-exists=../../.env src/cli.ts",
+    "scaffold": "tsx src/scaffold-cli.ts",
     "build": "tsc --project tsconfig.json"
   },
   "dependencies": {
