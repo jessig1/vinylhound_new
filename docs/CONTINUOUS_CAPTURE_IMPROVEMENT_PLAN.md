@@ -2,6 +2,13 @@
 
 Date: 2026-09-19. Status: proposal; no application changes implemented.
 
+Implementation update, 2026-09-28: [P5.1 Task 1](roadmap/phase-5-capture-ai-discovery.md)
+now implements an experimental local geometry/tracking pipeline under
+[ADR-0032](decisions/0032-experimental-cover-candidate-capture.md). The
+proposal below is the original research record, including its then-current
+implementation findings. Private detector/device evaluation and audited
+analysis-crop integration remain outstanding; automatic capture defaults off.
+
 ## Recommendation
 
 Replace whole-scene stillness capture with an album-aware browser pipeline:

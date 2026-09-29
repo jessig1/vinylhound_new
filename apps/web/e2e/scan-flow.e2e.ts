@@ -29,6 +29,13 @@ test.beforeAll(async () => {
 test("uploads selected cover photos as independently trackable records", async ({
   page,
 }) => {
+  // HTTP LAN/WSL origins and older browsers lack randomUUID. Exercise the
+  // fallback throughout capture, refresh, review, and retry.
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto, "randomUUID", { value: undefined });
+  });
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto("/scan");
   await page.setInputFiles(uploadInput, [
     { name: "front.jpg", mimeType: "image/jpeg", buffer: coverJpeg },
@@ -119,6 +126,54 @@ test("uploads selected cover photos as independently trackable records", async (
   await page.getByRole("button", { name: "retry this scan" }).click();
   await expect(page.getByLabel("Artist")).toHaveValue("The Vinyl Hounds");
   await expect(page.getByText("High confidence")).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test("explains unavailable image hashing without crashing the scan page", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto, "randomUUID", { value: undefined });
+    Object.defineProperty(crypto, "subtle", { value: undefined });
+  });
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.route("**/api/v1/batches", (route) =>
+    route.fulfill({
+      json: {
+        batchId: "708ff24e-7980-43ca-9faa-6612d334ebfe",
+        createdAt: new Date().toISOString(),
+      },
+    }),
+  );
+  let scanRequests = 0;
+  page.on("request", (request) => {
+    if (
+      new URL(request.url()).pathname === "/api/v1/scans" &&
+      request.method() === "POST"
+    ) {
+      scanRequests += 1;
+    }
+  });
+  await page.goto("/scan");
+  await page.setInputFiles(uploadInput, {
+    name: "front.jpg",
+    mimeType: "image/jpeg",
+    buffer: coverJpeg,
+  });
+  await page.getByRole("button", { name: "Start capture session" }).click();
+
+  await expect(page.locator("p.form-error")).toContainText(
+    "Photo uploads need HTTPS",
+  );
+  await expect(page.locator("p.form-error")).toContainText(
+    "localhost:3000/scan",
+  );
+  await expect(
+    page.getByLabel("Upload photos", { exact: true }),
+  ).toBeAttached();
+  expect(scanRequests).toBe(0);
+  expect(pageErrors).toEqual([]);
 });
 
 test("groups two front-cover photos into an independently trackable batch", async ({

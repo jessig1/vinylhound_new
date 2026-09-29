@@ -17,6 +17,44 @@
 
 CI should never require production secrets or make billable OpenAI calls. Provider integration tests are opt-in and use a dedicated low-budget project.
 
+## Experimental cover capture (P5.1 Task 1)
+
+`CAPTURE_CANDIDATE_MODE_ENABLED=false` is the default; live camera capture
+uses a manual shutter. For local candidate-mode trials, set it to `true` in
+the root `.env` and restart the web process. Do not enable public automatic
+capture until P5.2/P5.3's private detector/device and AI gates pass.
+
+Unit tests under `apps/web/src/app/scan/camera/` exercise synthetic negative
+scenes, normalized corners, time-based tracking, best-frame selection,
+duplicates, and replacement. Browser tests use actual synthetic canvas images
+and the bundled worker; they submit through the existing signed-upload path
+with the non-billable e2e worker. Run the focused camera journey with:
+
+```bash
+npm run test:e2e --workspace @vinylhound/web -- live-camera.e2e.ts
+```
+
+The e2e environment explicitly enables candidate mode. Tests cover no-cover
+intervals, held covers, replacement/reintroduction, manual fallback, and stale
+encoding after pause. Passing these tests is not a real-camera accuracy claim.
+The crop remains a local preview; full camera snapshots still go to analysis.
+
+For local camera and upload trials, use `http://localhost:3000/scan` on the
+development computer or HTTPS from another device. HTTP LAN/WSL addresses do
+not expose camera or image hashing APIs. Browser UUID generation falls back
+to `getRandomValues` when `randomUUID` is absent, allowing drafts and review
+actions to render. The scan-flow upload/review regression disables native
+UUIDs throughout the journey; a separate test checks clear guidance when
+image hashing is unavailable.
+
+`npm run dev` uses HTTP; localhost supports these browser APIs without TLS.
+For explicit local HTTPS, stop that server and run `npm run dev:https` before
+opening `https://localhost:3000/scan`. Next.js generates development
+certificates on first use. On Windows, the command limits mkcert to the
+operating system trust store because Java's protected certificate store can
+otherwise cause Next.js to fall back to HTTP. Confirm that the server prints
+an HTTPS URL.
+
 ## Evaluation dataset
 
 Store consented images outside the public repository with a versioned manifest containing:

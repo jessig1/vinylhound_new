@@ -4,119 +4,139 @@ type LiveCameraHarness = {
   frame: number;
   getUserMediaCalls: number;
   stoppedTracks: number;
-  states: string[];
+  delayEncoding: boolean;
+  submissions: number;
 };
-
-async function installLiveCameraStub(page: Page) {
-  await page.addInitScript(() => {
-    const harness = {
-      frame: 0,
-      getUserMediaCalls: 0,
-      stoppedTracks: 0,
-      states: [] as string[],
-    };
-    Object.defineProperty(window, "liveCameraHarness", {
-      configurable: true,
-      value: harness,
-    });
-
-    const observer = new MutationObserver(() => {
-      const state = document.querySelector(".live-camera__state")?.textContent;
-      if (state && harness.states.at(-1) !== state) harness.states.push(state);
-    });
-    observer.observe(document, {
-      childList: true,
-      subtree: true,
-    });
-
-    Object.defineProperties(HTMLMediaElement.prototype, {
-      readyState: { configurable: true, get: () => 4 },
-      videoWidth: { configurable: true, get: () => 512 },
-      videoHeight: { configurable: true, get: () => 512 },
-    });
-    Object.defineProperty(HTMLMediaElement.prototype, "play", {
-      configurable: true,
-      value: async () => undefined,
-    });
-    Object.defineProperty(HTMLMediaElement.prototype, "srcObject", {
-      configurable: true,
-      get: () => null,
-      set: () => undefined,
-    });
-
-    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
-      configurable: true,
-      value: () =>
-        ({
-          drawImage: () => undefined,
-          getImageData: () =>
-            ({
-              data: new Uint8ClampedArray(96 * 96 * 4).fill(harness.frame),
-            }) as ImageData,
-        }) as unknown as CanvasRenderingContext2D,
-    });
-    HTMLCanvasElement.prototype.toBlob = (callback) =>
-      callback(
-        new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" }),
-      );
-
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia: async () => {
-          harness.getUserMediaCalls += 1;
-          const track = {
-            addEventListener: () => undefined,
-            stop: () => {
-              harness.stoppedTracks += 1;
-            },
-          };
-          return {
-            addEventListener: () => undefined,
-            getTracks: () => [track],
-            getVideoTracks: () => [track],
-          } as unknown as MediaStream;
-        },
-      },
-    });
-  });
-}
-
 declare global {
   interface Window {
     liveCameraHarness: LiveCameraHarness;
   }
 }
 
-test("live camera captures once while held, rearms after change, and resumes after a pause", async ({
-  page,
-}) => {
-  await installLiveCameraStub(page);
-  await page.goto("/scan");
-
-  await page.getByRole("button", { name: "Use live camera" }).click();
-  await expect(page.getByText("1 record in this session")).toBeVisible({
-    timeout: 5_000,
-  });
-  await expect(page.locator(".live-camera__state")).toHaveText(
-    "Waiting for a new cover",
+async function installLiveCameraStub(
+  page: Page,
+  workerUnavailable = false,
+  timerFallback = false,
+) {
+  await page.addInitScript(
+    ({ workerUnavailable, timerFallback }) => {
+      const harness = {
+        frame: 0,
+        getUserMediaCalls: 0,
+        stoppedTracks: 0,
+        delayEncoding: false,
+        submissions: 0,
+      };
+      Object.defineProperty(window, "liveCameraHarness", { value: harness });
+      if (workerUnavailable)
+        Object.defineProperty(window, "Worker", { value: undefined });
+      Object.defineProperties(HTMLMediaElement.prototype, {
+        readyState: { configurable: true, get: () => 4 },
+        play: { configurable: true, value: async () => undefined },
+        srcObject: {
+          configurable: true,
+          get: () => null,
+          set: () => undefined,
+        },
+      });
+      Object.defineProperties(HTMLVideoElement.prototype, {
+        videoWidth: { configurable: true, get: () => 512 },
+        videoHeight: { configurable: true, get: () => 512 },
+        requestVideoFrameCallback: {
+          configurable: true,
+          value: (callback: (now: number) => void) =>
+            setTimeout(() => callback(performance.now()), 30),
+        },
+        cancelVideoFrameCallback: {
+          configurable: true,
+          value: (id: number) => clearTimeout(id),
+        },
+      });
+      if (timerFallback)
+        Object.defineProperty(
+          HTMLVideoElement.prototype,
+          "requestVideoFrameCallback",
+          { value: undefined },
+        );
+      const draw = CanvasRenderingContext2D.prototype.drawImage;
+      CanvasRenderingContext2D.prototype.drawImage = function (
+        this: CanvasRenderingContext2D,
+        ...args: Parameters<typeof draw>
+      ) {
+        if (!(args[0] instanceof HTMLVideoElement))
+          return draw.apply(this, args);
+        const { width, height } = this.canvas;
+        const data = this.createImageData(width, height);
+        for (let y = 0; y < height; y++)
+          for (let x = 0; x < width; x++) {
+            const inside =
+              harness.frame > 0 &&
+              x >= width / 4 &&
+              x <= (width * 3) / 4 &&
+              y >= height / 4 &&
+              y <= (height * 3) / 4;
+            const art =
+              harness.frame === 1
+                ? (x * 13 + y * 7) % 60
+                : (x * 7 + y * 13) % 60;
+            const coarse = (harness.frame === 1 ? x : y) < width / 2 ? 50 : 0;
+            const value = inside ? 110 + art + coarse : 15;
+            const i = (y * width + x) * 4;
+            data.data[i] = data.data[i + 1] = data.data[i + 2] = value;
+            data.data[i + 3] = 255;
+          }
+        this.putImageData(data, 0, 0);
+      } as typeof draw;
+      const toBlob = HTMLCanvasElement.prototype.toBlob;
+      HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
+        toBlob.call(
+          this,
+          (blob) => {
+            if (harness.delayEncoding) setTimeout(() => callback(blob), 800);
+            else callback(blob);
+          },
+          type,
+          quality,
+        );
+      };
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia: async () => {
+            harness.getUserMediaCalls++;
+            const track = {
+              addEventListener: () => undefined,
+              stop: () => harness.stoppedTracks++,
+            };
+            return {
+              addEventListener: () => undefined,
+              getTracks: () => [track],
+              getVideoTracks: () => [track],
+            };
+          },
+        },
+      });
+    },
+    { workerUnavailable, timerFallback },
   );
-
-  // A steady cover remains disarmed, so the sampler cannot add another record.
-  await page.waitForTimeout(1_000);
-  await expect(page.getByText("1 record in this session")).toBeVisible();
-
-  // A materially different frame must pass through rearmed before a new steady
-  // cover can be captured.
-  await page.evaluate(() => {
-    window.liveCameraHarness.frame = 255;
+  page.on("response", (response) => {
+    if (
+      /\/api\/v1\/scans\/[^/]+\/submit$/.test(response.url()) &&
+      response.ok()
+    ) {
+      void page
+        .evaluate(() => window.liveCameraHarness.submissions++)
+        .catch(() => {});
+    }
   });
-  await expect(page.getByText("2 records in this session")).toBeVisible({
-    timeout: 5_000,
-  });
-  const states = await page.evaluate(() => window.liveCameraHarness.states);
-  expect(states).toContain("Rearmed");
+}
 
+async function changeFrame(page: Page, frame: number) {
+  await page.evaluate((frame) => {
+    window.liveCameraHarness.frame = frame;
+  }, frame);
+}
+async function background(page: Page) {
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
@@ -124,18 +144,47 @@ test("live camera captures once while held, rearms after change, and resumes aft
     });
     document.dispatchEvent(new Event("visibilitychange"));
   });
+}
+
+test("candidate capture ignores empty scenes, submits once while held, and accepts a replacement", async ({
+  page,
+}) => {
+  await installLiveCameraStub(page);
+  await page.goto("/scan");
+  await page.getByRole("button", { name: "Use live camera" }).click();
+  await page.waitForTimeout(1200);
+  await expect(page.locator(".live-camera__state")).toHaveText(
+    "Looking for a cover",
+  );
+  expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
+    0,
+  );
+  await changeFrame(page, 1);
+  await expect
+    .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
+    .toBe(1);
+  await expect(page.locator(".live-camera__state")).toHaveText(
+    "Waiting for a new cover",
+  );
+  await page.waitForTimeout(1200);
+  expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
+    1,
+  );
+  expect(new URL(page.url()).pathname).toBe("/scan");
+  await changeFrame(page, 2);
+  await expect
+    .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
+    .toBe(2);
+  await background(page);
   await expect(
     page.getByText(
       "Live capture paused when this page went to the background.",
+      { exact: false },
     ),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Resume live camera" }),
   ).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => window.liveCameraHarness.stoppedTracks))
     .toBeGreaterThan(0);
-
   await page.getByRole("button", { name: "Resume live camera" }).click();
   await expect(
     page.getByRole("button", { name: "Stop live camera" }),
@@ -143,6 +192,75 @@ test("live camera captures once while held, rearms after change, and resumes aft
   await expect
     .poll(() => page.evaluate(() => window.liveCameraHarness.getUserMediaCalls))
     .toBe(2);
+});
+
+test("removal never captures the background and permits the same artwork again", async ({
+  page,
+}) => {
+  await installLiveCameraStub(page, false, true);
+  await page.goto("/scan");
+  await page.getByRole("button", { name: "Use live camera" }).click();
+  await changeFrame(page, 1);
+  await expect
+    .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
+    .toBe(1);
+  await changeFrame(page, 0);
+  await expect(page.locator(".live-camera__state")).toHaveText(
+    "Looking for a cover",
+  );
+  await page.waitForTimeout(800);
+  expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
+    1,
+  );
+  await changeFrame(page, 1);
+  await expect
+    .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
+    .toBe(2);
+  await page.getByRole("button", { name: "Finish scanning" }).click();
+  await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/);
+});
+
+test("worker-unavailable browsers keep an explicit manual camera and upload fallback", async ({
+  page,
+}) => {
+  await installLiveCameraStub(page, true);
+  await page.goto("/scan");
+  await page.getByRole("button", { name: "Use live camera" }).click();
+  await changeFrame(page, 1);
+  await page.waitForTimeout(900);
+  expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
+    0,
+  );
+  await page
+    .getByRole("button", { name: "Capture photo", exact: true })
+    .click();
+  await expect
+    .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
+    .toBe(1);
+  await page.getByRole("button", { name: "Scan another copy" }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
+    .toBe(2);
+  await expect(page.getByLabel("Upload photos")).toBeEnabled();
+});
+
+test("pausing during encoding discards the old camera photo", async ({
+  page,
+}) => {
+  await installLiveCameraStub(page);
+  await page.goto("/scan");
+  await page.getByRole("button", { name: "Use live camera" }).click();
+  await page.evaluate(() => {
+    window.liveCameraHarness.delayEncoding = true;
+    window.liveCameraHarness.frame = 1;
+  });
+  await expect(page.locator(".live-camera__state")).toHaveText("Captured");
+  await background(page);
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
+    0,
+  );
+  await expect(page.locator(".capture-session__record")).toHaveCount(0);
 });
 
 test("live-camera permission denial preserves the file-upload fallback", async ({
@@ -159,7 +277,6 @@ test("live-camera permission denial preserves the file-upload fallback", async (
     });
   });
   await page.goto("/scan");
-
   await page.getByRole("button", { name: "Use live camera" }).click();
   await expect(page.locator(".form-error")).toContainText(
     "couldn't open the camera",

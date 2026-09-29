@@ -19,6 +19,7 @@ import {
   type ScanCandidateResult,
 } from "@vinylhound/contracts";
 
+import { createUuid } from "../../../browser/uuid";
 import { Icon } from "../../ui";
 
 type Draft = {
@@ -71,7 +72,7 @@ const CONFIRMATION_STALE_AFTER_MS = 20_000;
 export default function ScanResultPage() {
   const { scanId } = useParams<{ scanId: string }>();
   const startManually = useSearchParams().get("manual") === "1";
-  const confirmationKey = useRef(`confirm-${crypto.randomUUID()}`);
+  const confirmationKey = useRef(`confirm-${createUuid()}`);
   const draftInitialized = useRef(false);
   const artistInput = useRef<HTMLInputElement>(null);
   const successHeading = useRef<HTMLHeadingElement>(null);
@@ -344,7 +345,7 @@ export default function ScanResultPage() {
     try {
       const response = await fetch(`/api/v1/scans/${scan.scanId}/retry`, {
         method: "POST",
-        headers: { "idempotency-key": `retry-${crypto.randomUUID()}` },
+        headers: { "idempotency-key": `retry-${createUuid()}` },
       });
       const body = (await response.json()) as {
         error?: { message?: string };
@@ -376,7 +377,7 @@ export default function ScanResultPage() {
     try {
       const response = await fetch(`/api/v1/scans/${scan.scanId}/cancel`, {
         method: "POST",
-        headers: { "idempotency-key": `cancel-${crypto.randomUUID()}` },
+        headers: { "idempotency-key": `cancel-${createUuid()}` },
       });
       const body = (await response.json()) as {
         error?: { message?: string };
@@ -414,7 +415,7 @@ export default function ScanResultPage() {
         {
           method: "POST",
           headers: {
-            "idempotency-key": `confirm-retry-${crypto.randomUUID()}`,
+            "idempotency-key": `confirm-retry-${createUuid()}`,
           },
         },
       );

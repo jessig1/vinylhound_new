@@ -12,6 +12,7 @@ import {
 } from "@vinylhound/contracts";
 import type { listScansForUser } from "@vinylhound/database";
 
+import { createUuid } from "../../browser/uuid";
 import { CoverArt } from "../cover-art";
 import { Icon } from "../ui";
 
@@ -47,7 +48,7 @@ export function ScanActivityRow({ scan }: { scan: ScanActivitySummary }) {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": `confirm-${crypto.randomUUID()}`,
+          "idempotency-key": `confirm-${createUuid()}`,
         },
         body: JSON.stringify({
           selectedCandidateId: candidate.id,
@@ -87,7 +88,7 @@ export function ScanActivityRow({ scan }: { scan: ScanActivitySummary }) {
     try {
       const response = await fetch(`/api/v1/scans/${scan.scanId}/cancel`, {
         method: "POST",
-        headers: { "idempotency-key": `dismiss-${crypto.randomUUID()}` },
+        headers: { "idempotency-key": `dismiss-${createUuid()}` },
       });
       const body = (await response.json()) as {
         error?: { message?: string };

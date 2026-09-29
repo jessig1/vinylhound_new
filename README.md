@@ -93,6 +93,35 @@ npm run dev
 
 On macOS or Linux, use `cp .env.example .env`. Open `http://localhost:3000`.
 
+The development server also allows hot reload from this computer's exact local
+IPv4 addresses, including LAN and WSL adapters. Restart `npm run dev` after an
+adapter's address changes so the development origin list is refreshed.
+
+For live camera capture and photo uploads, use `http://localhost:3000/scan`
+on this computer or HTTPS from another device. Plain HTTP on a LAN/WSL IP
+does not provide the browser camera and image hashing APIs.
+
+P5.1's experimental automatic cover capture is off by default. To try it
+locally, set `CAPTURE_CANDIDATE_MODE_ENABLED=true` in the root `.env` and
+restart the web server. Changing `.env.example` does not change a running
+server. With the flag off, the viewfinder asks you to use **Capture photo**.
+See [the capture test guide](docs/TESTING.md#experimental-cover-capture-p51-task-1)
+for the current detector limitations.
+
+`npm run dev` serves HTTP. Browsers treat `http://localhost` as a secure
+context, so camera capture and image hashing work there without HTTPS.
+To serve `https://localhost:3000/scan`, stop the HTTP dev server first and run:
+
+```bash
+npm run dev:https
+```
+
+Next.js generates a local development certificate on the first run and may
+prompt to trust its certificate authority. On Windows, the command selects
+the system trust store so a protected Java installation cannot force Next.js
+to fall back to HTTP. Certificates are ignored by git. Confirm that Next.js
+prints an HTTPS URL before opening it. See the [Next.js HTTPS instructions](https://nextjs.org/docs/app/api-reference/cli/next#using-https-during-development).
+
 The web shell does not require an OpenAI key. Before wiring or running image analysis, create an OpenAI API project/key and set `OPENAI_API_KEY` only in the server/worker environment. The consumer ChatGPT product is not called directly; VinylHound uses the OpenAI API.
 
 Run `npm run dev:worker` in a second terminal to publish committed outbox rows to

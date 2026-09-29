@@ -3,6 +3,8 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+import { createUuid } from "../browser/uuid";
+
 /**
  * Records another copy of an owned record: a second pressing, or a copy
  * again after the last one was removed (ADR-0024). One idempotency key is
@@ -30,7 +32,7 @@ export function AddLibraryCopy({
     setPending(true);
     setError(null);
     setAdded(false);
-    keyRef.current ??= `copy-${crypto.randomUUID()}`;
+    keyRef.current ??= `copy-${createUuid()}`;
     try {
       const response = await fetch(`/api/v1/library/${itemId}/copies`, {
         method: "POST",

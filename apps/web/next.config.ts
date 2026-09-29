@@ -1,3 +1,4 @@
+import { networkInterfaces } from "node:os";
 import path from "node:path";
 
 import { loadEnvConfig } from "@next/env";
@@ -17,6 +18,17 @@ loadEnvConfig(
 
 const nextConfig: NextConfig = {
   agentRules: false,
+  // Next may advertise a LAN/WSL address while only allowing localhost HMR.
+  // Allow exact addresses assigned to this host, without a wildcard origin.
+  allowedDevOrigins:
+    process.env.NODE_ENV === "production"
+      ? []
+      : Object.values(networkInterfaces()).flatMap(
+          (addresses) =>
+            addresses
+              ?.filter(({ family }) => family === "IPv4")
+              .map(({ address }) => address) ?? [],
+        ),
   output: "standalone",
   outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
   // Allows the e2e suite to build/serve from .next-e2e without touching the

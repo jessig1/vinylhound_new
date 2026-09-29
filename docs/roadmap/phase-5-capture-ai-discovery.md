@@ -9,7 +9,61 @@ P4.5 private data and AI baseline moves here unfinished. Phase 2 issues
 
 ## Sequence
 
-### P5.1 — Capture feasibility and baseline
+P5.1 and P5.2 were swapped on 2026-09-28: build the hands-free capture
+workflow first, then complete the feasibility and baseline milestone.
+P5.1's public rollout still requires P5.2's device/detector evidence and
+P5.3's private AI baseline; the reordered work does not waive release gates.
+
+### P5.1 — Reliable hands-free capture
+
+- [x] **Task 1 (implementation; public rollout gated).** Replace whole-scene stillness triggering with album candidate tracking,
+      quality selection, crop preview, removal/replacement rearming, and a
+      bounded frame buffer. Camera start is the one session action; accepted
+      albums require no shutter or submit action. Keep manual capture/file
+      upload when detection is uncertain or unsupported.
+      Implemented 2026-09-28 under
+      [ADR-0032](../decisions/0032-experimental-cover-candidate-capture.md):
+      candidate-scoped tracking, best frozen frame selection, local perspective
+      preview, bounded worker/frame processing, removal/replacement rearming,
+      and manual override. Automatic capture defaults off behind
+      `CAPTURE_CANDIDATE_MODE_ENABLED`; its initial geometry detector is not
+      a verified album classifier. Full-frame upload/analysis remains in place
+      until Task 3; P5.2/P5.3's release gates are still open.
+      Verification: repository checks (447 tests), workspace build, focused
+      camera browser matrix (20/20), and the existing file-upload journey pass.
+      A first private 81-second webcam screen recording reviewed 2026-09-29
+      showed one automatic capture from three distinct sleeves presented.
+      The red and sky sleeves stayed in the searching state. The yellow
+      sleeve reached qualification, but the outlined candidate was its dark
+      center artwork rather than the outer jacket; its lower jacket edge was
+      outside the camera image. This fails the intended real-device recall and
+      crop-quality outcomes. Keep the rollout gate closed and use the clip as
+      P5.2 detector evidence; the recording remains outside the repository.
+- [ ] **Task 2.** Queue accepted items immediately with stable idempotency keys; keep the
+      scanner open until explicit Finish/review. Bound local item and byte
+      capacity, including encoding and in-flight uploads. Preserve quota
+      pauses, retries, batch rollover, refresh recovery, and cancellation.
+- [ ] **Task 3.** Before persistence or public-contract changes, record an ADR for source
+      versus analysis crop ownership and provenance. Preserve the accepted
+      source privately, link one crop used for analysis and preview, and retain
+      source/crop dimensions, checksums, transform coordinates/version, and
+      capture time. Update contracts and old/new fixtures before implementation;
+      validate bytes and geometry server-side. Keep legacy/manual uploads and
+      multi-view scans compatible, and update capture/privacy copy.
+- [ ] **Task 4.** Roll out behind a feature flag with a manual fallback. Use the
+      [proposal's acceptance gates](../CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md)
+      separately for supported iPhone, Android, and laptop/webcam setups:
+      false captures, album and replacement recall, duplicates, crop quality,
+      warm latency, memory/performance, and a ten-album session. Record counts
+      and denominators, not only pooled percentages. Require a private
+      full-frame versus crop identification comparison before claiming an AI
+      recognition improvement.
+
+Exit: recorded-frame and real-device tests pass the documented gates; analysis
+receives the linked crop, the audit trail remains intact, and unsupported cases
+have an explicit recovery path. Keep the feature flag off for setups that fail.
+
+### P5.2 — Capture feasibility and baseline
 
 - [ ] Gather consented private phone and webcam clips with album presentations,
       removal/replacement, and no-album negatives. Keep clips out of the public
@@ -29,42 +83,11 @@ Exit: a supported detector and its limitations are documented for phone and
 webcam workflows. No detector is called production-ready solely because the
 runtime works or a synthetic browser test passes.
 
-### P5.2 — Reliable hands-free capture
-
-- [ ] Replace whole-scene stillness triggering with album candidate tracking,
-      quality selection, crop preview, removal/replacement rearming, and a
-      bounded frame buffer. Camera start is the one session action; accepted
-      albums require no shutter or submit action. Keep manual capture/file
-      upload when detection is uncertain or unsupported.
-- [ ] Queue accepted items immediately with stable idempotency keys; keep the
-      scanner open until explicit Finish/review. Bound local item and byte
-      capacity, including encoding and in-flight uploads. Preserve quota
-      pauses, retries, batch rollover, refresh recovery, and cancellation.
-- [ ] Before persistence or public-contract changes, record an ADR for source
-      versus analysis crop ownership and provenance. Preserve the accepted
-      source privately, link one crop used for analysis and preview, and retain
-      source/crop dimensions, checksums, transform coordinates/version, and
-      capture time. Update contracts and old/new fixtures before implementation;
-      validate bytes and geometry server-side. Keep legacy/manual uploads and
-      multi-view scans compatible, and update capture/privacy copy.
-- [ ] Roll out behind a feature flag with a manual fallback. Use the
-      [proposal's acceptance gates](../CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md)
-      separately for supported iPhone, Android, and laptop/webcam setups:
-      false captures, album and replacement recall, duplicates, crop quality,
-      warm latency, memory/performance, and a ten-album session. Record counts
-      and denominators, not only pooled percentages. Require a private
-      full-frame versus crop identification comparison before claiming an AI
-      recognition improvement.
-
-Exit: recorded-frame and real-device tests pass the documented gates; analysis
-receives the linked crop, the audit trail remains intact, and unsupported cases
-have an explicit recovery path. Keep the feature flag off for setups that fail.
-
 ### P5.3 — Private data and AI baseline (former P4.5)
 
 Start dataset collection and labeling alongside P5.1. Finish the baseline
 before public application usage, model/cost optimization, or a capture-related
-recognition claim; P5.2's camera work need not wait for labeling, but its
+recognition claim; P5.1's camera work need not wait for labeling, but its
 public rollout must respect these gates.
 
 - [ ] **Task 1.** Use the existing private eval runner with consented images,

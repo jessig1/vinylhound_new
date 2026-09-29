@@ -15,6 +15,7 @@ import {
   type LibraryList,
 } from "@vinylhound/contracts";
 
+import { createUuid } from "../../../../browser/uuid";
 import { CoverArt } from "../../../cover-art";
 import { Icon } from "../../../ui";
 
@@ -82,7 +83,7 @@ export default function BatchProgressPage() {
     try {
       const response = await fetch(`/api/v1/scans/${scanId}/cancel`, {
         method: "POST",
-        headers: { "idempotency-key": `cancel-${crypto.randomUUID()}` },
+        headers: { "idempotency-key": `cancel-${createUuid()}` },
       });
       const body = (await response.json()) as {
         error?: { message?: string };
@@ -114,7 +115,7 @@ export default function BatchProgressPage() {
     try {
       const response = await fetch(`/api/v1/scans/${scanId}/retry`, {
         method: "POST",
-        headers: { "idempotency-key": `retry-${crypto.randomUUID()}` },
+        headers: { "idempotency-key": `retry-${createUuid()}` },
       });
       const body = (await response.json()) as {
         error?: { message?: string };
@@ -150,7 +151,7 @@ export default function BatchProgressPage() {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": `confirm-${crypto.randomUUID()}`,
+          "idempotency-key": `confirm-${createUuid()}`,
         },
         body: JSON.stringify({
           selectedCandidateId: candidate.id,

@@ -54,6 +54,7 @@ export function buildE2eEnv(): Record<string, string> {
     OPENAI_API_KEY: "",
     AUTH_MODE: "development",
     NEXT_PUBLIC_AUTH_MODE: "development",
+    CAPTURE_CANDIDATE_MODE_ENABLED: "true",
   };
 }
 

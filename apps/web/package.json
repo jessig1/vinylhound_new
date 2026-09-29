@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:https": "node ../../scripts/dev-https.mjs",
     "build": "next build",
     "start": "next start",
     "test:e2e": "playwright test --project=mobile-chromium",

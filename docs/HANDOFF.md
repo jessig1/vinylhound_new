@@ -1,5 +1,18 @@
 # Session handoff
 
+> **2026-09-28 P5.1 Task 1 implementation:** added candidate-based camera
+> capture with a bundled local worker, time-based tracking, best frozen frame
+> selection, perspective crop preview, removal/replacement handling, and
+> manual override. `CAPTURE_CANDIDATE_MODE_ENABLED` defaults false;
+> geometry is not an album classifier and P5.2/P5.3 release gates are open.
+> Full source snapshots still reach analysis; the crop is only a local
+> preview until Task 3. Verification results are in the session log.
+
+> **2026-09-28 sequencing update:** Phase 5 P5.1 is now reliable hands-free
+> capture; P5.2 is capture feasibility and baseline. Start implementation
+> under P5.1, then complete P5.2's evidence. Public rollout remains gated
+> on P5.2's device/detector evidence and P5.3's private AI baseline.
+
 > **2026-09-25 roadmap decision:** Phase 4 closes at P4.4. The unfinished
 > P4.5 private image/AI baseline moved intact to Phase 5 P5.3; only its
 > manifest-scaffolding tooling is complete. Phase 5 leads with capture
@@ -105,9 +118,65 @@ the log.
 > No private images or labels exist yet; that is maintainer work outside the
 > repository. `npm run check` passed (428/428, +5 new scaffold tests).
 
-## Current state — updated 2026-09-25
+## Current state — updated 2026-09-29
 
-- **Phase 4 is closed at P4.4; Phase 5 is planned, not implemented.** P4.4's
+- **The first enabled P5.1 webcam trial exposed detector misses.** A private
+  81-second screen recording shows three distinct sleeves presented. The
+  red and sky sleeves remain at "Looking for a cover"; the yellow one reaches
+  "Hold steady" and starts one upload, but its tracked quadrilateral is the
+  dark center artwork, not the jacket. The yellow jacket's lower outer edge
+  is outside the camera image. This is evidence of real-device recall and
+  crop-quality failure, not a completed P5.2 baseline. The video and sampled
+  frames remain outside the repository. P5.1's public rollout remains gated.
+
+- **Local P5.1 camera trial was running in manual mode.** The root `.env`
+  lacked `CAPTURE_CANDIDATE_MODE_ENABLED`, so `/scan` received `false` and
+  never started the candidate worker. The ignored local `.env` now sets the
+  flag to `true`; the web process must restart to read it. The checked-in
+  `.env.example` remains default-off and README now explains the trial setup.
+  A physical album detection result after restart has not yet been observed.
+
+- **Local HTTPS certificate fallback fixed on Windows.** The initial
+  `dev:https` process still served HTTP because mkcert tried to write the
+  Java 25 `cacerts` file after trusting the CA in Windows, hit access denied,
+  and exited 1. The Windows launcher now selects `TRUST_STORES=system` for
+  mkcert; other platforms retain their default stores. A trusted localhost
+  certificate was generated, and a separate HTTPS server on port 3001
+  returned `/scan` 200 in Chromium with camera/UUID/hash APIs and no page
+  errors. The temporary probe was stopped; the original port-3000 process
+  remains HTTP until the maintainer restarts it. Certificate files are
+  ignored by git.
+
+- **The HTTP LAN/WSL scan UUID crash is fixed.** Browser IDs use native
+  `randomUUID` when available, otherwise UUID v4 from `getRandomValues`;
+  all browser capture/review/copy actions share the helper. Actual Chromium
+  navigation at the HTTP WSL address now renders and selects/removes a
+  photo without page errors. Camera and image hashing still need localhost
+  on the development computer or HTTPS from another device; unsupported
+  actions explain this requirement instead of throwing a raw API error.
+
+- **Development hot reload now accepts this host's local IPv4 origins.**
+  Next.js rejected the HMR WebSocket when browsing its advertised WSL
+  address, despite healthy HTTP responses. `apps/web/next.config.ts`
+  derives exact development origins from local interfaces; localhost,
+  WSL, and Wi-Fi WebSockets now connect, while unrelated origins remain
+  blocked. README documents restarting after an adapter address changes.
+
+- **P5.1 Task 1 is implemented behind a default-off flag (ADR-0032).**
+  Camera records automatically join the existing idempotent upload path,
+  and the camera session stays on `/scan` until Finish scanning. Background
+  or permission pauses discard old camera work. Manual capture/file upload
+  remain available. The synthetic camera harness now overrides dimensions
+  on `HTMLVideoElement`, fixing the zero-dimension stub that caused the
+  historical camera test to fail. Full-frame analysis and public rollout
+  limitations remain explicit; P5.1 Tasks 2-4 and P5.2/P5.3 are still open.
+
+- **Phase 5 P5.1/P5.2 order swapped at the maintainer's request.** P5.1
+  now builds reliable hands-free capture; P5.2 gathers feasibility/baseline
+  evidence. Public rollout retains P5.2 and P5.3's release gates. No capture
+  implementation or private evaluation was completed by this reorder.
+
+- **Phase 4 is closed at P4.4; Phase 5's first capture task is implemented.** P4.4's
   measured keep decision remains: discovery is single-replica, scan/core
   share physical PostgreSQL, and platform delivery passed the final green
   staging workflow. The former P4.5 is now P5.3 with labeling and held-out
@@ -3827,12 +3896,26 @@ development/holdout batch ready, move to Task 2 (fix sample composition and
 acceptance thresholds before any billable run). Production remains inactive;
 issue #8 and the single-writer cutover are resolved.
 
-**Current resume (2026-09-25): begin Phase 5 P5.1.** Collect consented
-phone/webcam clips and measure current false captures, misses, duplicates,
-latency, and crop coverage against the continuous-capture proposal. Start
-P5.3's maintainer-owned private image labeling in parallel, without
-fabricating cases. P5.2's public release and any AI recognition improvement
-claim wait for the documented device gates and the P5.3 held-out baseline.
+**Current resume (2026-09-29): continue with Phase 5 P5.1 Task 2.** Task 1's
+candidate pipeline is implemented; validate and complete the incremental
+queue/capacity/quota/retry/rollover flow next, then Task 3's audited analysis
+crop integration. Local HMR and UUID failures are fixed; use localhost on
+this computer or HTTPS from another device for camera/upload trials.
+The local `.env` now enables the experimental candidate worker after a web
+restart. If physical covers still fail, capture the viewfinder status and
+device/lighting details as P5.2 detector evidence; synthetic tests do not
+establish real-camera recall.
+The first enabled webcam clip now confirms misses on two of three distinct
+sleeves and an inner-artwork boundary on the one captured sleeve. Evaluate a
+replacement detector against this and additional private negatives/held-out
+clips before changing the release flag or making a reliability claim.
+The default dev server uses HTTP; the corrected `dev:https` enables local TLS
+after the old HTTP listener is stopped and the command is restarted.
+P5.2 owns consented phone/webcam clips and the
+false-capture, miss, duplicate, latency, and crop baseline. Start P5.3's
+maintainer-owned private image labeling in parallel, without fabricating
+cases. P5.1's public release and any AI recognition improvement claim wait
+for P5.2's documented device gates and the P5.3 held-out baseline.
 Then evaluate a metadata-based collection suggestion baseline before any
 embeddings or vector-storage commitment. The older resume paragraphs above
 are historical; use `docs/roadmap/phase-5-capture-ai-discovery.md` for
@@ -8251,3 +8334,142 @@ discovery`. Broadened the harness's retry to cover it too
   maintainer must still provide consented photos and verified labels.
   `npm run check` passed (44 test files, 428 tests); targeted Prettier and
   `git diff --check` passed after the final documentation edits.
+
+- **2026-09-28 - Codex. Swapped Phase 5 P5.1 and P5.2.** Moved reliable
+  hands-free capture to P5.1 and capture feasibility/baseline to P5.2 in
+  `docs/roadmap/phase-5-capture-ai-discovery.md`. Updated the current state,
+  resume point, and P5.3 camera-work reference. Public rollout still
+  requires P5.2's device/detector evidence and P5.3's private AI baseline.
+  No application code or release gate changed. `npm run check` passed
+  (44 test files, 428 tests); targeted Prettier and `git diff --check` passed.
+
+- **2026-09-28 - Codex. Implemented P5.1 Task 1 behind a default-off
+  candidate-capture flag (ADR-0032).** Replaced whole-scene stillness with
+  a bundled local geometry worker and time-based candidate tracking. The
+  browser retains at most the best and in-flight source snapshots, paired
+  with their own corners; source frames are capped at a 1600px long edge,
+  detector frames at 320px, and worker jobs never accumulate. Selection
+  produces a color-preserving perspective preview while the original still
+  follows the existing signed upload/normalization/audit path. A held cover
+  stays locked; sustained removal or a stable different fingerprint permits
+  another presentation. Manual capture and Scan another copy override the
+  detector. Stop/background/access loss discard late camera work.
+
+  Camera photos automatically enqueue through existing idempotent APIs,
+  with provisional pending-record/byte admission bounds and explicit Finish
+  scanning; pauses do not auto-navigate when an upload finishes. This is the
+  necessary continuous-submission portion of Task 2, which remains open for
+  complete quota/retry/rollover and device-capacity validation. Geometry is
+  experimental and cannot distinguish all books/screens from albums;
+  `CAPTURE_CANDIDATE_MODE_ENABLED=false` keeps automatic capture disabled
+  by default. For local trials, set it true in the root `.env` and restart
+  web. P5.2/P5.3 device/AI gates and Task 3's audited analysis crops remain
+  outstanding. No schema, provider, platform, or private dataset changed.
+
+  Verification: `npm run check` passed 47 files / 447 tests, including 19
+  new detector/tracker/lifecycle tests. The focused camera matrix passed
+  20/20 (mobile/desktop Chromium, desktop Firefox, mobile WebKit), including
+  actual bundled worker use, timer fallback, no-cover intervals, duplicate
+  suppression, replacement/reintroduction, manual recovery, and paused
+  encoding. The ordinary file-upload journey also passed. The initial
+  browser run reproduced the old zero-video-dimension harness flaw; moving
+  its dimension overrides from HTMLMediaElement to HTMLVideoElement fixed
+  it. `npm run build` passed all buildable workspaces. All e2e runs used the
+  synthetic worker with an empty OpenAI key; no billable evaluation ran.
+
+- **2026-09-28 - Codex. Fixed development HMR on local IP addresses.**
+  Reproduced healthy HTTP but rejected WebSocket upgrades at the advertised
+  WSL address `172.29.128.1` and Wi-Fi address `192.168.1.82`; localhost
+  succeeded. Installed Next.js's development origin guard allowed localhost
+  but omitted these interface addresses. Added exact local IPv4 addresses
+  through `allowedDevOrigins`, derived at startup from `networkInterfaces`,
+  with an empty additional list in production. README documents refreshing
+  this list by restarting after an adapter address changes. The running
+  development server automatically reloaded its config; all three host
+  WebSockets then opened, while an unrelated origin remained rejected.
+  Updated current state and resume context; P5.1 Task 2 remains next.
+  `npm run check` passed (47 files, 447 tests); `npm run build` passed all
+  buildable workspaces using `.next-e2e`, preserving the active dev output
+  and restoring its generated `next-env.d.ts` references afterward.
+
+- **2026-09-29 - Codex. Fixed `crypto.randomUUID` crashes in browser scan
+  and review actions.** Reproduced `/scan` failing to render in Chromium at
+  `http://172.29.128.1:3000`: the browser exposed `getRandomValues`, but
+  neither `randomUUID` nor `subtle.digest`. Added a shared UUID v4 helper
+  that prefers the native method and falls back to secure random bytes;
+  retained all existing idempotency prefixes and key lifetimes across
+  capture, scan/batch review, dashboard actions, and adding a library copy.
+  Missing camera or image hashing APIs now explain using localhost on the
+  development computer or HTTPS from another device. Updated README,
+  Testing, current state, and resume context. Real HTTP WSL navigation now
+  renders and selects/removes a photo with no page errors. Camera/upload
+  use still requires a secure context; the UUID fallback does not supply
+  missing camera or hashing APIs. P5.1 Task 2 remains the resume point.
+
+  Verification: `npm run check` passed 48 files / 450 tests, including native
+  UUID dispatch, fallback version/variant, and fresh entropy coverage. The
+  focused scan-flow browser matrix passed 8/8 across mobile/desktop Chromium,
+  desktop Firefox, and mobile WebKit: native UUID generation was disabled
+  through upload, refresh, review, and retry; unavailable hashing produced
+  guidance without creating a scan or throwing a page error. All builds
+  passed via `npm run build`, with `.next-e2e` isolating output and original
+  dev type references restored afterward. Synthetic e2e analysis used an
+  empty OpenAI key; no billable evaluation ran.
+
+- **2026-09-29 - Codex. Clarified localhost HTTP and added optional
+  development HTTPS startup.** Actual Chromium navigation at
+  `http://localhost:3000/scan` returned 200 with a secure context and usable
+  camera, UUID, and image hashing APIs; the HTTPS URL against the same
+  listener failed with `ERR_SSL_PROTOCOL_ERROR`. Added `dev:https` in the
+  root and web workspace to invoke Next's supported `--experimental-https`
+  mode, and ignored generated `certificates/` directories. README/Testing
+  explain stopping the HTTP server first, certificate generation/trust on
+  first use, and checking for Next's HTTP fallback if generation fails.
+  Updated current state and resume context. The current server remains
+  HTTP; no certificate authority was installed or certificate generated
+  during this session. Command forwarding was verified with
+  `npm run dev:https -- --help`; a real TLS listener/certificate trust was
+  not exercised. `npm run check` passed (48 files, 450 tests), and targeted
+  formatting/diff checks passed. P5.1 Task 2 remains next.
+
+- **2026-09-29 - Codex. Fixed `dev:https` falling back to HTTP.** Port 3000
+  was owned by the `next dev --experimental-https` process but returned
+  HTTP 200 and an HTTPS protocol error; no leaf certificate existed. Direct
+  mkcert reproduction showed that Windows CA trust succeeded, then Java 25's
+  protected `cacerts` path failed with access denied, making mkcert exit 1.
+  `TRUST_STORES=system` generated the localhost leaf certificate successfully.
+  The new cross-platform launcher applies that setting only on Windows and
+  forwards CLI arguments to Next. An isolated `dev:https` run on port 3001
+  advertised HTTPS, and Chromium loaded `/scan` (200) with a trusted secure
+  context, camera/hash/UUID APIs, and no page errors. The probe was stopped;
+  the user's already-running port-3000 process was left untouched and must
+  be restarted to use HTTPS. Updated README, Testing, current state, and
+  resume context. `npm run check` passed 48 files / 450 tests and
+  `npm run build` passed all buildable workspaces using isolated `.next-e2e`
+  output; its generated dev type references were restored. P5.1 Task 2
+  remains next.
+
+- **2026-09-29 - Codex. Diagnosed the first physical P5.1 camera trial.**
+  The root `.env` had no `CAPTURE_CANDIDATE_MODE_ENABLED`; `/scan` therefore
+  passed `false` and used the manual shutter exactly as configured. Set the
+  ignored local `.env` to `true`, corrected `.env.example` to the intended
+  default-off value and clear comments, and documented the required `.env`
+  edit and server restart in README. Verified `@next/env` resolves the local
+  flag to `true` and `npm run check` passes (48 files / 450 tests). The
+  existing port-3000 server was left running; it still needs a restart before
+  retesting. Real-camera detector recall remains unmeasured, so a continued
+  miss after restart belongs in P5.2's device/detector evaluation.
+
+- **2026-09-29 - Codex. Reviewed the first enabled webcam capture video.**
+  The maintainer-provided 81-second screen recording shows red, sky, and
+  yellow sleeves presented. The red and sky sleeves never advance beyond
+  "Looking for a cover". Only the yellow sleeve advances to "Hold steady"
+  and starts an upload; the detection outline surrounds its dark internal
+  artwork, while its lower outside edge is clipped by the camera view. The
+  visible record count is consistent with the maintainer's report of one
+  registered album, but the recording does not show completion/review in the
+  backend. Updated the P5.1/P5.2 roadmap evidence and current resume state.
+  No detector code, private clip, or frames were added to the repository;
+  false-positive and real-device recall evidence remains too thin to select
+  a replacement safely. Public rollout stays gated. `npm run check` passed
+  (48 files / 450 tests).

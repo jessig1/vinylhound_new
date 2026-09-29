@@ -20,7 +20,15 @@ import {
   SubmitScanResponseSchema,
 } from "@vinylhound/contracts";
 
+import { createUuid } from "../../browser/uuid";
 import { Icon } from "../ui";
+import {
+  CoverCamera,
+  encode,
+  freezeFrame,
+  type CameraPhoto,
+} from "./camera/cover-camera";
+import type { Corners } from "./camera/cover-detector";
 
 const UPLOAD_CONCURRENCY = 3;
 const CAPTURE_SESSION_STORAGE_KEY = "vinylhound.captureSession.v1";
@@ -31,7 +39,7 @@ type ProcessingStage =
 type RecordStatus =
   "idle" | "needs-recapture" | "queued" | "processing" | "failed";
 
-type SelectedImage = { file: File; preview: string };
+type SelectedImage = { file: File; preview: string; croppedPreview?: boolean };
 
 type PreparedImage = SelectedImage & {
   mimeType: ImageMimeType;
@@ -86,15 +94,9 @@ type QuotaState =
     };
 
 type LiveCameraState =
-  "off" | "armed" | "captured" | "disarmed" | "rearmed" | "paused";
+  "off" | "searching" | "qualifying" | "capturing" | "waiting" | "paused";
 
-type CameraPauseReason = "quota" | "background" | "access_lost";
-
-const LIVE_CAPTURE_SAMPLE_MS = 250;
-const LIVE_CAPTURE_STABLE_SAMPLES = 4;
-const LIVE_CAPTURE_CHANGE_SAMPLES = 2;
-const LIVE_CAPTURE_STABLE_DELTA = 7;
-const LIVE_CAPTURE_CHANGE_DELTA = 18;
+type CameraPauseReason = "quota" | "background" | "access_lost" | "capacity";
 
 /**
  * A capture session's selected files are a client-side draft: the browser
@@ -105,25 +107,26 @@ const LIVE_CAPTURE_CHANGE_DELTA = 18;
  * on the server either, so it comes back as "needs recapture" rather than
  * silently retrying with nothing to send.
  */
-export function CaptureSession() {
+export function CaptureSession({
+  candidateCaptureEnabled = false,
+}: {
+  candidateCaptureEnabled?: boolean;
+}) {
   const router = useRouter();
   const recordsRef = useRef<SessionRecord[]>([]);
-  const batchKeyRef = useRef(`capture-session-${crypto.randomUUID()}`);
+  const batchKeyRef = useRef(`capture-session-${createUuid()}`);
   const queueRef = useRef<Array<{ clientId: string; batchId: string }>>([]);
   const activeCountRef = useRef(0);
   const abortControllers = useRef<Record<string, AbortController>>({});
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
-  const cameraCanvasRef = useRef<HTMLCanvasElement>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
-  const cameraTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const coverCameraRef = useRef<CoverCamera | null>(null);
+  const manualEncodingRef = useRef(false);
+  const cameraSessionRef = useRef(false);
   const cameraRequestRef = useRef(0);
   const rolloverRef = useRef<Promise<string> | null>(null);
   const batchIdsRef = useRef<string[]>([]);
   const cameraStateRef = useRef<LiveCameraState>("off");
-  const priorCameraFrameRef = useRef<Uint8ClampedArray | null>(null);
-  const capturedCameraFrameRef = useRef<Uint8ClampedArray | null>(null);
-  const stableSamplesRef = useRef(0);
-  const changedSamplesRef = useRef(0);
   const submittedCountRef = useRef(0);
   // Tracks how many records in this session have not yet been submitted.
   // React's setState updater form does not run synchronously here (these
@@ -145,7 +148,13 @@ export function CaptureSession() {
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [quota, setQuota] = useState<QuotaState>({ status: "unknown" });
   const [cameraState, setCameraState] = useState<LiveCameraState>("off");
+  const [cameraSessionActive, setCameraSessionActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraCorners, setCameraCorners] = useState<Corners | null>(null);
+  const [cameraGuidance, setCameraGuidance] = useState(
+    "Show one front cover in the guide.",
+  );
+  const [cameraRatio, setCameraRatio] = useState(4 / 3);
   const [cameraPauseReason, setCameraPauseReason] =
     useState<CameraPauseReason | null>(null);
 
@@ -302,18 +311,13 @@ export function CaptureSession() {
 
   function stopLiveCamera() {
     cameraRequestRef.current += 1;
-    if (cameraTimerRef.current) {
-      clearInterval(cameraTimerRef.current);
-      cameraTimerRef.current = null;
-    }
+    coverCameraRef.current?.stop();
+    coverCameraRef.current = null;
     for (const track of cameraStreamRef.current?.getTracks() ?? []) {
       track.stop();
     }
     cameraStreamRef.current = null;
-    priorCameraFrameRef.current = null;
-    capturedCameraFrameRef.current = null;
-    stableSamplesRef.current = 0;
-    changedSamplesRef.current = 0;
+    setCameraCorners(null);
     setCameraPauseReason(null);
     setLiveCameraState("off");
   }
@@ -326,8 +330,8 @@ export function CaptureSession() {
 
   async function startLiveCamera() {
     if (
-      sessionRunning ||
-      (cameraStateRef.current !== "off" && cameraStateRef.current !== "paused")
+      cameraStateRef.current !== "off" &&
+      cameraStateRef.current !== "paused"
     ) {
       return;
     }
@@ -337,7 +341,9 @@ export function CaptureSession() {
     }
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError(
-        "Live camera capture is not supported in this browser. You can still upload photos.",
+        window.isSecureContext
+          ? "Live camera capture is not supported in this browser. You can still upload photos."
+          : "Live camera capture needs HTTPS. On this computer, open http://localhost:3000/scan; from another device, use an HTTPS address.",
       );
       return;
     }
@@ -346,11 +352,15 @@ export function CaptureSession() {
     setCameraPauseReason(null);
     // Mount the viewfinder before permission resolves, so the stream can be
     // attached immediately after the user grants access.
-    setLiveCameraState("armed");
+    setLiveCameraState("searching");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { facingMode: { ideal: "environment" } },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 960 },
+        },
       });
       if (requestId !== cameraRequestRef.current) {
         for (const track of stream.getTracks()) track.stop();
@@ -380,10 +390,57 @@ export function CaptureSession() {
       video.srcObject = stream;
       await video.play();
       if (requestId !== cameraRequestRef.current) return;
-      cameraTimerRef.current = setInterval(
-        inspectLiveCameraFrame,
-        LIVE_CAPTURE_SAMPLE_MS,
+      cameraSessionRef.current = true;
+      setCameraSessionActive(true);
+      setCameraRatio(video.videoWidth / video.videoHeight || 4 / 3);
+      setCameraGuidance(
+        candidateCaptureEnabled && typeof Worker !== "undefined"
+          ? "Show one front cover in the guide."
+          : "Frame the cover, then choose Capture photo.",
       );
+      if (candidateCaptureEnabled && typeof Worker !== "undefined") {
+        try {
+          const camera = new CoverCamera(
+            video,
+            (feedback) => {
+              if (requestId !== cameraRequestRef.current) return;
+              if (video.videoWidth && video.videoHeight)
+                setCameraRatio(video.videoWidth / video.videoHeight);
+              setLiveCameraState(feedback.phase);
+              setCameraCorners(feedback.corners);
+              setCameraGuidance(
+                feedback.reason === "multiple"
+                  ? "Show one cover at a time."
+                  : feedback.reason === "blurry"
+                    ? "Hold steady, or capture manually."
+                    : "Show one front cover in the guide.",
+              );
+            },
+            (photo) => {
+              if (requestId === cameraRequestRef.current)
+                acceptCameraPhoto(photo);
+            },
+            () => {
+              if (requestId !== cameraRequestRef.current) return;
+              coverCameraRef.current = null;
+              setCameraCorners(null);
+              setLiveCameraState("searching");
+              setCameraError(
+                "Automatic capture is unavailable. You can capture a photo manually or upload one.",
+              );
+            },
+            admitCameraPhoto,
+          );
+          coverCameraRef.current = camera;
+          camera.start();
+        } catch {
+          coverCameraRef.current?.stop();
+          coverCameraRef.current = null;
+          setCameraError(
+            "Automatic capture is unavailable. You can capture a photo manually or upload one.",
+          );
+        }
+      }
     } catch {
       if (requestId !== cameraRequestRef.current) return;
       stopLiveCamera();
@@ -393,87 +450,104 @@ export function CaptureSession() {
     }
   }
 
-  function inspectLiveCameraFrame() {
-    const video = cameraVideoRef.current;
-    const canvas = cameraCanvasRef.current;
+  function acceptCameraPhoto(photo: CameraPhoto) {
+    const record = createIdleRecord(photo.file);
+    if (record.image) URL.revokeObjectURL(record.image.preview);
+    record.image = {
+      file: photo.file,
+      preview: URL.createObjectURL(photo.preview),
+      croppedPreview: photo.cropped,
+    };
+    pendingCountRef.current += 1;
+    recordsRef.current = [...recordsRef.current, record];
+    setRecords(recordsRef.current);
+    // Existing idempotent upload primitives handle accepted camera records;
+    // the camera stays open while analysis runs, without per-record submission.
+    void (async () => {
+      try {
+        const target = batchIdsRef.current.at(-1) ?? (await createNextBatch());
+        if (
+          recordsRef.current.some((item) => item.clientId === record.clientId)
+        )
+          enqueueRecords([record.clientId], target);
+      } catch (caught) {
+        setGlobalError(
+          caught instanceof Error
+            ? caught.message
+            : "The photo was captured but couldn't be queued. Resume the session to retry.",
+        );
+      }
+    })();
+  }
+
+  function admitCameraPhoto(bytes: number) {
+    const localBytes = recordsRef.current.reduce(
+      (sum, record) => sum + (record.image?.file.size ?? 0),
+      0,
+    );
     if (
-      !video ||
-      !canvas ||
-      video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
-      !video.videoWidth ||
-      !video.videoHeight
+      recordsRef.current.length >= 20 ||
+      localBytes + bytes > 32 * 1024 * 1024
     ) {
-      return;
+      pauseLiveCamera("capacity");
+      return false;
     }
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return;
-    canvas.width = 96;
-    canvas.height = 96;
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const frame = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    const state = cameraStateRef.current;
+    return true;
+  }
 
-    if (state === "disarmed") {
-      const capturedFrame = capturedCameraFrameRef.current;
-      if (
-        capturedFrame &&
-        cameraFrameDifference(frame, capturedFrame) >= LIVE_CAPTURE_CHANGE_DELTA
-      ) {
-        changedSamplesRef.current += 1;
-        if (changedSamplesRef.current >= LIVE_CAPTURE_CHANGE_SAMPLES) {
-          priorCameraFrameRef.current = frame;
-          stableSamplesRef.current = 0;
-          changedSamplesRef.current = 0;
-          setLiveCameraState("rearmed");
-          window.setTimeout(() => {
-            if (cameraStateRef.current === "rearmed")
-              setLiveCameraState("armed");
-          }, LIVE_CAPTURE_SAMPLE_MS);
-        }
-      } else {
-        changedSamplesRef.current = 0;
-      }
-      return;
-    }
-    if (state !== "armed") return;
-
-    const priorFrame = priorCameraFrameRef.current;
-    priorCameraFrameRef.current = frame;
-    if (!priorFrame) return;
-    if (cameraFrameDifference(frame, priorFrame) <= LIVE_CAPTURE_STABLE_DELTA) {
-      stableSamplesRef.current += 1;
-      if (stableSamplesRef.current >= LIVE_CAPTURE_STABLE_SAMPLES) {
-        stableSamplesRef.current = 0;
-        capturedCameraFrameRef.current = frame;
-        setLiveCameraState("captured");
-        void captureLiveCameraFrame();
-      }
-    } else {
-      stableSamplesRef.current = 0;
+  function finishScanning() {
+    cameraSessionRef.current = false;
+    setCameraSessionActive(false);
+    stopLiveCamera();
+    if (batchIdsRef.current.length && pendingCountRef.current === 0) {
+      router.push(`/scans/batch/${batchIdsRef.current.at(-1)}`);
     }
   }
 
   async function captureLiveCameraFrame() {
+    if (coverCameraRef.current) {
+      await coverCameraRef.current.manual();
+      return;
+    }
+    if (
+      manualEncodingRef.current ||
+      !isLiveCameraActive(cameraStateRef.current)
+    )
+      return;
     const video = cameraVideoRef.current;
-    const canvas = cameraCanvasRef.current;
-    if (!video || !canvas) return;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.9),
-    );
-    if (!blob || cameraStateRef.current !== "captured") return;
-    const file = new File(
-      [blob],
-      `live-cover-${new Date().toISOString().replaceAll(":", "-")}.jpg`,
-      { type: "image/jpeg" },
-    );
-    pendingCountRef.current += 1;
-    setRecords((current) => [...current, createIdleRecord(file)]);
-    setLiveCameraState("disarmed");
+    if (!video) return;
+    const source = freezeFrame(video);
+    if (!source) return;
+    if (!admitCameraPhoto(source.width * source.height * 4)) {
+      source.width = source.height = 0;
+      return;
+    }
+    const generation = cameraRequestRef.current;
+    manualEncodingRef.current = true;
+    setLiveCameraState("capturing");
+    try {
+      const blob = await encode(source);
+      if (generation !== cameraRequestRef.current) return;
+      if (!blob) throw new Error("Camera encoding failed");
+      acceptCameraPhoto({
+        file: new File([blob], `live-cover-${Date.now()}.jpg`, {
+          type: "image/jpeg",
+        }),
+        preview: blob,
+        cropped: false,
+      });
+      setLiveCameraState("waiting");
+    } catch {
+      if (generation === cameraRequestRef.current) {
+        setCameraError(
+          "The photo couldn't be captured. Try again or upload a photo.",
+        );
+        setLiveCameraState("searching");
+      }
+    } finally {
+      source.width = source.height = 0;
+      manualEncodingRef.current = false;
+    }
   }
 
   function attachRecapture(
@@ -508,10 +582,10 @@ export function CaptureSession() {
               scanId: null,
               imageId: null,
               imageCompleted: false,
-              scanKey: `scan-${crypto.randomUUID()}`,
-              submitKey: `submit-${crypto.randomUUID()}`,
-              uploadKey: `upload-${crypto.randomUUID()}`,
-              completeKey: `complete-${crypto.randomUUID()}`,
+              scanKey: `scan-${createUuid()}`,
+              submitKey: `submit-${createUuid()}`,
+              uploadKey: `upload-${createUuid()}`,
+              completeKey: `complete-${createUuid()}`,
             }
           : record,
       ),
@@ -566,6 +640,9 @@ export function CaptureSession() {
   }
 
   async function discardSession() {
+    cameraSessionRef.current = false;
+    setCameraSessionActive(false);
+    stopLiveCamera();
     const toCancel = recordsRef.current.filter((record) => record.scanId);
     for (const record of recordsRef.current) {
       if (record.image) URL.revokeObjectURL(record.image.preview);
@@ -576,7 +653,7 @@ export function CaptureSession() {
     setRehydrated(false);
     setUploadProgress({});
     persistSession(null);
-    batchKeyRef.current = `capture-session-${crypto.randomUUID()}`;
+    batchKeyRef.current = `capture-session-${createUuid()}`;
     setBatchId(null);
     batchIdsRef.current = [];
     setBatchIds([]);
@@ -792,7 +869,7 @@ export function CaptureSession() {
       );
       setSubmittedCount((count) => count + 1);
       setUploadProgress((current) => dropProgress(current, clientId));
-      if (pendingCountRef.current === 0) {
+      if (pendingCountRef.current === 0 && !cameraSessionRef.current) {
         persistSession(null);
         router.push(
           `/scans/batch/${batchIdsRef.current.at(-1) ?? targetBatchId}`,
@@ -949,7 +1026,7 @@ export function CaptureSession() {
           {!isLiveCameraActive(cameraState) ? (
             <button
               className="secondary-button"
-              disabled={sessionRunning || quota.status === "blocked"}
+              disabled={quota.status === "blocked"}
               onClick={() => void startLiveCamera()}
               type="button"
             >
@@ -967,24 +1044,65 @@ export function CaptureSession() {
               Stop live camera
             </button>
           )}
+          {cameraSessionActive ? (
+            <button
+              className="secondary-button"
+              onClick={finishScanning}
+              type="button"
+            >
+              Finish scanning
+            </button>
+          ) : null}
         </div>
 
         {isLiveCameraActive(cameraState) ? (
           <section className="live-camera" aria-label="Live camera capture">
-            <div className="live-camera__viewfinder">
+            <div
+              className="live-camera__viewfinder"
+              style={{ aspectRatio: cameraRatio }}
+            >
               <video autoPlay muted playsInline ref={cameraVideoRef} />
+              {cameraCorners ? (
+                <svg
+                  className="live-camera__outline"
+                  viewBox="0 0 100 100"
+                  preserveAspectRatio="none"
+                  aria-hidden="true"
+                >
+                  <polygon
+                    points={cameraCorners
+                      .map((point) => `${point.x * 100},${point.y * 100}`)
+                      .join(" ")}
+                  />
+                </svg>
+              ) : null}
               <span
                 className={`live-camera__state live-camera__state--${cameraState}`}
               >
                 {liveCameraStateLabel(cameraState)}
               </span>
             </div>
-            <p aria-live="polite">{liveCameraStateMessage(cameraState)}</p>
-            <canvas
-              aria-hidden="true"
-              className="live-camera__canvas"
-              ref={cameraCanvasRef}
-            />
+            <p aria-live="polite">
+              {cameraState === "searching"
+                ? cameraGuidance
+                : liveCameraStateMessage(cameraState)}
+            </p>
+            <p>
+              Your original photo, including its background, is uploaded for
+              analysis. You review the results before saving a record.
+            </p>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                disabled={cameraState === "capturing"}
+                onClick={() => void captureLiveCameraFrame()}
+                type="button"
+              >
+                {cameraState === "waiting"
+                  ? "Scan another copy"
+                  : "Capture photo"}
+              </button>
+            </div>
           </section>
         ) : null}
 
@@ -1129,6 +1247,11 @@ function RecordCard({
               src={record.image.preview}
             />
             <div className="view-card__body">
+              {record.image.croppedPreview ? (
+                <small>
+                  Cover preview. Your original photo is used for analysis.
+                </small>
+              ) : null}
               <small title={record.fileName}>{record.fileName}</small>
               {progress !== undefined ? (
                 <div
@@ -1187,14 +1310,14 @@ function dropProgress(
 
 function liveCameraStateLabel(state: LiveCameraState) {
   switch (state) {
-    case "armed":
-      return "Armed";
-    case "captured":
+    case "searching":
+      return "Looking for a cover";
+    case "qualifying":
+      return "Hold steady";
+    case "capturing":
       return "Captured";
-    case "disarmed":
+    case "waiting":
       return "Waiting for a new cover";
-    case "rearmed":
-      return "Rearmed";
     case "off":
       return "Off";
     case "paused":
@@ -1204,14 +1327,14 @@ function liveCameraStateLabel(state: LiveCameraState) {
 
 function liveCameraStateMessage(state: LiveCameraState) {
   switch (state) {
-    case "armed":
-      return "Hold a front cover steady in the frame. It will be added once, then the camera waits for a change.";
-    case "captured":
-      return "Cover captured. Keep moving to the next cover before another capture.";
-    case "disarmed":
-      return "This cover is already captured. Move it out of frame or show a different cover to rearm.";
-    case "rearmed":
-      return "New framing detected. Ready for the next cover.";
+    case "searching":
+      return "Show one front cover in the guide.";
+    case "qualifying":
+      return "Hold the cover steady while we select a clear photo.";
+    case "capturing":
+      return "Saving your photo.";
+    case "waiting":
+      return "Photo captured. Remove it, show a different cover, or scan another copy.";
     case "off":
       return "";
     case "paused":
@@ -1227,6 +1350,8 @@ function liveCameraPauseMessage(reason: CameraPauseReason) {
       return "Live capture paused when this page went to the background.";
     case "access_lost":
       return "Live camera access ended.";
+    case "capacity":
+      return "Live capture paused to keep this device responsive. Upload or remove waiting photos, then resume.";
   }
 }
 
@@ -1234,32 +1359,15 @@ function isLiveCameraActive(state: LiveCameraState) {
   return state !== "off" && state !== "paused";
 }
 
-function cameraFrameDifference(
-  first: Uint8ClampedArray,
-  second: Uint8ClampedArray,
-) {
-  const stride = 16;
-  let total = 0;
-  let samples = 0;
-  for (let index = 0; index < first.length; index += stride) {
-    total +=
-      Math.abs(first[index] - second[index]) +
-      Math.abs(first[index + 1] - second[index + 1]) +
-      Math.abs(first[index + 2] - second[index + 2]);
-    samples += 3;
-  }
-  return total / samples;
-}
-
 function createIdleRecord(file: File): SessionRecord {
   return {
-    clientId: crypto.randomUUID(),
+    clientId: createUuid(),
     fileName: file.name || "Record photo",
     image: { file, preview: URL.createObjectURL(file) },
-    scanKey: `scan-${crypto.randomUUID()}`,
-    submitKey: `submit-${crypto.randomUUID()}`,
-    uploadKey: `upload-${crypto.randomUUID()}`,
-    completeKey: `complete-${crypto.randomUUID()}`,
+    scanKey: `scan-${createUuid()}`,
+    submitKey: `submit-${createUuid()}`,
+    uploadKey: `upload-${createUuid()}`,
+    completeKey: `complete-${createUuid()}`,
     batchId: null,
     scanId: null,
     imageId: null,
@@ -1349,6 +1457,11 @@ function validateAgainstScanLimits(
 }
 
 async function sha256(file: File) {
+  if (!crypto.subtle?.digest) {
+    throw new Error(
+      "Photo uploads need HTTPS or a browser with image hashing support. On this computer, open http://localhost:3000/scan; from another device, use an HTTPS address.",
+    );
+  }
   const digest = await crypto.subtle.digest(
     "SHA-256",
     await file.arrayBuffer(),
