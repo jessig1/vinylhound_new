@@ -29,7 +29,9 @@ import {
   encode,
   freezeFrame,
   type CameraPhoto,
+  type CameraFeedback,
 } from "./camera/cover-camera";
+import { captureGuidance } from "./camera/capture-guidance";
 import type { Corners } from "./camera/cover-detector";
 
 const UPLOAD_CONCURRENCY = 3;
@@ -170,12 +172,23 @@ export function CaptureSession({
   const [cameraSessionActive, setCameraSessionActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraCorners, setCameraCorners] = useState<Corners | null>(null);
+  const [cameraFeedback, setCameraFeedback] = useState<CameraFeedback | null>(
+    null,
+  );
   const [cameraGuidance, setCameraGuidance] = useState(
     "Show one front cover in the guide.",
   );
   const [cameraRatio, setCameraRatio] = useState(4 / 3);
   const [cameraPauseReason, setCameraPauseReason] =
     useState<CameraPauseReason | null>(null);
+  const showCameraGuidance =
+    cameraState === "searching" ||
+    cameraState === "qualifying" ||
+    (cameraState === "waiting" &&
+      cameraFeedback !== null &&
+      !["ready", "searching", "searching_help", "moving"].includes(
+        cameraFeedback.reason,
+      ));
 
   const refreshQuota = useRef(async () => {
     try {
@@ -366,6 +379,7 @@ export function CaptureSession({
     }
     cameraStreamRef.current = null;
     setCameraCorners(null);
+    setCameraFeedback(null);
     setCameraPauseReason(null);
     setLiveCameraState("off");
   }
@@ -450,7 +464,7 @@ export function CaptureSession({
       setCameraRatio(video.videoWidth / video.videoHeight || 4 / 3);
       setCameraGuidance(
         candidateCaptureEnabled && typeof Worker !== "undefined"
-          ? "Show one front cover in the guide."
+          ? captureGuidance("searching")
           : "Frame the cover, then choose Capture photo.",
       );
       if (candidateCaptureEnabled && typeof Worker !== "undefined") {
@@ -463,13 +477,8 @@ export function CaptureSession({
                 setCameraRatio(video.videoWidth / video.videoHeight);
               setLiveCameraState(feedback.phase);
               setCameraCorners(feedback.corners);
-              setCameraGuidance(
-                feedback.reason === "multiple"
-                  ? "Show one cover at a time."
-                  : feedback.reason === "blurry"
-                    ? "Hold steady, or capture manually."
-                    : "Show one front cover in the guide.",
-              );
+              setCameraFeedback(feedback);
+              setCameraGuidance(captureGuidance(feedback.reason));
             },
             (photo) => {
               if (requestId === cameraRequestRef.current)
@@ -479,6 +488,7 @@ export function CaptureSession({
               if (requestId !== cameraRequestRef.current) return;
               coverCameraRef.current = null;
               setCameraCorners(null);
+              setCameraFeedback(null);
               setLiveCameraState("searching");
               setCameraError(
                 "Automatic capture is unavailable. You can capture a photo manually or upload one.",
@@ -1227,6 +1237,14 @@ export function CaptureSession({
               {cameraCorners ? (
                 <svg
                   className="live-camera__outline"
+                  data-ready={
+                    cameraState === "capturing" ||
+                    (cameraFeedback?.checks?.boundary &&
+                      cameraFeedback.checks.framing &&
+                      cameraFeedback.checks.detail)
+                      ? "true"
+                      : "false"
+                  }
                   viewBox="0 0 100 100"
                   preserveAspectRatio="none"
                   aria-hidden="true"
@@ -1244,11 +1262,41 @@ export function CaptureSession({
                 {liveCameraStateLabel(cameraState)}
               </span>
             </div>
-            <p aria-live="polite">
-              {cameraState === "searching"
+            <p
+              className="live-camera__guidance"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {showCameraGuidance
                 ? cameraGuidance
                 : liveCameraStateMessage(cameraState)}
             </p>
+            {cameraFeedback && showCameraGuidance ? (
+              <div className="live-camera__checks">
+                <ul aria-label="Automatic capture checks">
+                  {(
+                    [
+                      ["Cover edges", cameraFeedback.checks?.boundary],
+                      ["Framing", cameraFeedback.checks?.framing],
+                      ["Image detail", cameraFeedback.checks?.detail],
+                    ] as const
+                  ).map(([label, ready]) => (
+                    <li key={label} data-ready={ready ? "true" : "false"}>
+                      <span aria-hidden="true">{ready ? "✓" : "○"}</span>{" "}
+                      {label}: {ready ? "ready" : "checking"}
+                    </li>
+                  ))}
+                </ul>
+                <label>
+                  Hold steady
+                  <progress
+                    aria-label="Steady hold progress"
+                    max={1}
+                    value={cameraFeedback.progress ?? 0}
+                  />
+                </label>
+              </div>
+            ) : null}
             <p>
               Automatic capture uploads your original photo and its cover crop;
               the crop is used for analysis. Manual photos use the full image.

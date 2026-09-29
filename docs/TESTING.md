@@ -23,6 +23,29 @@ CI should never require production secrets or make billable OpenAI calls. Provid
 uses a manual shutter. For local candidate-mode trials, set it to `true` in
 the root `.env` and restart the web process. Do not enable public automatic
 capture until P5.2/P5.3's private detector/device and AI gates pass.
+Use the [P5.1 per-device gate sheet](CAPTURE_GATE_EVALUATION.md) to record
+physical camera results with counts and denominators. The first private webcam
+trial failed exploratory recall/crop checks; iPhone and Android have no scored
+results yet.
+
+The layered detector now combines luminance and color edges, strong and
+scene-adapted edge passes, four-side support, size/position/perspective checks,
+crop detail, and temporal stability. The camera shows **Cover edges**, **Framing**,
+**Image detail**, and hold-steady progress, with persistent instructions to move
+closer/back, center the cover, face the camera, improve edge contrast, or let
+focus settle. Amber dashed outlines are tentative; they do not authorize a
+capture. A larger incomplete sleeve boundary blocks a nested artwork crop.
+After a prolonged search, guidance suggests a contrasting background, avoiding
+reflections, and manual capture. Reflections are an advisory suggestion, not
+a measured glare classifier. Geometry still cannot prove an object is an album.
+
+Synthetic regression scenes cover weak-contrast and similar-luminance color
+boundaries, small and clipped sleeves, nested artwork, dark/light artwork,
+detail loss, noisy/gradient backgrounds, and multiple targets. The live-camera
+browser journey corrects a small cover and a clipped cover before automatic
+capture of a weak-contrast target. These are implementation checks; replay the
+original private webcam clip and collect physical phone trials before claiming
+that the reported real-camera misses are fixed.
 
 Unit tests under `apps/web/src/app/scan/camera/` exercise synthetic negative
 scenes, normalized corners, time-based tracking, best-frame selection,

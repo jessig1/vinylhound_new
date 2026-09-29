@@ -83,6 +83,16 @@ P5.3's private AI baseline; the reordered work does not waive release gates.
       and denominators, not only pooled percentages. Require a private
       full-frame versus crop identification comparison before claiming an AI
       recognition improvement.
+      A [per-setup evaluation protocol and result sheet](../CAPTURE_GATE_EVALUATION.md)
+      now records the required denominators and the initial failed webcam trial.
+      No physical setup has passed the release gates; iPhone and Android remain
+      unmeasured, and the private paired AI comparison has not run. Keep the
+      public flag off and this task open.
+      The 2026-09-29 layered guidance experiment adds color/luminance edge
+      evidence, adaptive boundary detection, framing/detail checks, tentative
+      outlines, stable recovery instructions, and hold-steady progress. Synthetic
+      weak-contrast/color, small/clipped, nested-artwork, and negative scenes pass;
+      the original private webcam failures still need a new physical trial.
 
 Exit: recorded-frame and real-device tests pass the documented gates; analysis
 receives the linked crop, the audit trail remains intact, and unsupported cases

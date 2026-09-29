@@ -58,3 +58,28 @@ fulfil P5.2/P5.3 release gates. No pressing identity is inferred.
 Use video frame callbacks where available, with a throttled timer fallback.
 See [MDN video frame callbacks](https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback)
 and [MDN worker bundling and transferable buffers](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers).
+
+## 2026-09-29: Layered guidance experiment
+
+The baseline now combines luminance and RGB edge strength in two bounded
+passes (strong edges and a scene-adapted threshold). Four-side support,
+coverage, centering, perspective, and crop detail remain separate checks;
+only a ready candidate can enter the existing 600 ms stability window.
+Tentative quadrilaterals provide recovery guidance without being capture
+candidates. Prefer the outer plausible boundary even when it is incomplete,
+so a smaller artwork rectangle cannot override evidence of a clipped sleeve.
+This can deliberately defer capture when a large background rectangle competes
+with the album; manual capture remains the explicit recovery path.
+
+The UI shows the checks and hold-steady progress instead of a purported album
+confidence score. Instructions require 450 ms of persistence, and prolonged
+searching offers practical lighting/background/manual suggestions. Weak
+detail and low luminance together suggest lighting; brightness alone never
+rejects a detected cover. Reflection advice is not a glare measurement.
+Signals and frame buffers stay local, with no provider or HTTP contract
+change. Synthetic tests demonstrate selected failure cases, not real-device
+recall. P5.2 must still compare detector approaches on private footage.
+
+ADR-0033 supersedes this ADR's original preview-only paragraph: accepted
+source and exact preview crop are now linked private uploads, with analysis
+derived from the crop. This experiment preserves that audit relationship.

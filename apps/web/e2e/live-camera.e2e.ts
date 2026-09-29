@@ -69,18 +69,31 @@ async function installLiveCameraStub(
         const data = this.createImageData(width, height);
         for (let y = 0; y < height; y++)
           for (let x = 0; x < width; x++) {
+            const bounds =
+              harness.frame === 3
+                ? [0.4, 0.4, 0.6, 0.6]
+                : harness.frame === 4
+                  ? [0, 0.2, 0.6, 0.8]
+                  : [0.25, 0.25, 0.75, 0.75];
             const inside =
               harness.frame > 0 &&
-              x >= width / 4 &&
-              x <= (width * 3) / 4 &&
-              y >= height / 4 &&
-              y <= (height * 3) / 4;
+              x >= width * bounds[0] &&
+              x <= width * bounds[2] &&
+              y >= height * bounds[1] &&
+              y <= height * bounds[3];
             const art =
               harness.frame === 1
                 ? (x * 13 + y * 7) % 60
                 : (x * 7 + y * 13) % 60;
             const coarse = (harness.frame === 1 ? x : y) < width / 2 ? 50 : 0;
-            const value = inside ? 110 + art + coarse : 15;
+            const value =
+              harness.frame === 5
+                ? inside
+                  ? 112 + ((x * 13 + y * 7) % 6)
+                  : 100
+                : inside
+                  ? 110 + art + coarse
+                  : 15;
             const i = (y * width + x) * 4;
             data.data[i] = data.data[i + 1] = data.data[i + 2] = value;
             data.data[i + 3] = 255;
@@ -145,6 +158,57 @@ async function background(page: Page) {
     document.dispatchEvent(new Event("visibilitychange"));
   });
 }
+
+test("camera guidance helps correct distance and clipped edges before automatic capture", async ({
+  page,
+}) => {
+  await installLiveCameraStub(page);
+  await page.goto("/scan");
+  await page.getByRole("button", { name: "Use live camera" }).click();
+  await changeFrame(page, 3);
+  await expect(page.locator(".live-camera__guidance")).toContainText(
+    "Move closer",
+  );
+  await page
+    .locator(".live-camera")
+    .screenshot({ path: test.info().outputPath("camera-guidance.png") });
+  await expect(
+    page.getByRole("list", { name: "Automatic capture checks" }),
+  ).toContainText("Framing: checking");
+  await expect(page.locator(".live-camera__outline")).toHaveAttribute(
+    "data-ready",
+    "false",
+  );
+  expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
+    0,
+  );
+  await changeFrame(page, 4);
+  await expect(page.locator(".live-camera__guidance")).toContainText(
+    "all four corners",
+  );
+  expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
+    0,
+  );
+  await changeFrame(page, 5);
+  await expect
+    .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
+    .toBe(1);
+  await expect(page.locator(".live-camera__state")).toHaveText(
+    "Waiting for a new cover",
+  );
+  // Recovery guidance must remain available for the next album in the session.
+  await changeFrame(page, 4);
+  await expect(page.locator(".live-camera__guidance")).toContainText(
+    "all four corners",
+  );
+  await expect(page.locator(".live-camera__outline")).toHaveAttribute(
+    "data-ready",
+    "false",
+  );
+  expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
+    1,
+  );
+});
 
 test("candidate capture ignores empty scenes, submits once while held, and accepts a replacement", async ({
   page,

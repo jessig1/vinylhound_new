@@ -55,6 +55,13 @@ export function buildE2eEnv(): Record<string, string> {
     AUTH_MODE: "development",
     NEXT_PUBLIC_AUTH_MODE: "development",
     CAPTURE_CANDIDATE_MODE_ENABLED: "true",
+    // The four-browser matrix shares one synthetic user. Do not inherit a
+    // personal .env budget that can exhaust its allowance partway through.
+    // Quota behavior has explicit rejected-response fixtures in the tests.
+    USER_DAILY_ANALYSIS_LIMIT: "1000",
+    USER_ACTIVE_SCAN_LIMIT: "20",
+    USER_MONTHLY_SPEND_LIMIT_USD: "1000",
+    SCAN_COST_RESERVATION_USD: "0.25",
   };
 }
 

@@ -1729,8 +1729,40 @@ a.album-card:focus-visible {
 .live-camera__outline polygon {
   fill: none;
   stroke: #9ee5b8;
-  stroke-width: 0.7;
+  stroke-width: 2;
   vector-effect: non-scaling-stroke;
+}
+.live-camera__outline[data-ready="false"] polygon {
+  stroke: #ffd38a;
+  stroke-dasharray: 6 4;
+}
+.live-camera__guidance {
+  min-height: 2.6em;
+}
+.live-camera__checks {
+  margin: 12px 2px;
+  font-size: 0.78rem;
+}
+.live-camera__checks ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 0;
+  list-style: none;
+}
+.live-camera__checks li[data-ready="true"] {
+  color: #9ee5b8;
+}
+.live-camera__checks label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.live-camera__checks progress {
+  flex: 1;
+  min-width: 0;
+  height: 8px;
+  accent-color: #9ee5b8;
 }
 .live-camera__state {
   position: absolute;

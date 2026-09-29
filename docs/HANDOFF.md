@@ -120,6 +120,29 @@ the log.
 
 ## Current state — updated 2026-09-29
 
+- **Automatic capture now has layered detection and actionable guidance.**
+  Luminance plus RGB edges, strong/scene-adapted thresholds, four-side support,
+  framing, image detail, and temporal stability feed the camera UI. It shows
+  tentative amber outlines, separate readiness checks, hold-steady progress,
+  and stable instructions for distance, clipping, centering, tilt, edge
+  contrast, lighting/focus, and manual recovery. A larger incomplete sleeve
+  outline blocks a smaller artwork crop. The underlying detector remains
+  geometric, and the original private webcam clip has not been replayed against
+  this revision. Next: retry the failed physical presentations using the new
+  guidance, retain private evidence, and use P5.2's held-out evaluation before
+  deciding whether geometry needs replacement. Public release stays gated.
+
+- **P5.1 Task 4 release evaluation is prepared, not passed.**
+  `docs/CAPTURE_GATE_EVALUATION.md` defines one result sheet per physical
+  device/browser/camera setup, fixed denominators, private labeling, the
+  ten-album and performance protocol, and the paired source/crop AI comparison.
+  The existing private 81-second webcam clip fails exploratory recall/crop
+  checks; it does not supply the formal denominators. iPhone and Android
+  results, additional webcam negatives, and P5.3's comparison are absent.
+  Automatic capture remains default-off for public environments and Task 4
+  remains open. Next: obtain consented physical-device evidence and score each
+  setup separately before any rollout decision.
+
 - **P5.1 Task 3 audited crop integration is implemented.** ADR-0033 owns the
   source/crop relationship. Automatic captures upload the accepted full frame
   and exact local crop preview through two private signed PUTs; completion
@@ -3918,6 +3941,13 @@ detector/device evidence.** Tasks 1-3's candidate pipeline, continuous queue,
 and audited analysis crop are implemented. Keep automatic capture default-off
 until the real-device and private AI gates pass. Local HMR and UUID failures are fixed; use localhost on
 this computer or HTTPS from another device for camera/upload trials.
+Use `docs/CAPTURE_GATE_EVALUATION.md` to score each physical setup. The
+existing 81-second webcam trial is an exploratory failure, not a formal pass;
+phone evidence and the private paired source/crop AI comparison are absent.
+The layered detection/guidance experiment is now available for another local
+trial. Watch the edge/framing/detail checks and hold-steady progress; compare
+the outlined outer jacket with what is actually visible. Replay/recapture the
+failed examples before attributing a real-device reliability improvement.
 The local `.env` enables the experimental candidate worker after a web
 restart. Synthetic tests do not establish real-camera recall.
 The first enabled webcam clip now confirms misses on two of three distinct
@@ -8524,3 +8554,40 @@ discovery`. Broadened the harness's retry to cover it too
   The first webcam trial's detector failures remain P5.2 evidence. P5.1 Task
   4 and P5.2/P5.3 release gates remain next. Generated `next-env.d.ts` was
   restored after the build.
+
+- **2026-09-29 - Codex. Prepared P5.1 Task 4's release evaluation.** Added
+  `docs/CAPTURE_GATE_EVALUATION.md` with the physical-device protocol, per-setup
+  counts and denominators, ten-album/performance and fallback checks, and the
+  paired private source/crop comparison requirement. Recorded the existing
+  81-second webcam clip as an exploratory failure without inventing gate
+  denominators or backend completion. Linked the sheet from the roadmap and
+  testing guide, and corrected the capture proposal's stale Task 3 status.
+  `npm run check` passed (49 files, 462 tests). No runtime, contract, or
+  deployment setting changed. Task 4 remains open pending consented iPhone,
+  Android, and full webcam evidence plus P5.3's private AI baseline; public
+  automatic capture remains default-off.
+
+- **2026-09-29 - Codex. Implemented layered automatic-capture guidance.**
+  Combined luminance/RGB edges and two bounded threshold passes with boundary,
+  framing, detail, and temporal evidence. Tentative outlines now drive specific
+  distance, clipping, centering, tilt, contrast, and focus/lighting guidance;
+  they cannot authorize capture. A larger incomplete outline blocks nested
+  artwork. The UI shows separate checks and hold-steady progress, stabilizes
+  instructions for 450 ms, and preserves useful guidance for later albums while
+  waiting after a capture. Prolonged searching suggests background/reflection
+  adjustments and manual recovery; no glare classifier or album model is claimed.
+  Removed hot-loop closures and isolated edge processing after a local timing
+  probe exposed avoidable overhead. A 320x240 synthetic probe (20 warmups and
+  100 timed calls per empty/cover/noise scene) then measured p95 24.56/31.46/38.59
+  ms on this host; these are not physical-device performance gates. The first
+  browser matrix inherited the personal daily quota and stopped partway; the
+  e2e environment now pins its non-billable synthetic budget, preserving the
+  explicit quota-rejection test. `npm run check` passed (50 files, 480 tests),
+  all workspace builds passed, and the camera matrix passed 32/32. After the
+  final optimization and next-album guidance fix, the focused scenario passed
+  again on all four browser profiles (4/4); its mobile screenshot was inspected.
+  Restored generated `next-env.d.ts`. The ignored local flag is already true;
+  refresh the local scanner for a new physical trial. The original private
+  webcam clip has not been replayed against this code; P5.2/P5.3 gates and public
+  default-off status remain. Updated ADR-0032, testing guidance, roadmap,
+  current state, and resume point.

@@ -6,6 +6,8 @@ export type TrackingUpdate = {
   phase: CapturePhase;
   best: TrackedFrame | null;
   capture: TrackedFrame | null;
+  progress: number;
+  moving: boolean;
 };
 
 export function fingerprintDifference(a: number[], b: number[]) {
@@ -31,11 +33,13 @@ export class CoverTracker {
   private lastSeen = 0;
   private absentSince: number | null = null;
   private replacementSince: number | null = null;
+  private moving = false;
 
   reset() {
     this.phase = "searching";
     this.best = this.prior = this.captured = null;
     this.absentSince = this.replacementSince = null;
+    this.moving = false;
   }
 
   capturedFrame(candidate: CoverCandidate | null) {
@@ -47,6 +51,7 @@ export class CoverTracker {
   }
 
   inspect(id: number, time: number, detection: Detection): TrackingUpdate {
+    this.moving = false;
     const candidate = detection.candidate;
     if (this.phase === "capturing") return this.update();
     if (this.phase === "waiting") {
@@ -78,13 +83,12 @@ export class CoverTracker {
       if (time - this.lastSeen > 300) this.reset();
       return this.update();
     }
-    if (
-      !this.prior ||
-      time - this.lastSeen > 300 ||
-      motion(candidate, this.prior) > 0.035 ||
-      fingerprintDifference(candidate.fingerprint, this.prior.fingerprint) >
-        0.35
-    ) {
+    this.moving =
+      !!this.prior &&
+      (motion(candidate, this.prior) > 0.035 ||
+        fingerprintDifference(candidate.fingerprint, this.prior.fingerprint) >
+          0.35);
+    if (!this.prior || time - this.lastSeen > 300 || this.moving) {
       this.since = time;
       this.best = null;
     }
@@ -101,6 +105,15 @@ export class CoverTracker {
   }
 
   private update(): TrackingUpdate {
-    return { phase: this.phase, best: this.best, capture: null };
+    return {
+      phase: this.phase,
+      best: this.best,
+      capture: null,
+      progress:
+        this.phase === "qualifying" || this.phase === "capturing"
+          ? Math.max(0, Math.min(1, (this.lastSeen - this.since) / 600))
+          : 0,
+      moving: this.moving,
+    };
   }
 }

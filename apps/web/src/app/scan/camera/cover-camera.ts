@@ -5,11 +5,14 @@ import {
   type DetectorResult,
 } from "./cover-detector";
 import { CoverTracker, type CapturePhase } from "./cover-tracker";
+import { CaptureGuidance, type GuidanceReason } from "./capture-guidance";
 
 export type CameraFeedback = {
   phase: CapturePhase;
   corners: Corners | null;
-  reason: Detection["reason"];
+  reason: GuidanceReason;
+  checks?: Detection["checks"];
+  progress?: number;
 };
 export type CameraPhoto = {
   file: File;
@@ -29,6 +32,7 @@ export type CameraPhoto = {
 export class CoverCamera {
   private worker: Worker | null = null;
   private tracker = new CoverTracker();
+  private guidance = new CaptureGuidance();
   private frames = new Map<
     number,
     { source: HTMLCanvasElement; capturedAt: string }
@@ -149,8 +153,10 @@ export class CoverCamera {
     const update = this.tracker.inspect(data.id, data.time, data);
     this.feedback({
       phase: update.phase,
-      corners: data.candidate?.corners ?? null,
-      reason: data.reason,
+      corners: data.outline ?? data.candidate?.corners ?? null,
+      reason: this.guidance.inspect(data.reason, update.moving, data.time),
+      checks: data.checks,
+      progress: data.reason === "ready" ? update.progress : 0,
     });
     if (update.capture) {
       const frame = this.frames.get(update.capture.id);
@@ -256,7 +262,7 @@ export function encode(canvas: HTMLCanvasElement) {
   );
 }
 
-/** Local preview only: the original remains the uploaded analysis input. */
+/** This exact preview is uploaded as the linked analysis crop (ADR-0033). */
 function renderCrop(source: HTMLCanvasElement, corners: Corners) {
   const result = document.createElement("canvas");
   result.width = result.height = 512;

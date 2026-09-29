@@ -27,6 +27,35 @@ function hold(tracker: CoverTracker, start = 0, value = candidate()) {
 }
 
 describe("cover presentation tracking", () => {
+  it("reports steady-hold progress and resets it when the cover moves", () => {
+    const tracker = new CoverTracker();
+    tracker.inspect(1, 0, detected());
+    expect(tracker.inspect(2, 300, detected()).progress).toBe(0.5);
+    const moved = tracker.inspect(3, 450, detected(candidate(10, 0, 0.1)));
+    expect(moved.progress).toBe(0);
+    expect(moved.moving).toBe(true);
+    expect(moved.capture).toBeNull();
+  });
+  it.each([
+    "clipped",
+    "too_small",
+    "weak_boundary",
+    "blurry",
+    "low_light",
+  ] as const)(
+    "does not capture or rearm from sustained %s evidence",
+    (reason) => {
+      const tracker = new CoverTracker();
+      const detection: Detection = { candidate: candidate(), reason };
+      for (let time = 0; time < 2000; time += 150)
+        expect(tracker.inspect(time, time, detection).capture).toBeNull();
+      tracker.capturedFrame(candidate());
+      for (let time = 2000; time < 4000; time += 150)
+        expect(
+          tracker.inspect(time, time, { candidate: null, reason }).phase,
+        ).toBe("waiting");
+    },
+  );
   it("never captures a still absent scene, even after a long wait", () => {
     const tracker = new CoverTracker();
     for (let time = 0; time < 60_000; time += 150)
