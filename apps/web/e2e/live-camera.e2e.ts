@@ -159,7 +159,14 @@ test("candidate capture ignores empty scenes, submits once while held, and accep
   expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
     0,
   );
+  const croppedCompletion = page.waitForResponse(
+    (response) =>
+      /\/api\/v1\/scans\/[^/]+\/uploads\/[^/]+\/complete$/.test(
+        response.url(),
+      ) && response.status() === 200,
+  );
   await changeFrame(page, 1);
+  expect((await (await croppedCompletion).json()).analysisSource).toBe("crop");
   await expect
     .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
     .toBe(1);
@@ -231,9 +238,16 @@ test("worker-unavailable browsers keep an explicit manual camera and upload fall
   expect(await page.evaluate(() => window.liveCameraHarness.submissions)).toBe(
     0,
   );
+  const sourceCompletion = page.waitForResponse(
+    (response) =>
+      /\/api\/v1\/scans\/[^/]+\/uploads\/[^/]+\/complete$/.test(
+        response.url(),
+      ) && response.status() === 200,
+  );
   await page
     .getByRole("button", { name: "Capture photo", exact: true })
     .click();
+  expect((await (await sourceCompletion).json()).analysisSource).toBe("source");
   await expect
     .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
     .toBe(1);

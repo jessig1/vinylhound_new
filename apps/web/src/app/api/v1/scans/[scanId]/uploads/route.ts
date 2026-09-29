@@ -3,7 +3,10 @@ import {
   MAX_IMAGES_PER_SCAN,
   SignedUploadSchema,
 } from "@vinylhound/contracts";
-import { createOrGetImageUpload } from "@vinylhound/database";
+import {
+  createOrGetImageUpload,
+  deriveImageObjectKey,
+} from "@vinylhound/database";
 
 import { requireUserId } from "@/server/auth";
 import { getServerContext } from "@/server/context";
@@ -44,12 +47,34 @@ export const POST = withRoute(
       sizeBytes: result.record.sizeBytes,
       checksumSha256: result.record.checksumSha256,
     });
+    const crop = result.record.cropProvenance;
+    const cropSigned = crop
+      ? await context.storage.createSignedUpload({
+          objectKey: deriveImageObjectKey(
+            { userId, scanId, imageId: result.record.id },
+            "crop",
+          ),
+          mimeType: "image/jpeg",
+          sizeBytes: crop.sizeBytes,
+          checksumSha256: crop.checksumSha256,
+        })
+      : null;
     const response = SignedUploadSchema.parse({
       imageId: result.record.id,
       method: signed.method,
       url: signed.url,
       expiresAt: signed.expiresAt.toISOString(),
       requiredHeaders: signed.requiredHeaders,
+      ...(cropSigned
+        ? {
+            cropUpload: {
+              method: cropSigned.method,
+              url: cropSigned.url,
+              expiresAt: cropSigned.expiresAt.toISOString(),
+              requiredHeaders: cropSigned.requiredHeaders,
+            },
+          }
+        : {}),
     });
 
     return jsonResponse(response, result.created ? 201 : 200, requestId);

@@ -1,0 +1,17 @@
+{
+  "frozenAt": "2026-09-29",
+  "origin": "Signed source and linked crop PUTs under ADR-0033.",
+  "value": {
+    "imageId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c05",
+    "method": "PUT",
+    "url": "https://storage.example.test/uploads/scan/front?X-Amz-Signature=redacted",
+    "expiresAt": "2026-09-29T15:05:00.000Z",
+    "requiredHeaders": { "Content-Type": "image/jpeg" },
+    "cropUpload": {
+      "method": "PUT",
+      "url": "https://storage.example.test/uploads/scan/crop?X-Amz-Signature=redacted",
+      "expiresAt": "2026-09-29T15:05:00.000Z",
+      "requiredHeaders": { "Content-Type": "image/jpeg" }
+    }
+  }
+}

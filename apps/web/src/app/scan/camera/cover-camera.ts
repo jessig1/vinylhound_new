@@ -11,13 +11,28 @@ export type CameraFeedback = {
   corners: Corners | null;
   reason: Detection["reason"];
 };
-export type CameraPhoto = { file: File; preview: Blob; cropped: boolean };
+export type CameraPhoto = {
+  file: File;
+  preview: Blob;
+  cropped: boolean;
+  crop?: {
+    corners: Corners;
+    width: number;
+    height: number;
+    sourceWidth: number;
+    sourceHeight: number;
+    capturedAt: string;
+  };
+};
 
 /** Owns at most two source snapshots (best and in-flight) and one worker job. */
 export class CoverCamera {
   private worker: Worker | null = null;
   private tracker = new CoverTracker();
-  private frames = new Map<number, HTMLCanvasElement>();
+  private frames = new Map<
+    number,
+    { source: HTMLCanvasElement; capturedAt: string }
+  >();
   private sample = document.createElement("canvas");
   private stopped = false;
   private busy = false;
@@ -106,7 +121,7 @@ export class CoverCamera {
         this.sample.height,
       ).data;
       const id = ++this.sequence;
-      this.frames.set(id, source);
+      this.frames.set(id, { source, capturedAt: new Date().toISOString() });
       this.busy = true;
       this.deadline = setTimeout(() => this.fail(), 5_000);
       this.worker.postMessage(
@@ -138,12 +153,13 @@ export class CoverCamera {
       reason: data.reason,
     });
     if (update.capture) {
-      const source = this.frames.get(update.capture.id);
-      if (source)
+      const frame = this.frames.get(update.capture.id);
+      if (frame)
         void this.capture(
-          source,
+          frame.source,
           update.capture.candidate.corners,
           update.capture.candidate,
+          frame.capturedAt,
         );
       this.releaseFrames();
     } else {
@@ -155,6 +171,7 @@ export class CoverCamera {
     source: HTMLCanvasElement,
     corners: Corners | null,
     candidate: Detection["candidate"] = null,
+    capturedAt = new Date().toISOString(),
   ) {
     if (!this.admit(source.width * source.height * 4)) {
       source.width = source.height = 0;
@@ -178,6 +195,18 @@ export class CoverCamera {
         }),
         preview: preview ?? original,
         cropped: preview !== null,
+        ...(preview && corners
+          ? {
+              crop: {
+                corners,
+                width: 512,
+                height: 512,
+                sourceWidth: source.width,
+                sourceHeight: source.height,
+                capturedAt,
+              },
+            }
+          : {}),
       });
       this.tracker.capturedFrame(candidate);
       this.feedback({ phase: "waiting", corners, reason: "ready" });
@@ -190,10 +219,10 @@ export class CoverCamera {
   }
 
   private releaseFrames(keep?: number) {
-    for (const [id, source] of this.frames) {
+    for (const [id, frame] of this.frames) {
       if (id === keep) continue;
       // A selected source is being encoded; the encoder retains it until done.
-      if (!this.encoding) source.width = source.height = 0;
+      if (!this.encoding) frame.source.width = frame.source.height = 0;
       this.frames.delete(id);
     }
   }

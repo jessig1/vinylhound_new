@@ -4,6 +4,12 @@
 
 Album photos are user content. They may unintentionally include faces, addresses, receipts, reflections, geolocation EXIF, or other private material. API keys, session tokens, signed URLs, and storage credentials are secrets. Collection and wishlist data are private by default.
 
+Automatic camera capture retains the full accepted frame privately, including
+its background, and a linked cover crop. The crop feeds analysis and the
+thumbnail; neither raw object has a public URL. A manually captured or uploaded
+photo uses its full image for analysis. Server derivatives strip metadata;
+uploaded originals may retain metadata supplied by the device or file.
+
 ## Baseline controls
 
 - Keep all provider and storage credentials on trusted server/worker processes.

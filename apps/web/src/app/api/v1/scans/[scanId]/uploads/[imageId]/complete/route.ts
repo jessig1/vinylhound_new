@@ -11,6 +11,7 @@ import {
   ImageValidationError,
   normalizeImage,
   StoredObjectTooLargeError,
+  validateCropGeometry,
   validateImage,
 } from "@vinylhound/storage";
 
@@ -52,6 +53,7 @@ export const POST = withRoute(
     const uploadPhaseStartedAt = Date.now();
     let validated;
     let stored;
+    let analysisBytes: Uint8Array;
     try {
       stored = await context.storage.readObject(
         image.objectKey,
@@ -64,6 +66,32 @@ export const POST = withRoute(
         expectedSizeBytes: image.sizeBytes,
         expectedChecksumSha256: image.checksumSha256,
       });
+      analysisBytes = stored.bytes;
+      if (image.cropProvenance) {
+        const crop = image.cropProvenance;
+        validateCropGeometry(crop, validated);
+        const cropStored = await context.storage.readObject(
+          deriveImageObjectKey(lookup, "crop"),
+          MAX_IMAGE_SIZE_BYTES,
+        );
+        const cropValidated = await validateImage({
+          bytes: cropStored.bytes,
+          storedContentType: cropStored.contentType,
+          expectedMimeType: crop.mimeType,
+          expectedSizeBytes: crop.sizeBytes,
+          expectedChecksumSha256: crop.checksumSha256,
+        });
+        if (
+          cropValidated.width !== crop.width ||
+          cropValidated.height !== crop.height
+        ) {
+          throw new ImageValidationError(
+            "invalid_image",
+            "The crop dimensions do not match its declared dimensions.",
+          );
+        }
+        analysisBytes = cropStored.bytes;
+      }
     } catch (error) {
       if (
         error instanceof ImageValidationError ||
@@ -76,7 +104,7 @@ export const POST = withRoute(
     const uploadPhaseDurationMs = Date.now() - uploadPhaseStartedAt;
 
     const normalizationPhaseStartedAt = Date.now();
-    const normalized = await normalizeImage(stored.bytes);
+    const normalized = await normalizeImage(analysisBytes);
     await Promise.all([
       context.storage.putObject({
         objectKey: deriveImageObjectKey(lookup, "analysis"),
@@ -129,6 +157,7 @@ function completedResponse(
     sizeBytes: number;
     width: number | null;
     height: number | null;
+    cropProvenance: unknown;
   },
   requestId: string,
 ) {
@@ -140,6 +169,7 @@ function completedResponse(
     sizeBytes: image.sizeBytes,
     width: image.width,
     height: image.height,
+    analysisSource: image.cropProvenance ? "crop" : "source",
   });
   return jsonResponse(response, 200, requestId);
 }

@@ -13,6 +13,7 @@ import {
   SCAN_CONFIRMED_EVENT,
   SCAN_CONFIRMED_EVENT_CONTRACT,
   type AnalyzeScanJob,
+  type CropProvenance,
   type LibraryItemResult,
 } from "@vinylhound/contracts";
 
@@ -283,6 +284,43 @@ describe("initial scan persistence schema", () => {
     expect(createdUpload.created).toBe(true);
     expect(replayedUpload.created).toBe(false);
     expect(replayedUpload.record.id).toBe(createdUpload.record.id);
+
+    const crop: CropProvenance = {
+      mimeType: "image/jpeg",
+      sizeBytes: 2048,
+      checksumSha256: "c".repeat(64),
+      width: 512,
+      height: 512,
+      sourceWidth: 1600,
+      sourceHeight: 1200,
+      corners: [
+        { x: 0.2, y: 0.2 },
+        { x: 0.8, y: 0.2 },
+        { x: 0.8, y: 0.8 },
+        { x: 0.2, y: 0.8 },
+      ],
+      transformVersion: "perspective-nearest-v1",
+      capturedAt: "2026-09-29T15:00:00.000Z",
+    };
+    const cameraUpload = {
+      ...uploadInput,
+      idempotencyKey: `camera-upload-${randomUUID()}`,
+      crop,
+    };
+    const createdCameraUpload = await createOrGetImageUpload(
+      scanDatabase.db,
+      cameraUpload,
+    );
+    expect(createdCameraUpload.record.cropProvenance).toEqual(crop);
+    expect(
+      (await createOrGetImageUpload(scanDatabase.db, cameraUpload)).created,
+    ).toBe(false);
+    await expect(
+      createOrGetImageUpload(scanDatabase.db, {
+        ...cameraUpload,
+        crop: { ...crop, checksumSha256: "d".repeat(64) },
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
   });
 
   it("stores a scan, completed image, and attempt audit row", async () => {
@@ -715,6 +753,23 @@ describe("initial scan persistence schema", () => {
       mimeType: "image/jpeg",
       sizeBytes: 512,
       checksumSha256: "e".repeat(64),
+      crop: {
+        mimeType: "image/jpeg",
+        sizeBytes: 256,
+        checksumSha256: "f".repeat(64),
+        width: 512,
+        height: 512,
+        sourceWidth: 1600,
+        sourceHeight: 1200,
+        corners: [
+          { x: 0.2, y: 0.2 },
+          { x: 0.8, y: 0.2 },
+          { x: 0.8, y: 0.8 },
+          { x: 0.2, y: 0.8 },
+        ],
+        transformVersion: "perspective-nearest-v1",
+        capturedAt: "2026-09-29T15:00:00.000Z",
+      },
       maxImages: 12,
     });
     const staleTimestamp = new Date(Date.now() - 48 * 60 * 60 * 1_000);
@@ -747,6 +802,7 @@ describe("initial scan persistence schema", () => {
     expect(canceledForUser[0]!.imageObjectKeys.sort()).toEqual(
       [
         `${cleanupUserId}/${abandoned.record.id}/${abandonedUpload.record.id}/original`,
+        `${cleanupUserId}/${abandoned.record.id}/${abandonedUpload.record.id}/crop`,
         `${cleanupUserId}/${abandoned.record.id}/${abandonedUpload.record.id}/analysis`,
         `${cleanupUserId}/${abandoned.record.id}/${abandonedUpload.record.id}/thumbnail`,
       ].sort(),

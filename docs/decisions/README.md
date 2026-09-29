@@ -34,3 +34,4 @@ ADRs capture decisions that are expensive to reverse or easy to forget. Use the 
 - [ADR-0030: Scan and core become physically separate Postgres schemas and roles; the writer switch drops the remaining cross-schema FKs](0030-scan-core-physical-split.md)
 - [ADR-0031: Split platform delivery into a dedicated repository](0031-platform-delivery-repository-split.md)
 - [ADR-0032: Cover candidate capture is local and experimental](0032-experimental-cover-candidate-capture.md)
+- [ADR-0033: Audited analysis crops for automatic captures](0033-audited-analysis-crops.md)

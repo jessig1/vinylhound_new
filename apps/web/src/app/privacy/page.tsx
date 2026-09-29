@@ -7,7 +7,7 @@ export default function PrivacyPage() {
         <div>
           <p className="section-kicker">VinylHound</p>
           <h1>Privacy notice</h1>
-          <p>Last updated August 31, 2026.</p>
+          <p>Last updated September 29, 2026.</p>
         </div>
       </header>
       <section className="privacy-notice">
@@ -18,6 +18,12 @@ export default function PrivacyPage() {
           VinylHound can identify and organize your records. Original uploads
           may retain camera metadata; normalized analysis and thumbnail images
           strip EXIF metadata.
+        </p>
+        <p>
+          Automatic camera capture keeps the full accepted photo privately,
+          including its background, and a linked cover crop. The crop is used
+          for identification and the cover preview. Manual captures and file
+          uploads use the full photo for identification.
         </p>
         <h2>How we use and share it</h2>
         <p>

@@ -92,6 +92,16 @@ whose image never finished uploading comes back needing its photo reattached.
 Selected local files themselves are not durable across a refresh — only the
 server-side progress already made is.
 
+An automatic camera upload may additionally declare `crop`: its JPEG size and
+SHA-256, source and crop dimensions, normalized four-corner transform,
+`perspective-nearest-v1` version, and capture time (ADR-0033). The signed
+response then includes `cropUpload`, a second private signed PUT. Completion
+validates both byte streams and the geometry before deriving `analysis` and
+`thumbnail` from the crop; `analysisSource` in the response identifies the
+choice. With no crop, derivatives come from the full original as before.
+The source and crop remain linked in one `image_assets` row and are both
+removed on account deletion.
+
 Each requested upload declares a `viewType` (`front`, `back`, `spine`, `label`,
 `barcode`, `runout`, or `other`; defaults to `front` when omitted, preserving
 the original single-image request shape). `GET /scans/{scanId}` returns each
@@ -205,7 +215,7 @@ user's `scan_confirmations` rows deleted explicitly first (they carry a
 deliberate `restrict` FK to `releases` that a plain cascade cannot satisfy on
 its own). Shared catalog rows (`albums`,
 `releases`) are never touched. Each deleted image's `original`/`analysis`/
-`thumbnail` S3 objects are then deleted best-effort. Like
+`crop`/`thumbnail` S3 objects are then deleted best-effort. Like
 `DELETE /library/{itemId}`, no `Idempotency-Key` is required — deletion is
 naturally idempotent by identity; a repeat call after the account is gone
 returns `not_found`.
@@ -554,14 +564,15 @@ length, SHA-256 digest, signed `Content-Type`, binary signature, decoded dimensi
 decoder validity, and frame count. Invalid or animated objects are rejected and
 removed from object storage.
 
-Once validated, the same decoded bytes are resized into a bounded analysis
+Once validated, the source bytes (or the separately validated crop bytes for
+automatic capture) are resized into a bounded analysis
 copy (JPEG, long edge capped at 2048px) and a UI thumbnail (JPEG, long edge
 capped at 400px), stored alongside the original under sibling object keys
 (`.../analysis`, `.../thumbnail`). Scan analysis reads the analysis copy, not
 the original, so per-request payload size and OpenAI token cost no longer
 scale with the phone camera's native resolution (ADR-0007). The
-`CompleteImageUploadResponse` contract is unchanged; `width`/`height`
-continue to describe the original as uploaded.
+`CompleteImageUploadResponse` retains source `width`/`height` and adds
+`analysisSource` to identify the derivative input.
 
 Images completed before migration 009 have no derived-object metadata. Retry
 and redelivery fall back to their validated original object so historical scans

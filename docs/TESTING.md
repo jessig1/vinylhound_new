@@ -37,7 +37,11 @@ npm run test:e2e --workspace @vinylhound/web -- live-camera.e2e.ts
 The e2e environment explicitly enables candidate mode. Tests cover no-cover
 intervals, held covers, replacement/reintroduction, manual fallback, and stale
 encoding after pause. Passing these tests is not a real-camera accuracy claim.
-The crop remains a local preview; full camera snapshots still go to analysis.
+P5.1 Task 3 uploads the accepted full camera frame and the exact local crop
+preview as private linked objects. Completion validates both before deriving
+the analysis and thumbnail images from the crop. Manual and file uploads still
+derive both from their full source. Device recall and crop quality remain
+P5.2 gates; a structurally valid crop can still show the wrong artwork.
 P5.1 Task 2 browser checks also cover a 20-record local bound, an authoritative
 quota pause, retry with stable scan identity, one shared batch rollover under
 concurrent full-batch responses, cancel during an in-flight request, resuming

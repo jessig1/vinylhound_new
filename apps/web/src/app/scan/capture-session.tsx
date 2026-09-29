@@ -13,6 +13,7 @@ import {
   GetQuotaHeadroomResponseSchema,
   IMAGE_SNIFF_BYTE_LENGTH,
   type ImageMimeType,
+  type CropProvenance,
   MAX_IMAGE_SIZE_BYTES,
   MAX_SCANS_PER_BATCH,
   parseResponse,
@@ -47,6 +48,13 @@ type SelectedImage = {
   preview: string;
   croppedPreview?: boolean;
   previewBytes?: number;
+  crop?: {
+    bytes: Blob;
+    provenance: Omit<
+      CropProvenance,
+      "mimeType" | "sizeBytes" | "checksumSha256"
+    >;
+  };
 };
 
 type PreparedImage = SelectedImage & {
@@ -520,6 +528,22 @@ export function CaptureSession({
       preview: URL.createObjectURL(photo.preview),
       croppedPreview: photo.cropped,
       previewBytes: photo.preview.size,
+      ...(photo.crop
+        ? {
+            crop: {
+              bytes: photo.preview,
+              provenance: {
+                width: photo.crop.width,
+                height: photo.crop.height,
+                sourceWidth: photo.crop.sourceWidth,
+                sourceHeight: photo.crop.sourceHeight,
+                corners: photo.crop.corners,
+                transformVersion: "perspective-nearest-v1",
+                capturedAt: photo.crop.capturedAt,
+              },
+            },
+          }
+        : {}),
     };
     pendingCountRef.current += 1;
     mutateRecords((current) => [...current, record]);
@@ -918,6 +942,16 @@ export function CaptureSession({
               mimeType: prepared.mimeType,
               sizeBytes: prepared.file.size,
               checksumSha256: prepared.checksumSha256,
+              ...(prepared.crop
+                ? {
+                    crop: {
+                      ...prepared.crop.provenance,
+                      mimeType: "image/jpeg",
+                      sizeBytes: prepared.crop.bytes.size,
+                      checksumSha256: await sha256(prepared.crop.bytes),
+                    },
+                  }
+                : {}),
             }),
             signal: controller.signal,
           }),
@@ -936,6 +970,16 @@ export function CaptureSession({
           },
           controller.signal,
         );
+        if (prepared.crop) {
+          if (!signedUpload.cropUpload)
+            throw new Error("The crop upload was not signed.");
+          await uploadFile(
+            signedUpload.cropUpload,
+            prepared.crop.bytes,
+            () => {},
+            controller.signal,
+          );
+        }
         ensureCurrent();
         updateRecord(clientId, (item) => ({ ...item, stage: "validating" }));
         parseResponse(
@@ -1206,8 +1250,9 @@ export function CaptureSession({
                 : liveCameraStateMessage(cameraState)}
             </p>
             <p>
-              Your original photo, including its background, is uploaded for
-              analysis. You review the results before saving a record.
+              Automatic capture uploads your original photo and its cover crop;
+              the crop is used for analysis. Manual photos use the full image.
+              You review the results before saving a record.
             </p>
             <div className="button-row">
               <button
@@ -1370,7 +1415,8 @@ function RecordCard({
             <div className="view-card__body">
               {record.image.croppedPreview ? (
                 <small>
-                  Cover preview. Your original photo is used for analysis.
+                  Cover crop preview. This crop is used for analysis; your full
+                  photo is kept privately.
                 </small>
               ) : null}
               <small title={record.fileName}>{record.fileName}</small>
@@ -1590,7 +1636,7 @@ function validateAgainstScanLimits(
   }
 }
 
-async function sha256(file: File) {
+async function sha256(file: Blob) {
   if (!crypto.subtle?.digest) {
     throw new Error(
       "Photo uploads need HTTPS or a browser with image hashing support. On this computer, open http://localhost:3000/scan; from another device, use an HTTPS address.",
@@ -1648,7 +1694,7 @@ function uploadFile(
     url: string;
     requiredHeaders: Record<string, string>;
   },
-  file: File,
+  file: Blob,
   onProgress: (progress: number) => void,
   signal: AbortSignal,
 ) {

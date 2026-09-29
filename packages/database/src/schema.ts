@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { CropProvenance } from "@vinylhound/contracts";
 import {
   bigint,
   char,
@@ -335,6 +336,7 @@ export const imageAssets = pgTable(
     mimeType: imageMimeTypeEnum("mime_type").notNull(),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
     checksumSha256: char("checksum_sha256", { length: 64 }).notNull(),
+    cropProvenance: jsonb("crop_provenance").$type<CropProvenance>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

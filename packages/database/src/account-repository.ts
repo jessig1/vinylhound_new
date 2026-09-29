@@ -49,6 +49,7 @@ export async function getAccountExportForUser(
           mimeType: imageAssets.mimeType,
           sizeBytes: imageAssets.sizeBytes,
           checksumSha256: imageAssets.checksumSha256,
+          cropProvenance: imageAssets.cropProvenance,
           createdAt: imageAssets.createdAt,
           completedAt: imageAssets.completedAt,
           width: imageAssets.width,
@@ -165,6 +166,7 @@ export async function getAccountExportForUser(
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       checksumSha256: image.checksumSha256,
+      cropProvenance: image.cropProvenance,
       createdAt: image.createdAt.toISOString(),
       completedAt: image.completedAt ? image.completedAt.toISOString() : null,
       width: image.width,
@@ -321,7 +323,11 @@ async function deleteScanDataForUser(
     // derived keys with no separate row, so every variant must be
     // computed here rather than read from a column.
     const imageRows = await transaction
-      .select({ id: imageAssets.id, scanId: imageAssets.scanId })
+      .select({
+        id: imageAssets.id,
+        scanId: imageAssets.scanId,
+        cropProvenance: imageAssets.cropProvenance,
+      })
       .from(imageAssets)
       .innerJoin(scans, eq(scans.id, imageAssets.scanId))
       .where(eq(scans.userId, userId));
@@ -329,6 +335,7 @@ async function deleteScanDataForUser(
       const lookup = { userId, scanId: image.scanId, imageId: image.id };
       return [
         deriveImageObjectKey(lookup, "original"),
+        ...(image.cropProvenance ? [deriveImageObjectKey(lookup, "crop")] : []),
         deriveImageObjectKey(lookup, "analysis"),
         deriveImageObjectKey(lookup, "thumbnail"),
       ];

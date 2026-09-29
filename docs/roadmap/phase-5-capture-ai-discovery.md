@@ -53,13 +53,28 @@ P5.3's private AI baseline; the reordered work does not waive release gates.
       rollover, and cancellation invalidates late async work and cancels a
       created scan. Browser checks cover these paths with the synthetic worker.
       Physical-device memory behavior and detector recall remain P5.2 gates.
-- [ ] **Task 3.** Before persistence or public-contract changes, record an ADR for source
+- [x] **Task 3.** Before persistence or public-contract changes, record an ADR for source
       versus analysis crop ownership and provenance. Preserve the accepted
       source privately, link one crop used for analysis and preview, and retain
       source/crop dimensions, checksums, transform coordinates/version, and
       capture time. Update contracts and old/new fixtures before implementation;
       validate bytes and geometry server-side. Keep legacy/manual uploads and
       multi-view scans compatible, and update capture/privacy copy.
+      Completed 2026-09-29 under ADR-0033. Automatic captures sign and upload
+      the accepted source plus the exact JPEG crop shown in the preview.
+      Completion checks source/crop bytes, dimensions, checksums, capture time,
+      and convex source-space corners before deriving analysis and thumbnail
+      from the crop. The linked row retains source/crop provenance; account and
+      abandoned-scan cleanup include the crop object. No-crop manual, file,
+      legacy, and multi-view paths continue to use the source. Frozen old
+      fixtures were retained and new crop request/response fixtures added.
+      `npm run check` (462 tests), `npm run build`, `npm run check:contracts`,
+      database integration (83 tests), and focused mobile Chromium camera
+      browser tests (7/7) passed. The contract compatibility report notes that
+      an old server replica rejects the new optional crop request, so keep the
+      default-off capture flag disabled through a rolling deployment. A
+      geometrically valid crop can still target inner artwork; P5.2/P5.3
+      evidence remains required before public rollout.
 - [ ] **Task 4.** Roll out behind a feature flag with a manual fallback. Use the
       [proposal's acceptance gates](../CONTINUOUS_CAPTURE_IMPROVEMENT_PLAN.md)
       separately for supported iPhone, Android, and laptop/webcam setups:

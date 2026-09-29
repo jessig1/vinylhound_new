@@ -120,13 +120,22 @@ the log.
 
 ## Current state — updated 2026-09-29
 
+- **P5.1 Task 3 audited crop integration is implemented.** ADR-0033 owns the
+  source/crop relationship. Automatic captures upload the accepted full frame
+  and exact local crop preview through two private signed PUTs; completion
+  validates both bytes and geometry, records source/crop provenance, and
+  derives analysis and thumbnail from the crop. Manual/file/multi-view scans
+  continue to analyze their full source. Crop objects join account and
+  abandoned-scan cleanup. The feature flag remains default-off; P5.1 Task 4
+  and the P5.2/P5.3 release gates remain open.
+
 - **P5.1 Task 2 continuous queue is implemented.** Camera photos keep their
   idempotency keys across immediate enqueue, retries, and refresh. The local
   pending bound counts 20 items and 32 MiB of files/previews, plus an encoding
   reservation. Quota denial pauses capture; concurrent batch-limit responses
   share one rollover. Completed uploads resume submission without image bytes,
   completed camera-session batch links survive refresh, and cancel/discard
-  invalidates late async work. P5.1 Tasks 3-4 and P5.2/P5.3 gates remain open.
+  invalidates late async work. P5.1 Task 4 and P5.2/P5.3 gates remain open.
 
 - **The first enabled P5.1 webcam trial exposed detector misses.** A private
   81-second screen recording shows three distinct sleeves presented. The
@@ -3904,10 +3913,10 @@ development/holdout batch ready, move to Task 2 (fix sample composition and
 acceptance thresholds before any billable run). Production remains inactive;
 issue #8 and the single-writer cutover are resolved.
 
-**Current resume (2026-09-29): continue with Phase 5 P5.1 Task 3.** Tasks 1-2's
-candidate pipeline and continuous queue are implemented. Next decide source
-and analysis-crop provenance in an ADR, update contracts/fixtures, and build
-the audited crop integration. Local HMR and UUID failures are fixed; use localhost on
+**Current resume (2026-09-29): continue with Phase 5 P5.1 Task 4 and P5.2's
+detector/device evidence.** Tasks 1-3's candidate pipeline, continuous queue,
+and audited analysis crop are implemented. Keep automatic capture default-off
+until the real-device and private AI gates pass. Local HMR and UUID failures are fixed; use localhost on
 this computer or HTTPS from another device for camera/upload trials.
 The local `.env` enables the experimental candidate worker after a web
 restart. Synthetic tests do not establish real-camera recall.
@@ -8496,3 +8505,22 @@ discovery`. Broadened the harness's retry to cover it too
   `next-env.d.ts` change from the build was restored. No public contract,
   provider, or database migration changed. Task 3 remains next; the real
   webcam detector misses reported above and P5.2/P5.3 gates remain open.
+
+- **2026-09-29 - Codex. Completed P5.1 Task 3 audited analysis crops.**
+  Recorded ADR-0033 before contract and persistence changes. Added frozen
+  camera-crop request/response fixtures alongside unchanged historical ones.
+  Automatic capture now retains the accepted source and uploads its exact
+  local perspective preview as a linked private crop; signed upload completion
+  validates both images, source/crop dimensions, checksums, normalized convex
+  corners, transform version, and capture time. The server derives analysis
+  and thumbnail from the crop; manual/file/legacy/multi-view scans still use
+  their source. The image row records provenance, account export includes it,
+  and account/abandoned-scan cleanup removes crop objects. Updated capture
+  and privacy copy. `npm run check` passed (462 tests), all workspace builds
+  passed, database integration passed (83/83), and mobile Chromium's focused
+  camera journey passed (7/7) with explicit crop/source response assertions.
+  `npm run check:contracts` passed, while reporting that an old replica rejects
+  the new crop request; keep the default-off flag off through a rolling deploy.
+  The first webcam trial's detector failures remain P5.2 evidence. P5.1 Task
+  4 and P5.2/P5.3 release gates remain next. Generated `next-env.d.ts` was
+  restored after the build.

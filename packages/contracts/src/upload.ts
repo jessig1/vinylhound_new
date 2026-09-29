@@ -106,6 +106,35 @@ export const Sha256Schema = z
   .regex(/^[0-9a-f]{64}$/, "Expected a lowercase hexadecimal SHA-256 digest.");
 export const IdempotencyKeySchema = z.string().trim().min(1).max(255);
 
+export const CropProvenanceSchema = z
+  .object({
+    mimeType: z.literal("image/jpeg"),
+    sizeBytes: z.number().int().positive().max(MAX_IMAGE_SIZE_BYTES),
+    checksumSha256: Sha256Schema,
+    width: z.number().int().min(64).max(4096),
+    height: z.number().int().min(64).max(4096),
+    sourceWidth: z.number().int().positive().max(25000),
+    sourceHeight: z.number().int().positive().max(25000),
+    // Top-left, top-right, bottom-right, bottom-left in source image space.
+    corners: z.tuple([
+      z
+        .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) })
+        .strict(),
+      z
+        .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) })
+        .strict(),
+      z
+        .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) })
+        .strict(),
+      z
+        .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) })
+        .strict(),
+    ]),
+    transformVersion: z.literal("perspective-nearest-v1"),
+    capturedAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
 export const CreateImageUploadRequestSchema = z
   .object({
     filename: z.string().trim().min(1).max(255),
@@ -113,6 +142,7 @@ export const CreateImageUploadRequestSchema = z
     mimeType: ImageMimeTypeSchema,
     sizeBytes: z.number().int().positive().max(MAX_IMAGE_SIZE_BYTES),
     checksumSha256: Sha256Schema,
+    crop: CropProvenanceSchema.optional(),
   })
   .strict();
 
@@ -123,6 +153,15 @@ export const SignedUploadSchema = z
     url: z.url(),
     expiresAt: z.string().datetime(),
     requiredHeaders: z.record(z.string(), z.string()),
+    cropUpload: z
+      .object({
+        method: z.literal("PUT"),
+        url: z.url(),
+        expiresAt: z.string().datetime(),
+        requiredHeaders: z.record(z.string(), z.string()),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -135,6 +174,7 @@ export const CompleteImageUploadResponseSchema = z
     sizeBytes: z.number().int().positive(),
     width: z.number().int().positive(),
     height: z.number().int().positive(),
+    analysisSource: z.enum(["source", "crop"]).optional(),
   })
   .strict();
 
@@ -159,6 +199,7 @@ export const ApiErrorSchema = z
   .strict();
 
 export type ImageMimeType = z.infer<typeof ImageMimeTypeSchema>;
+export type CropProvenance = z.infer<typeof CropProvenanceSchema>;
 export type ImageViewType = z.infer<typeof ImageViewTypeSchema>;
 export type CreateImageUploadRequest = z.infer<
   typeof CreateImageUploadRequestSchema

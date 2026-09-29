@@ -1,0 +1,28 @@
+{
+  "frozenAt": "2026-09-29",
+  "origin": "Automatic camera capture under ADR-0033; earlier manual and multi-view fixtures stay unchanged.",
+  "value": {
+    "filename": "live-cover.jpg",
+    "viewType": "front",
+    "mimeType": "image/jpeg",
+    "sizeBytes": 2481337,
+    "checksumSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+    "crop": {
+      "mimeType": "image/jpeg",
+      "sizeBytes": 102400,
+      "checksumSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+      "width": 512,
+      "height": 512,
+      "sourceWidth": 1600,
+      "sourceHeight": 1200,
+      "corners": [
+        { "x": 0.2, "y": 0.1 },
+        { "x": 0.8, "y": 0.1 },
+        { "x": 0.8, "y": 0.9 },
+        { "x": 0.2, "y": 0.9 }
+      ],
+      "transformVersion": "perspective-nearest-v1",
+      "capturedAt": "2026-09-29T15:00:00.000Z"
+    }
+  }
+}

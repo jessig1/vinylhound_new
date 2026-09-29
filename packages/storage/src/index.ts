@@ -37,4 +37,5 @@ export interface ObjectStorage {
 
 export * from "./image-normalization.ts";
 export * from "./image-validation.ts";
+export * from "./crop-validation.ts";
 export * from "./s3-object-storage.ts";

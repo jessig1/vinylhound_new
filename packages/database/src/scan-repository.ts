@@ -9,6 +9,7 @@ import {
   RETRYABLE_SCAN_STATUSES,
   MAX_SCANS_PER_BATCH,
   type ImageMimeType,
+  type CropProvenance,
   type ImageViewType,
   type IngestionSource,
   type QuotaHeadroomReason,
@@ -49,7 +50,7 @@ export class DatabaseCommandError extends Error {
   }
 }
 
-export type ImageObjectVariant = "original" | "analysis" | "thumbnail";
+export type ImageObjectVariant = "original" | "crop" | "analysis" | "thumbnail";
 
 export function deriveImageObjectKey(
   input: { userId: string; scanId: string; imageId: string },
@@ -203,6 +204,7 @@ export interface CreateImageUploadInput {
   mimeType: ImageMimeType;
   sizeBytes: number;
   checksumSha256: string;
+  crop?: CropProvenance;
   maxImages: number;
 }
 
@@ -241,7 +243,8 @@ export async function createOrGetImageUpload(
         existing.viewType !== viewType ||
         existing.mimeType !== input.mimeType ||
         existing.sizeBytes !== input.sizeBytes ||
-        existing.checksumSha256 !== input.checksumSha256
+        existing.checksumSha256 !== input.checksumSha256 ||
+        !sameCropProvenance(existing.cropProvenance, input.crop ?? null)
       ) {
         throw new DatabaseCommandError(
           "conflict",
@@ -279,11 +282,35 @@ export async function createOrGetImageUpload(
         mimeType: input.mimeType,
         sizeBytes: input.sizeBytes,
         checksumSha256: input.checksumSha256,
+        cropProvenance: input.crop ?? null,
       })
       .returning();
 
     return { record: record!, created: true } as const;
   });
+}
+
+function sameCropProvenance(
+  left: CropProvenance | null,
+  right: CropProvenance | null,
+) {
+  if (!left || !right) return left === right;
+  return (
+    left.mimeType === right.mimeType &&
+    left.sizeBytes === right.sizeBytes &&
+    left.checksumSha256 === right.checksumSha256 &&
+    left.width === right.width &&
+    left.height === right.height &&
+    left.sourceWidth === right.sourceWidth &&
+    left.sourceHeight === right.sourceHeight &&
+    left.transformVersion === right.transformVersion &&
+    left.capturedAt === right.capturedAt &&
+    left.corners.every(
+      (point, index) =>
+        point.x === right.corners[index]!.x &&
+        point.y === right.corners[index]!.y,
+    )
+  );
 }
 
 export async function getImageUploadForUser(
@@ -902,7 +929,10 @@ export async function cleanupAbandonedScans(
       if (scan.status !== "awaiting_upload") continue;
 
       const images = await transaction
-        .select({ id: imageAssets.id })
+        .select({
+          id: imageAssets.id,
+          cropProvenance: imageAssets.cropProvenance,
+        })
         .from(imageAssets)
         .where(eq(imageAssets.scanId, scan.id));
 
@@ -924,8 +954,14 @@ export async function cleanupAbandonedScans(
             scanId: scan.id,
             imageId: image.id,
           };
-          return (["original", "analysis", "thumbnail"] as const).map(
-            (variant) => deriveImageObjectKey(lookup, variant),
+          const variants: ImageObjectVariant[] = [
+            "original",
+            "analysis",
+            "thumbnail",
+          ];
+          if (image.cropProvenance) variants.push("crop");
+          return variants.map((variant) =>
+            deriveImageObjectKey(lookup, variant),
           );
         }),
       });

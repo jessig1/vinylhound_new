@@ -24,6 +24,38 @@ describe("CreateImageUploadRequestSchema", () => {
       CreateImageUploadRequestSchema.parse({ ...upload, viewType: "spine" }),
     ).toMatchObject({ viewType: "spine" });
   });
+
+  it("accepts an audited crop while rejecting coordinates outside the source", () => {
+    const crop = {
+      mimeType: "image/jpeg",
+      sizeBytes: 100,
+      checksumSha256: "b".repeat(64),
+      width: 512,
+      height: 512,
+      sourceWidth: 1600,
+      sourceHeight: 1200,
+      corners: [
+        { x: 0.2, y: 0.1 },
+        { x: 0.8, y: 0.1 },
+        { x: 0.8, y: 0.9 },
+        { x: 0.2, y: 0.9 },
+      ],
+      transformVersion: "perspective-nearest-v1",
+      capturedAt: "2026-09-29T15:00:00.000Z",
+    };
+    expect(
+      CreateImageUploadRequestSchema.parse({ ...upload, crop }).crop,
+    ).toBeDefined();
+    expect(
+      CreateImageUploadRequestSchema.safeParse({
+        ...upload,
+        crop: {
+          ...crop,
+          corners: [{ x: 2, y: 0.1 }, ...crop.corners.slice(1)],
+        },
+      }).success,
+    ).toBe(false);
+  });
 });
 
 function bytesFrom(...parts: (string | number[])[]): Uint8Array {
