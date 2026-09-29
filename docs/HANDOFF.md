@@ -120,6 +120,14 @@ the log.
 
 ## Current state — updated 2026-09-29
 
+- **P5.1 Task 2 continuous queue is implemented.** Camera photos keep their
+  idempotency keys across immediate enqueue, retries, and refresh. The local
+  pending bound counts 20 items and 32 MiB of files/previews, plus an encoding
+  reservation. Quota denial pauses capture; concurrent batch-limit responses
+  share one rollover. Completed uploads resume submission without image bytes,
+  completed camera-session batch links survive refresh, and cancel/discard
+  invalidates late async work. P5.1 Tasks 3-4 and P5.2/P5.3 gates remain open.
+
 - **The first enabled P5.1 webcam trial exposed detector misses.** A private
   81-second screen recording shows three distinct sleeves presented. The
   red and sky sleeves remain at "Looking for a cover"; the yellow one reaches
@@ -134,7 +142,7 @@ the log.
   never started the candidate worker. The ignored local `.env` now sets the
   flag to `true`; the web process must restart to read it. The checked-in
   `.env.example` remains default-off and README now explains the trial setup.
-  A physical album detection result after restart has not yet been observed.
+  The subsequent enabled webcam trial is described above.
 
 - **Local HTTPS certificate fallback fixed on Windows.** The initial
   `dev:https` process still served HTTP because mkcert tried to write the
@@ -169,7 +177,7 @@ the log.
   remain available. The synthetic camera harness now overrides dimensions
   on `HTMLVideoElement`, fixing the zero-dimension stub that caused the
   historical camera test to fail. Full-frame analysis and public rollout
-  limitations remain explicit; P5.1 Tasks 2-4 and P5.2/P5.3 are still open.
+  limitations remain explicit; P5.1 Tasks 3-4 and P5.2/P5.3 are still open.
 
 - **Phase 5 P5.1/P5.2 order swapped at the maintainer's request.** P5.1
   now builds reliable hands-free capture; P5.2 gathers feasibility/baseline
@@ -3896,15 +3904,13 @@ development/holdout batch ready, move to Task 2 (fix sample composition and
 acceptance thresholds before any billable run). Production remains inactive;
 issue #8 and the single-writer cutover are resolved.
 
-**Current resume (2026-09-29): continue with Phase 5 P5.1 Task 2.** Task 1's
-candidate pipeline is implemented; validate and complete the incremental
-queue/capacity/quota/retry/rollover flow next, then Task 3's audited analysis
-crop integration. Local HMR and UUID failures are fixed; use localhost on
+**Current resume (2026-09-29): continue with Phase 5 P5.1 Task 3.** Tasks 1-2's
+candidate pipeline and continuous queue are implemented. Next decide source
+and analysis-crop provenance in an ADR, update contracts/fixtures, and build
+the audited crop integration. Local HMR and UUID failures are fixed; use localhost on
 this computer or HTTPS from another device for camera/upload trials.
-The local `.env` now enables the experimental candidate worker after a web
-restart. If physical covers still fail, capture the viewfinder status and
-device/lighting details as P5.2 detector evidence; synthetic tests do not
-establish real-camera recall.
+The local `.env` enables the experimental candidate worker after a web
+restart. Synthetic tests do not establish real-camera recall.
 The first enabled webcam clip now confirms misses on two of three distinct
 sleeves and an inner-artwork boundary on the one captured sleeve. Evaluate a
 replacement detector against this and additional private negatives/held-out
@@ -8473,3 +8479,20 @@ discovery`. Broadened the harness's retry to cover it too
   false-positive and real-device recall evidence remains too thin to select
   a replacement safely. Public rollout stays gated. `npm run check` passed
   (48 files / 450 tests).
+
+- **2026-09-29 - Codex. Completed P5.1 Task 2 continuous capture queue.**
+  Synchronized the browser's record ref/state and persisted queue identity at
+  each mutation, including before batch creation. Camera admission now counts
+  pending records, retained photo/preview bytes, and in-progress encoding
+  against 20-item/32-MiB bounds. A completed upload can submit after reload
+  without reattaching bytes, and a finished camera session restores its batch
+  review link. Authoritative quota errors pause capture and retry, transient
+  failures retry against the same scan, concurrent full-batch responses share
+  one rollover, and cancel/discard invalidate in-flight work and cancel known
+  scans. Existing camera and scan-flow browser journeys passed 12/12; seven
+  focused browser cases covered the new capacity, quota, refresh, rollover,
+  retry, and cancellation paths. `npm run check` passed 48 files / 450 tests;
+  `npm run build` passed all buildable workspaces. The generated
+  `next-env.d.ts` change from the build was restored. No public contract,
+  provider, or database migration changed. Task 3 remains next; the real
+  webcam detector misses reported above and P5.2/P5.3 gates remain open.

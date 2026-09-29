@@ -38,6 +38,13 @@ The e2e environment explicitly enables candidate mode. Tests cover no-cover
 intervals, held covers, replacement/reintroduction, manual fallback, and stale
 encoding after pause. Passing these tests is not a real-camera accuracy claim.
 The crop remains a local preview; full camera snapshots still go to analysis.
+P5.1 Task 2 browser checks also cover a 20-record local bound, an authoritative
+quota pause, retry with stable scan identity, one shared batch rollover under
+concurrent full-batch responses, cancel during an in-flight request, resuming
+submission after refresh without reattaching completed bytes, and preserving
+completed batch links after refresh. The queue counts retained photo/preview
+bytes and reserves the uncompressed source while encoding against a 32 MiB
+local limit. Real phone/webcam memory and detector accuracy remain P5.2 work.
 
 For local camera and upload trials, use `http://localhost:3000/scan` on the
 development computer or HTTPS from another device. HTTP LAN/WSL addresses do

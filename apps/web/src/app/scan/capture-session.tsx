@@ -13,6 +13,7 @@ import {
   GetQuotaHeadroomResponseSchema,
   IMAGE_SNIFF_BYTE_LENGTH,
   type ImageMimeType,
+  MAX_IMAGE_SIZE_BYTES,
   MAX_SCANS_PER_BATCH,
   parseResponse,
   type QuotaHeadroomReason,
@@ -32,6 +33,8 @@ import type { Corners } from "./camera/cover-detector";
 
 const UPLOAD_CONCURRENCY = 3;
 const CAPTURE_SESSION_STORAGE_KEY = "vinylhound.captureSession.v1";
+const MAX_PENDING_RECORDS = 20;
+const MAX_LOCAL_BYTES = 32 * 1024 * 1024;
 
 type ProcessingStage =
   "hashing" | "preparing" | "uploading" | "validating" | "submitting";
@@ -39,7 +42,12 @@ type ProcessingStage =
 type RecordStatus =
   "idle" | "needs-recapture" | "queued" | "processing" | "failed";
 
-type SelectedImage = { file: File; preview: string; croppedPreview?: boolean };
+type SelectedImage = {
+  file: File;
+  preview: string;
+  croppedPreview?: boolean;
+  previewBytes?: number;
+};
 
 type PreparedImage = SelectedImage & {
   mimeType: ImageMimeType;
@@ -81,6 +89,7 @@ type PersistedSession = {
   // `batchId` is retained only to restore drafts written before rollover.
   batchId?: string | null;
   batchIds?: string[];
+  submittedCount?: number;
   records: PersistedRecord[];
 };
 
@@ -127,6 +136,8 @@ export function CaptureSession({
   const rolloverRef = useRef<Promise<string> | null>(null);
   const batchIdsRef = useRef<string[]>([]);
   const cameraStateRef = useRef<LiveCameraState>("off");
+  const encodingReservationRef = useRef(0);
+  const sessionGenerationRef = useRef(0);
   const submittedCountRef = useRef(0);
   // Tracks how many records in this session have not yet been submitted.
   // React's setState updater form does not run synchronously here (these
@@ -218,17 +229,12 @@ export function CaptureSession({
       document.removeEventListener("visibilitychange", pauseForBackgrounding);
   }, []);
 
-  useEffect(() => {
-    recordsRef.current = records;
-  }, [records]);
-
-  useEffect(() => {
-    submittedCountRef.current = submittedCount;
-  }, [submittedCount]);
-
   useEffect(
     () => () => {
+      sessionGenerationRef.current += 1;
       stopLiveCamera();
+      for (const controller of Object.values(abortControllers.current))
+        controller.abort();
       for (const record of recordsRef.current) {
         if (record.image) URL.revokeObjectURL(record.image.preview);
       }
@@ -238,9 +244,11 @@ export function CaptureSession({
 
   useEffect(() => {
     const persisted = loadPersistedSession();
-    if (!persisted || persisted.records.length === 0) return;
+    if (!persisted) return;
     batchKeyRef.current = persisted.batchKey;
     pendingCountRef.current = persisted.records.length;
+    submittedCountRef.current = persisted.submittedCount ?? 0;
+    setSubmittedCount(submittedCountRef.current);
     const restoredBatchIds = persisted.batchIds?.length
       ? persisted.batchIds
       : persisted.batchId
@@ -249,25 +257,25 @@ export function CaptureSession({
     batchIdsRef.current = restoredBatchIds;
     setBatchIds(restoredBatchIds);
     setBatchId(restoredBatchIds.at(-1) ?? null);
-    setRecords(
-      persisted.records.map((record) => ({
-        ...record,
-        batchId: record.batchId ?? restoredBatchIds.at(-1) ?? null,
-        image: null,
-        status: record.imageCompleted ? "idle" : "needs-recapture",
-        stage: null,
-        error: null,
-      })),
-    );
-    setRehydrated(true);
+    const restored = persisted.records.map((record) => ({
+      ...record,
+      batchId: record.batchId ?? restoredBatchIds.at(-1) ?? null,
+      image: null,
+      status: record.imageCompleted ? "idle" : "needs-recapture",
+      stage: null,
+      error: null,
+    })) satisfies SessionRecord[];
+    recordsRef.current = restored;
+    setRecords(restored);
+    setRehydrated(restored.length > 0);
   }, []);
 
-  useEffect(() => {
-    if (!batchIds.length) return;
+  function persistCurrentRecords() {
     persistSession({
       batchKey: batchKeyRef.current,
-      batchIds,
-      records: records.map(
+      batchIds: batchIdsRef.current,
+      submittedCount: submittedCountRef.current,
+      records: recordsRef.current.map(
         ({
           clientId,
           fileName,
@@ -293,15 +301,46 @@ export function CaptureSession({
         }),
       ),
     });
-  }, [records, batchIds]);
+  }
+
+  function mutateRecords(
+    update: (current: SessionRecord[]) => SessionRecord[],
+  ) {
+    recordsRef.current = update(recordsRef.current);
+    setRecords(recordsRef.current);
+    persistCurrentRecords();
+  }
 
   function addIndependentRecords(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (!files.length || sessionRunning) return;
-    pendingCountRef.current += files.length;
-    setRecords((current) => [...current, ...files.map(createIdleRecord)]);
-    setGlobalError(null);
+    const accepted: File[] = [];
+    let bytes =
+      localFileBytes(recordsRef.current) + encodingReservationRef.current;
+    for (const file of files) {
+      if (
+        recordsRef.current.length +
+          accepted.length +
+          Number(encodingReservationRef.current > 0) >=
+        MAX_PENDING_RECORDS
+      )
+        break;
+      if (bytes + file.size > MAX_LOCAL_BYTES) continue;
+      accepted.push(file);
+      bytes += file.size;
+    }
+    pendingCountRef.current += accepted.length;
+    if (accepted.length)
+      mutateRecords((current) => [
+        ...current,
+        ...accepted.map(createIdleRecord),
+      ]);
+    setGlobalError(
+      accepted.length < files.length
+        ? `This device can hold ${MAX_PENDING_RECORDS} pending records or 32 MB of photos at once. Add the remaining photos after uploads finish.`
+        : null,
+    );
   }
 
   function setLiveCameraState(next: LiveCameraState) {
@@ -311,6 +350,7 @@ export function CaptureSession({
 
   function stopLiveCamera() {
     cameraRequestRef.current += 1;
+    encodingReservationRef.current = 0;
     coverCameraRef.current?.stop();
     coverCameraRef.current = null;
     for (const track of cameraStreamRef.current?.getTracks() ?? []) {
@@ -337,6 +377,13 @@ export function CaptureSession({
     }
     if (quota.status === "blocked") {
       pauseLiveCamera("quota");
+      return;
+    }
+    if (
+      recordsRef.current.length >= MAX_PENDING_RECORDS ||
+      localFileBytes(recordsRef.current) >= MAX_LOCAL_BYTES
+    ) {
+      pauseLiveCamera("capacity");
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -451,16 +498,31 @@ export function CaptureSession({
   }
 
   function acceptCameraPhoto(photo: CameraPhoto) {
+    encodingReservationRef.current = 0;
+    if (
+      recordsRef.current.length >= MAX_PENDING_RECORDS ||
+      photo.file.size > MAX_IMAGE_SIZE_BYTES ||
+      localFileBytes(recordsRef.current) +
+        photo.file.size +
+        photo.preview.size >
+        MAX_LOCAL_BYTES
+    ) {
+      pauseLiveCamera("capacity");
+      setCameraError(
+        "The captured photo exceeded the local size limit. Move the cover farther back or upload a smaller photo.",
+      );
+      return;
+    }
     const record = createIdleRecord(photo.file);
     if (record.image) URL.revokeObjectURL(record.image.preview);
     record.image = {
       file: photo.file,
       preview: URL.createObjectURL(photo.preview),
       croppedPreview: photo.cropped,
+      previewBytes: photo.preview.size,
     };
     pendingCountRef.current += 1;
-    recordsRef.current = [...recordsRef.current, record];
-    setRecords(recordsRef.current);
+    mutateRecords((current) => [...current, record]);
     // Existing idempotent upload primitives handle accepted camera records;
     // the camera stays open while analysis runs, without per-record submission.
     void (async () => {
@@ -481,17 +543,15 @@ export function CaptureSession({
   }
 
   function admitCameraPhoto(bytes: number) {
-    const localBytes = recordsRef.current.reduce(
-      (sum, record) => sum + (record.image?.file.size ?? 0),
-      0,
-    );
+    const localBytes = localFileBytes(recordsRef.current);
     if (
-      recordsRef.current.length >= 20 ||
-      localBytes + bytes > 32 * 1024 * 1024
+      recordsRef.current.length >= MAX_PENDING_RECORDS ||
+      localBytes + encodingReservationRef.current + bytes > MAX_LOCAL_BYTES
     ) {
       pauseLiveCamera("capacity");
       return false;
     }
+    encodingReservationRef.current += bytes;
     return true;
   }
 
@@ -546,6 +606,7 @@ export function CaptureSession({
       }
     } finally {
       source.width = source.height = 0;
+      encodingReservationRef.current = 0;
       manualEncodingRef.current = false;
     }
   }
@@ -561,7 +622,7 @@ export function CaptureSession({
     const staleScanId = recordsRef.current.find(
       (record) => record.clientId === clientId,
     )?.scanId;
-    setRecords((current) =>
+    mutateRecords((current) =>
       current.map((record) =>
         record.clientId === clientId
           ? {
@@ -612,7 +673,7 @@ export function CaptureSession({
     delete abortControllers.current[clientId];
     if (record.image) URL.revokeObjectURL(record.image.preview);
     pendingCountRef.current = Math.max(0, pendingCountRef.current - 1);
-    setRecords((current) =>
+    mutateRecords((current) =>
       current.filter((item) => item.clientId !== clientId),
     );
     setUploadProgress((current) => dropProgress(current, clientId));
@@ -629,17 +690,20 @@ export function CaptureSession({
   }
 
   function retryRecord(clientId: string) {
-    setRecords((current) =>
+    if (quota.status === "blocked") return;
+    mutateRecords((current) =>
       current.map((record) =>
         record.clientId === clientId
           ? { ...record, status: "idle", error: null }
           : record,
       ),
     );
-    if (batchId) enqueueRecords([clientId], batchId);
+    const targetBatchId = batchIdsRef.current.at(-1);
+    if (targetBatchId) enqueueRecords([clientId], targetBatchId);
   }
 
   async function discardSession() {
+    sessionGenerationRef.current += 1;
     cameraSessionRef.current = false;
     setCameraSessionActive(false);
     stopLiveCamera();
@@ -648,7 +712,12 @@ export function CaptureSession({
       if (record.image) URL.revokeObjectURL(record.image.preview);
     }
     queueRef.current = [];
+    for (const controller of Object.values(abortControllers.current)) {
+      controller.abort();
+    }
+    abortControllers.current = {};
     pendingCountRef.current = 0;
+    recordsRef.current = [];
     setRecords([]);
     setRehydrated(false);
     setUploadProgress({});
@@ -657,6 +726,9 @@ export function CaptureSession({
     setBatchId(null);
     batchIdsRef.current = [];
     setBatchIds([]);
+    rolloverRef.current = null;
+    setSubmittedCount(0);
+    submittedCountRef.current = 0;
     await Promise.allSettled(
       toCancel.map((record) =>
         requestJson(`/api/v1/scans/${record.scanId}/cancel`, {
@@ -680,6 +752,8 @@ export function CaptureSession({
         .map((record) => record.clientId);
       enqueueRecords(idleIds, targetBatchId);
     } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError")
+        return;
       setGlobalError(
         caught instanceof Error
           ? caught.message
@@ -690,6 +764,7 @@ export function CaptureSession({
 
   async function createNextBatch() {
     if (rolloverRef.current) return rolloverRef.current;
+    const generation = sessionGenerationRef.current;
     const creation = (async () => {
       const batchIndex = batchIdsRef.current.length;
       const created = parseResponse(
@@ -705,25 +780,32 @@ export function CaptureSession({
           body: JSON.stringify({}),
         }),
       );
+      if (generation !== sessionGenerationRef.current) {
+        throw new DOMException("Session discarded", "AbortError");
+      }
       batchIdsRef.current = [...batchIdsRef.current, created.batchId];
       setBatchIds(batchIdsRef.current);
       setBatchId(created.batchId);
+      persistCurrentRecords();
       return created.batchId;
     })();
     rolloverRef.current = creation;
     try {
       return await creation;
     } finally {
-      rolloverRef.current = null;
+      if (rolloverRef.current === creation) rolloverRef.current = null;
     }
   }
 
   function enqueueRecords(clientIds: string[], targetBatchId: string) {
     const eligible = clientIds.filter(
-      (id) => !queueRef.current.some((item) => item.clientId === id),
+      (id) =>
+        recordsRef.current.some((record) => record.clientId === id) &&
+        !queueRef.current.some((item) => item.clientId === id) &&
+        !abortControllers.current[id],
     );
     if (!eligible.length) return;
-    setRecords((current) =>
+    mutateRecords((current) =>
       current.map((record) =>
         eligible.includes(record.clientId)
           ? { ...record, status: "queued" }
@@ -757,22 +839,31 @@ export function CaptureSession({
 
   async function processRecord(clientId: string, targetBatchId: string) {
     const controller = new AbortController();
+    const generation = sessionGenerationRef.current;
     abortControllers.current[clientId] = controller;
+    const current = () =>
+      !controller.signal.aborted &&
+      generation === sessionGenerationRef.current &&
+      recordsRef.current.some((item) => item.clientId === clientId);
+    const ensureCurrent = () => {
+      if (!current()) throw new DOMException("Record canceled", "AbortError");
+    };
     try {
       const record = recordsRef.current.find(
         (item) => item.clientId === clientId,
       );
       if (!record) return;
-      if (!record.image) {
-        throw new Error("This record needs a photo before it can be uploaded.");
-      }
 
       updateRecord(clientId, (item) => ({
         ...item,
         status: "processing",
         stage: "hashing",
       }));
-      const prepared = await prepareImage(record.image);
+      const prepared = record.image ? await prepareImage(record.image) : null;
+      if (!prepared && !(record.imageCompleted && record.scanId)) {
+        throw new Error("This record needs a photo before it can be uploaded.");
+      }
+      ensureCurrent();
 
       let scanId = record.scanId;
       if (!scanId) {
@@ -797,12 +888,21 @@ export function CaptureSession({
             signal: controller.signal,
           }),
         );
+        if (!current()) {
+          void requestJson(`/api/v1/scans/${scan.scanId}/cancel`, {
+            method: "POST",
+            headers: { "idempotency-key": `cancel-${clientId}` },
+          }).catch(() => {});
+          return;
+        }
+        if (!prepared) throw new Error("This record needs a photo.");
         validateAgainstScanLimits(prepared, scan.limits);
         scanId = scan.scanId;
         updateRecord(clientId, (item) => ({ ...item, scanId }));
       }
 
       if (!record.imageCompleted) {
+        if (!prepared) throw new Error("This record needs a photo.");
         updateRecord(clientId, (item) => ({ ...item, stage: "preparing" }));
         const signedUpload = parseResponse(
           SignedUploadSchema,
@@ -822,17 +922,21 @@ export function CaptureSession({
             signal: controller.signal,
           }),
         );
+        ensureCurrent();
         updateRecord(clientId, (item) => ({ ...item, stage: "uploading" }));
         await uploadFile(
           signedUpload,
           prepared.file,
-          (progress) =>
-            setUploadProgress((current) => ({
-              ...current,
-              [clientId]: progress,
-            })),
+          (progress) => {
+            if (current())
+              setUploadProgress((value) => ({
+                ...value,
+                [clientId]: progress,
+              }));
+          },
           controller.signal,
         );
+        ensureCurrent();
         updateRecord(clientId, (item) => ({ ...item, stage: "validating" }));
         parseResponse(
           CompleteImageUploadResponseSchema,
@@ -845,6 +949,7 @@ export function CaptureSession({
             },
           ),
         );
+        ensureCurrent();
         updateRecord(clientId, (item) => ({
           ...item,
           imageId: signedUpload.imageId,
@@ -861,13 +966,16 @@ export function CaptureSession({
           signal: controller.signal,
         }),
       );
+      ensureCurrent();
 
       if (record.image) URL.revokeObjectURL(record.image.preview);
       pendingCountRef.current = Math.max(0, pendingCountRef.current - 1);
-      setRecords((current) =>
+      mutateRecords((current) =>
         current.filter((item) => item.clientId !== clientId),
       );
-      setSubmittedCount((count) => count + 1);
+      submittedCountRef.current += 1;
+      setSubmittedCount(submittedCountRef.current);
+      persistCurrentRecords();
       setUploadProgress((current) => dropProgress(current, clientId));
       if (pendingCountRef.current === 0 && !cameraSessionRef.current) {
         persistSession(null);
@@ -876,7 +984,7 @@ export function CaptureSession({
         );
       }
     } catch (caught) {
-      if (controller.signal.aborted) return;
+      if (!current()) return;
       let failure: unknown = caught;
       if (
         caught instanceof ApiRequestError &&
@@ -895,7 +1003,14 @@ export function CaptureSession({
           // The server is authoritative: several concurrent records can all
           // discover a full batch, but they share one idempotent rollover.
           updateRecord(clientId, (item) => ({ ...item, batchId: null }));
-          enqueueRecords([clientId], await createNextBatch());
+          const nextBatch =
+            batchIdsRef.current.at(-1) !== targetBatchId
+              ? batchIdsRef.current.at(-1)!
+              : await createNextBatch();
+          if (current()) {
+            delete abortControllers.current[clientId];
+            enqueueRecords([clientId], nextBatch);
+          }
           return;
         } catch (rolloverError) {
           failure = rolloverError;
@@ -911,7 +1026,8 @@ export function CaptureSession({
             : "This record could not be uploaded.",
       }));
     } finally {
-      delete abortControllers.current[clientId];
+      if (abortControllers.current[clientId] === controller)
+        delete abortControllers.current[clientId];
     }
   }
 
@@ -919,7 +1035,7 @@ export function CaptureSession({
     clientId: string,
     updater: (record: SessionRecord) => SessionRecord,
   ) {
-    setRecords((current) =>
+    mutateRecords((current) =>
       current.map((record) =>
         record.clientId === clientId ? updater(record) : record,
       ),
@@ -976,8 +1092,10 @@ export function CaptureSession({
         <p className="capture-session__review-link" role="status">
           {submittedCount} {submittedCount === 1 ? "record" : "records"}{" "}
           submitted so far.{" "}
-          <Link href={`/scans/batch/${batchId}`}>Review them now</Link> — the
-          rest will keep going here.
+          <Link href={`/scans/batch/${batchId}`}>Review them now</Link>.
+          {records.length > 0
+            ? " Leaving this page stops pending uploads; unfinished photos will need reattaching when you return."
+            : ""}
           {batchIds.length > 1 ? (
             <>
               {" "}
@@ -1146,6 +1264,7 @@ export function CaptureSession({
                   progress={uploadProgress[record.clientId]}
                   record={record}
                   recordIndex={recordIndex}
+                  retryDisabled={quota.status === "blocked"}
                 />
               ))}
             </div>
@@ -1200,6 +1319,7 @@ function RecordCard({
   progress,
   onRemove,
   onRetry,
+  retryDisabled,
   onAttach,
 }: {
   record: SessionRecord;
@@ -1207,6 +1327,7 @@ function RecordCard({
   progress: number | undefined;
   onRemove: () => void;
   onRetry: () => void;
+  retryDisabled: boolean;
   onAttach: (event: ChangeEvent<HTMLInputElement>) => void;
 }) {
   const removable =
@@ -1278,7 +1399,12 @@ function RecordCard({
 
       <div className="button-row">
         {record.status === "failed" ? (
-          <button className="text-button" onClick={onRetry} type="button">
+          <button
+            className="text-button"
+            disabled={retryDisabled}
+            onClick={onRetry}
+            type="button"
+          >
             Retry
           </button>
         ) : null}
@@ -1305,6 +1431,14 @@ function dropProgress(
 ): Record<string, number> {
   return Object.fromEntries(
     Object.entries(current).filter(([id]) => id !== clientId),
+  );
+}
+
+function localFileBytes(records: SessionRecord[]) {
+  return records.reduce(
+    (sum, record) =>
+      sum + (record.image?.file.size ?? 0) + (record.image?.previewBytes ?? 0),
+    0,
   );
 }
 
@@ -1498,11 +1632,11 @@ async function requestJson(url: string, init: RequestInit) {
 function quotaBlockedMessage(reason: QuotaHeadroomReason | null) {
   switch (reason) {
     case "active_scan_limit":
-      return "You already have the maximum number of scans in progress. New records will wait until one finishes.";
+      return "You already have the maximum number of scans in progress. Retry after one finishes.";
     case "daily_analysis_limit":
-      return "You've reached today's scan limit. Capture will resume after it resets.";
+      return "You've reached today's scan limit. Retry after it resets.";
     case "monthly_spend_limit":
-      return "This would exceed your monthly analysis budget. Capture will resume after the budget period resets.";
+      return "This would exceed your monthly analysis budget. Retry after the budget period resets.";
     default:
       return "Capacity is limited right now. Please try again shortly.";
   }
@@ -1584,6 +1718,9 @@ function isPersistedSession(value: unknown): value is PersistedSession {
     (session.batchIds === undefined ||
       (Array.isArray(session.batchIds) &&
         session.batchIds.every((id) => typeof id === "string"))) &&
+    (session.submittedCount === undefined ||
+      (Number.isSafeInteger(session.submittedCount) &&
+        session.submittedCount >= 0)) &&
     Array.isArray(session.records) &&
     session.records.every(isPersistedRecord)
   );

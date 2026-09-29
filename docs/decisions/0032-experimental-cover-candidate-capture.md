@@ -44,7 +44,9 @@ the scanner remains open until Finish scanning. This small part of Task 2 is
 necessary to avoid per-album submit actions. A provisional admission bound
 of 20 pending records / 32 MiB of local file bytes plus a worst-case encoding
 reservation prevents slow uploads accumulating unlimited camera photos.
-Task 2 and P5.2 still need quota/retry/rollover and device-memory validation.
+P5.1 Task 2 subsequently added quota/retry/rollover and refresh/cancel
+handling to the browser queue, plus admission accounting for retained previews
+and in-progress encoding. P5.2 still needs physical-device memory validation.
 
 ## Consequences and verification
 

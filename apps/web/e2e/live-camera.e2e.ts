@@ -283,3 +283,65 @@ test("live-camera permission denial preserves the file-upload fallback", async (
   );
   await expect(page.getByLabel("Upload photos")).toBeEnabled();
 });
+
+test("an authoritative quota rejection pauses capture and leaves the record retryable", async ({
+  page,
+}) => {
+  await installLiveCameraStub(page);
+  let quotaBlocked = false;
+  await page.route("**/api/v1/quota", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({
+      response,
+      json: quotaBlocked
+        ? { ...body, admissible: false, blockedBy: "daily_analysis_limit" }
+        : body,
+    });
+  });
+  await page.route(/\/api\/v1\/scans\/[^/]+\/submit$/, async (route) => {
+    quotaBlocked = true;
+    await route.fulfill({
+      status: 429,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "quota_exceeded", message: "Daily scan limit reached" },
+      }),
+    });
+  });
+  await page.goto("/scan");
+  await page.getByRole("button", { name: "Use live camera" }).click();
+  await changeFrame(page, 1);
+  await expect(
+    page.getByText("Live capture is paused until scan capacity is available.", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.locator('.capture-session__record[data-status="failed"]'),
+  ).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Retry" })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Resume live camera" }),
+  ).toBeDisabled();
+});
+
+test("a finished camera upload remains reviewable after refresh", async ({
+  page,
+}) => {
+  await installLiveCameraStub(page);
+  await page.goto("/scan");
+  await page.getByRole("button", { name: "Use live camera" }).click();
+  await changeFrame(page, 1);
+  await expect
+    .poll(() => page.evaluate(() => window.liveCameraHarness.submissions))
+    .toBe(1);
+  await expect(page.locator(".capture-session__record")).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByText("1 record submitted so far.", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Review them now" }),
+  ).toBeVisible();
+});

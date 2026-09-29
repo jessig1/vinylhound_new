@@ -39,10 +39,20 @@ P5.3's private AI baseline; the reordered work does not waive release gates.
       outside the camera image. This fails the intended real-device recall and
       crop-quality outcomes. Keep the rollout gate closed and use the clip as
       P5.2 detector evidence; the recording remains outside the repository.
-- [ ] **Task 2.** Queue accepted items immediately with stable idempotency keys; keep the
+- [x] **Task 2.** Queue accepted items immediately with stable idempotency keys; keep the
       scanner open until explicit Finish/review. Bound local item and byte
       capacity, including encoding and in-flight uploads. Preserve quota
       pauses, retries, batch rollover, refresh recovery, and cancellation.
+      Completed 2026-09-29: camera items already joined the upload queue;
+      synchronized queue records and persisted their keys before batch
+      creation. Admission now bounds 20 pending records and 32 MiB of retained
+      photo/preview bytes plus an encoding reservation. A completed upload
+      resumes submission without requiring its image after refresh; completed
+      camera-session batch links also survive refresh. Quota rejections pause
+      the camera and retry controls, concurrent full-batch responses share one
+      rollover, and cancellation invalidates late async work and cancels a
+      created scan. Browser checks cover these paths with the synthetic worker.
+      Physical-device memory behavior and detector recall remain P5.2 gates.
 - [ ] **Task 3.** Before persistence or public-contract changes, record an ADR for source
       versus analysis crop ownership and provenance. Preserve the accepted
       source privately, link one crop used for analysis and preview, and retain

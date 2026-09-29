@@ -26,6 +26,181 @@ test.beforeAll(async () => {
     .toBuffer();
 });
 
+test("bounds pending photos and accepts another after a record is removed", async ({
+  page,
+}) => {
+  await page.goto("/scan");
+  await page.setInputFiles(
+    uploadInput,
+    Array.from({ length: 21 }, (_, index) => ({
+      name: `cover-${index}.jpg`,
+      mimeType: "image/jpeg",
+      buffer: coverJpeg,
+    })),
+  );
+  await expect(page.locator(".capture-session__record")).toHaveCount(20);
+  await expect(page.locator(".form-error")).toContainText("20 pending records");
+  await page
+    .getByRole("button", { name: "Remove record 1", exact: true })
+    .click();
+  await expect(page.locator(".capture-session__record")).toHaveCount(19);
+  await page.setInputFiles(uploadInput, {
+    name: "another.jpg",
+    mimeType: "image/jpeg",
+    buffer: coverJpeg,
+  });
+  await expect(page.locator(".capture-session__record")).toHaveCount(20);
+});
+
+test("resumes submission after refresh without reattaching an uploaded image", async ({
+  page,
+}) => {
+  let aborted = false;
+  let scanCreations = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/v1/scans"
+    )
+      scanCreations++;
+  });
+  await page.route(/\/api\/v1\/scans\/[^/]+\/submit$/, async (route) => {
+    if (!aborted) {
+      aborted = true;
+      await route.abort("failed");
+    } else await route.continue();
+  });
+  await page.goto("/scan");
+  await page.setInputFiles(uploadInput, {
+    name: "resume.jpg",
+    mimeType: "image/jpeg",
+    buffer: coverJpeg,
+  });
+  await page.getByRole("button", { name: "Start capture session" }).click();
+  await expect(
+    page.locator('.capture-session__record[data-status="failed"]'),
+  ).toHaveCount(1);
+  await page.reload();
+  await expect(
+    page.getByText("We restored 1 record", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("needs a photo reattached", { exact: false }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Resume session" }).click();
+  await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/);
+  expect(scanCreations).toBe(1);
+});
+
+test("concurrent full-batch errors share one rollover", async ({ page }) => {
+  let rejected = 0;
+  let batchCreations = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/v1/batches"
+    )
+      batchCreations++;
+  });
+  await page.route("**/api/v1/scans", async (route) => {
+    if (rejected < 2) {
+      rejected++;
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "batch_scan_limit", message: "Batch full" },
+        }),
+      });
+    } else await route.continue();
+  });
+  await page.goto("/scan");
+  await page.setInputFiles(uploadInput, [
+    { name: "first.jpg", mimeType: "image/jpeg", buffer: coverJpeg },
+    { name: "second.jpg", mimeType: "image/jpeg", buffer: backJpeg },
+  ]);
+  await page.getByRole("button", { name: "Start capture session" }).click();
+  await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/);
+  expect(rejected).toBe(2);
+  expect(batchCreations).toBe(2);
+});
+
+test("canceling an in-flight record stops submission and cancels its scan", async ({
+  page,
+}) => {
+  let releaseUpload: () => void = () => {};
+  let uploadSeen = false;
+  let submits = 0;
+  page.on("request", (request) => {
+    if (/\/api\/v1\/scans\/[^/]+\/submit$/.test(request.url())) submits++;
+  });
+  await page.route(/\/api\/v1\/scans\/[^/]+\/uploads$/, async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+      uploadSeen = true;
+    });
+    try {
+      await route.continue();
+    } catch {
+      // The request is expected to have been aborted by Cancel.
+    }
+  });
+  await page.goto("/scan");
+  await page.setInputFiles(uploadInput, {
+    name: "cancel.jpg",
+    mimeType: "image/jpeg",
+    buffer: coverJpeg,
+  });
+  await page.getByRole("button", { name: "Start capture session" }).click();
+  await expect.poll(() => uploadSeen).toBe(true);
+  const canceled = page.waitForResponse(/\/api\/v1\/scans\/[^/]+\/cancel$/);
+  await page.getByRole("button", { name: "Cancel record 1" }).click();
+  await canceled;
+  releaseUpload();
+  await expect(page.locator(".capture-session__record")).toHaveCount(0);
+  expect(submits).toBe(0);
+});
+
+test("retry reuses the scan after a transient upload preparation failure", async ({
+  page,
+}) => {
+  let uploadAttempts = 0;
+  let scanCreations = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/v1/scans"
+    )
+      scanCreations++;
+  });
+  await page.route(/\/api\/v1\/scans\/[^/]+\/uploads$/, async (route) => {
+    uploadAttempts++;
+    if (uploadAttempts === 1)
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "unavailable", message: "Try again" },
+        }),
+      });
+    else await route.continue();
+  });
+  await page.goto("/scan");
+  await page.setInputFiles(uploadInput, {
+    name: "retry.jpg",
+    mimeType: "image/jpeg",
+    buffer: coverJpeg,
+  });
+  await page.getByRole("button", { name: "Start capture session" }).click();
+  await expect(
+    page.locator('.capture-session__record[data-status="failed"]'),
+  ).toHaveCount(1);
+  await page.getByRole("button", { name: "Retry" }).click();
+  await page.waitForURL(/\/scans\/batch\/[0-9a-f-]{36}/);
+  expect(uploadAttempts).toBe(2);
+  expect(scanCreations).toBe(1);
+});
+
 test("uploads selected cover photos as independently trackable records", async ({
   page,
 }) => {
