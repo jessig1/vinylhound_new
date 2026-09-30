@@ -118,19 +118,44 @@ the log.
 > No private images or labels exist yet; that is maintainer work outside the
 > repository. `npm run check` passed (428/428, +5 new scaffold tests).
 
-## Current state — updated 2026-09-29
+## Current state — updated 2026-09-30
 
-- **Automatic capture now has layered detection and actionable guidance.**
+- **P5.1 now has a discrete album-detection iteration subplan.**
+  `docs/roadmap/p5.1-album-detection-iterations.md` defines D01-D12, including
+  conditional D08a/D08b learned-model feasibility/experiment tasks. Every task
+  has dependencies, a deliverable, and completion evidence. Start with D01's
+  opt-in local diagnostics and bounded raw-frame export, then D02's labeled
+  replay baseline. Selection, guidance, tracking, detector comparison, crop
+  policy, integration, and device evaluation follow in measured iterations.
+  P5.2/P5.3 retain their evidence ownership and public release gates; training
+  retains the product baseline/scope prerequisite. All tasks are planned,
+  not implemented. The main and Phase 5 roadmaps link to the subplan.
+
+- **The second physical webcam trial failed after the guidance changes.**
+  Sampled review of the private 4m06s recording shows six distinct sleeves
+  and repeated searching, consistent with the maintainer's report of zero
+  successful scans. Amber outlines follow wall objects; during Blind Melon,
+  a clipped wall calendar drives move-back advice while the sleeve is fully
+  visible. The current area-first selection lets unrelated rejected proposals
+  control capture and guidance. Exact proposal failures need raw-frame traces;
+  the screen recording includes UI edges and is not a clean detector replay.
+  See `docs/CAPTURE_VIDEO_REVIEW_2026-09-30.md`. Next: private diagnostic
+  replay, target-selection/guidance repair, and the planned detector comparison.
+  No runtime fix or formal gate pass is claimed. The earlier development-user
+  database error remains unresolved and separate from this local detection
+  failure. Public automatic capture remains default-off.
+
+- **Automatic capture has layered geometry detection and guidance.**
   Luminance plus RGB edges, strong/scene-adapted thresholds, four-side support,
   framing, image detail, and temporal stability feed the camera UI. It shows
   tentative amber outlines, separate readiness checks, hold-steady progress,
   and stable instructions for distance, clipping, centering, tilt, edge
   contrast, lighting/focus, and manual recovery. A larger incomplete sleeve
-  outline blocks a smaller artwork crop. The underlying detector remains
-  geometric, and the original private webcam clip has not been replayed against
-  this revision. Next: retry the failed physical presentations using the new
-  guidance, retain private evidence, and use P5.2's held-out evaluation before
-  deciding whether geometry needs replacement. Public release stays gated.
+  outline blocks a smaller artwork crop. The second physical trial above
+  demonstrates that the guidance can describe background objects instead of
+  the sleeve. The detector remains geometric; synthetic tests did not predict
+  this real-camera failure. Follow the review's diagnostics and target-selection
+  repair before P5.2's detector comparison. Public release stays gated.
 
 - **P5.1 Task 4 release evaluation is prepared, not passed.**
   `docs/CAPTURE_GATE_EVALUATION.md` defines one result sheet per physical
@@ -3872,6 +3897,15 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
+**Latest resume (2026-09-30): implement P5.1-D01 from
+`docs/roadmap/p5.1-album-detection-iterations.md`.** Add opt-in numeric decision
+traces and bounded private raw-frame export before changing detector behavior.
+Then D02 establishes the labeled development replay baseline. Use the subplan's
+task IDs and keep/revise/revert records for each subsequent iteration. The
+existing pipeline's synthetic tests pass, but the physical trials fail; public
+automatic capture remains default-off and P5.1 Task 4 remains open. This
+paragraph supersedes the older implementation resume instructions below.
+
 **Current resume (2026-09-24): P4.4 Tasks 1-2 are complete; continue with
 Task 3.** Read the published samples and Task 2 exercise table before comparing
 latency, throughput, error, confirmation delay, build/deploy time, operations,
@@ -3944,10 +3978,13 @@ this computer or HTTPS from another device for camera/upload trials.
 Use `docs/CAPTURE_GATE_EVALUATION.md` to score each physical setup. The
 existing 81-second webcam trial is an exploratory failure, not a formal pass;
 phone evidence and the private paired source/crop AI comparison are absent.
-The layered detection/guidance experiment is now available for another local
-trial. Watch the edge/framing/detail checks and hold-steady progress; compare
-the outlined outer jacket with what is actually visible. Replay/recapture the
-failed examples before attributing a real-device reliability improvement.
+The second physical trial now fails the layered detection/guidance experiment:
+wall objects receive outlines and wrong-target advice while visible sleeves
+remain undetected. Read `docs/CAPTURE_VIDEO_REVIEW_2026-09-30.md`; add private
+raw-frame/proposal traces and repair target selection before claiming an
+improvement. Compare the repaired geometry baseline with the planned OpenCV
+baseline and, if gates still fail, a learned sleeve detector. The supplied
+screen recording has UI overlays and cannot serve as clean raw detector input.
 The local `.env` enables the experimental candidate worker after a web
 restart. Synthetic tests do not establish real-camera recall.
 The first enabled webcam clip now confirms misses on two of three distinct
@@ -8591,3 +8628,37 @@ discovery`. Broadened the harness's retry to cover it too
   webcam clip has not been replayed against this code; P5.2/P5.3 gates and public
   default-off status remain. Updated ADR-0032, testing guidance, roadmap,
   current state, and resume point.
+
+- **2026-09-30 - Codex. Reviewed the second failed webcam capture trial.**
+  Inspected sampled frames across the maintainer's private 4m06s video and
+  full-resolution examples, then traced current detector, tracker, and UI code.
+  Six sleeves are visible; no success is reported. The clearest failure is a
+  wall-calendar outline and move-back advice while Blind Melon's yellow sleeve
+  is fully visible. Documented global area-first rejected-proposal selection,
+  fragile connected-edge hypotheses, and misleading unavailable/checking states.
+  Distinguished the prior inner-artwork capture from a validated jacket crop,
+  and the unresolved database error from local detection. Added the detailed
+  review, updated release evidence/roadmap, current state, and resume point.
+  Recommended private raw-frame/proposal diagnostics, target-selection repair,
+  then the existing OpenCV/learned-detector comparison. These are recommendations;
+  no detector, model, provider, or capture contract changed. Video and extracted
+  frames remain outside the repository. Screen overlays preclude treating the
+  recording as clean camera input; no formal recall denominator was invented.
+  Verification: `npm run check` passed (50 files, 480 tests). Documentation
+  only; no application build or billable identification evaluation was needed.
+
+- **2026-09-30 - Codex. Planned discrete P5.1 album-detection iterations.**
+  Created `docs/roadmap/p5.1-album-detection-iterations.md` with D01-D12 and
+  conditional D08a/D08b tasks, dependencies, implementation boundaries, and
+  measurable completion criteria. The sequence covers private diagnostics and
+  replay, detector separation, target selection, honest guidance, temporal
+  tracking, bounded OpenCV/model comparisons, crop/source policy, provenance,
+  device hardening, and formal rollout decisions. Added a before/after experiment
+  template and kept development data separate from final held-out evaluation.
+  Preserved P5.2/P5.3 ownership, ADR-0033's current behavior, product prerequisites
+  for training, source auditing, and default-off public capture. Linked the
+  subplan from both roadmaps and updated current state/resume to D01. All tasks
+  remain open; this session changes planning documentation only.
+  Verification: `npm run check` passed (50 files, 480 tests); local roadmap
+  links, final formatting, and diff whitespace checks passed. No application
+  build was required for these documentation changes.

@@ -106,3 +106,8 @@ and P3.5/P4.4 measurements. See the [Phase 5 plan](roadmap/phase-5-capture-ai-di
 for ordered milestones, gates, and the relocated [former P4.5 private AI baseline](roadmap/p4.5-private-data-ai-baseline.md). Native
 apps, streaming playback, an external VinylHound API, and production vector
 infrastructure are not committed by this plan.
+
+P5.1's [album-detection iteration subplan](roadmap/p5.1-album-detection-iterations.md)
+defines the next discrete implementation tasks, starting with local diagnostics
+and a private replay baseline. Target selection, feedback, tracking, detector
+comparisons, crop policy, and physical-device gates each have a separate outcome.

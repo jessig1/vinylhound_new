@@ -89,7 +89,17 @@ must remain responsive with bounded memory and no frame backlog. Record cold
 startup and thermal behavior separately. A gate with too few observations is
 **not evaluated**, not passed.
 
-## Current evidence and decision (2026-09-29)
+## Current evidence and decision (2026-09-30)
+
+A second private webcam recording (4m06s) was reviewed after the layered
+guidance changes. Six distinct sleeves appear; the maintainer reports zero
+successful scans, and sampled frames show repeated searching and amber outlines
+on wall objects. During the yellow sleeve presentation, a wall calendar drives
+move-back advice despite the sleeve being visible. This also fails exploratory
+usability; eligible presentation counts, continuous capture events, and exact
+runtime revision are not instrumented. See the
+[detailed review and next experiments](CAPTURE_VIDEO_REVIEW_2026-09-30.md).
+Neither recording supplies a formal per-setup gate denominator.
 
 | Setup                                             | Observed counts                                                                                                                                                                                                                 | Gate result                                                                                                                                                     |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

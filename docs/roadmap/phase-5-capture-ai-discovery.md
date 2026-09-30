@@ -16,6 +16,14 @@ P5.3's private AI baseline; the reordered work does not waive release gates.
 
 ### P5.1 — Reliable hands-free capture
 
+The [album-detection iteration subplan](p5.1-album-detection-iterations.md)
+breaks the failed physical trials into discrete tasks D01-D12, with conditional
+D08a/D08b model experiments. Start with D01 diagnostics and D02 private replay,
+then repair selection, guidance, and tracking before comparing detectors.
+Each task defines dependencies, deliverables, and completion evidence. Tasks
+1-3 below describe implemented infrastructure; detector reliability remains
+open. Complete the subplan's evaluation before marking Task 4 passed.
+
 - [x] **Task 1 (implementation; public rollout gated).** Replace whole-scene stillness triggering with album candidate tracking,
       quality selection, crop preview, removal/replacement rearming, and a
       bounded frame buffer. Camera start is the one session action; accepted
@@ -92,13 +100,23 @@ P5.3's private AI baseline; the reordered work does not waive release gates.
       evidence, adaptive boundary detection, framing/detail checks, tentative
       outlines, stable recovery instructions, and hold-steady progress. Synthetic
       weak-contrast/color, small/clipped, nested-artwork, and negative scenes pass;
-      the original private webcam failures still need a new physical trial.
+      a second private 4m06s webcam trial reviewed 2026-09-30 still fails.
+      Six distinct sleeves appear with no successful scans reported; sampled
+      frames show wall-object outlines and wrong-target move-back advice.
+      See the [video review](../CAPTURE_VIDEO_REVIEW_2026-09-30.md) for
+      evidence limits, the target-selection defect, and the recommended
+      private replay/repair/detector comparison. No physical gate has passed.
 
 Exit: recorded-frame and real-device tests pass the documented gates; analysis
 receives the linked crop, the audit trail remains intact, and unsupported cases
 have an explicit recovery path. Keep the feature flag off for setups that fail.
 
 ### P5.2 — Capture feasibility and baseline
+
+Use the [P5.1 subplan](p5.1-album-detection-iterations.md)'s private corpus,
+replay comparisons, and per-device results as evidence for these checklist
+items. P5.2 owns the baseline and detector decision; record each result once
+and link it here instead of running a duplicate evaluation.
 
 - [ ] Gather consented private phone and webcam clips with album presentations,
       removal/replacement, and no-album negatives. Keep clips out of the public
