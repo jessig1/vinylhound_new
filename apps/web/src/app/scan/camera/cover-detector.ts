@@ -1,3 +1,9 @@
+import {
+  MAX_COMPONENT_TRACES,
+  type DetectorTrace,
+  type ProposalTrace,
+} from "./detector-diagnostics";
+
 export type Point = { x: number; y: number };
 /** Clockwise, starting at the top-left; normalized to the source frame. */
 export type Corners = [Point, Point, Point, Point];
@@ -36,8 +42,13 @@ export type DetectorFrame = {
   width: number;
   height: number;
   pixels: Uint8ClampedArray;
+  diagnostics?: boolean;
 };
-export type DetectorResult = Detection & { id: number; time: number };
+export type DetectorResult = Detection & {
+  id: number;
+  time: number;
+  diagnostics?: DetectorTrace;
+};
 
 function cross(a: Point, b: Point, c: Point) {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
@@ -201,12 +212,17 @@ function inspectEdges({ width, height, pixels }: DetectorFrame) {
   return { gray, strength, adaptive };
 }
 
-export function detectCover(frame: DetectorFrame): Detection {
+export function detectCover(
+  frame: DetectorFrame,
+  trace?: DetectorTrace,
+): Detection {
   const { width, height } = frame;
   const { gray, strength, adaptive } = inspectEdges(frame);
   const length = width * height;
   const queue = new Int32Array(length);
   const proposals: Array<Detection & { outline: Corners }> = [];
+  const proposalIds = new Map<Detection, number>();
+  let componentId = 0;
   for (const threshold of [100, adaptive]) {
     const edges = Uint8Array.from(strength, (value) =>
       value >= threshold ? 1 : 0,
@@ -240,11 +256,72 @@ export function detectCover(frame: DetectorFrame): Detection {
             }
           }
       }
-      if (points.length < 40) continue;
+      const id = ++componentId;
+      const record = (
+        stage: ProposalTrace["stage"],
+        reason: string,
+        corners: Corners | null = null,
+        detection?: Detection,
+      ) => {
+        if (!trace) return;
+        trace.rejectionCounts[reason] =
+          (trace.rejectionCounts[reason] ?? 0) + 1;
+        if (trace.components.length >= MAX_COMPONENT_TRACES) {
+          trace.omittedComponents++;
+          if (!detection) return;
+        }
+        let left = width,
+          top = height,
+          right = 0,
+          bottom = 0;
+        for (const p of points) {
+          left = Math.min(left, p.x);
+          top = Math.min(top, p.y);
+          right = Math.max(right, p.x);
+          bottom = Math.max(bottom, p.y);
+        }
+        const entry: ProposalTrace = {
+          id,
+          threshold,
+          points: points.length,
+          bounds: {
+            x: left / width,
+            y: top / height,
+            width: (right - left) / width,
+            height: (bottom - top) / height,
+          },
+          corners:
+            (corners?.map((p) => ({ x: p.x / width, y: p.y / height })) as
+              Corners | undefined) ?? null,
+          stage,
+          reason,
+          signals: detection?.signals ?? null,
+          detail:
+            detection?.signals?.sharpness == null
+              ? "not_evaluated"
+              : detection.checks?.detail
+                ? "passed"
+                : "failed",
+        };
+        if (trace.components.length < MAX_COMPONENT_TRACES) trace.components.push(entry);
+        // Each proposal consumes >=40 component pixels in one of two <=320px
+        // passes: at most 5,120, independently of recording duration.
+        if (detection) trace.proposals.push(entry);
+      };
+      if (points.length < 40) {
+        record("component", "too_few_points");
+        continue;
+      }
       const corners = quadrilateral(points);
-      if (!corners) continue;
+      if (!corners) {
+        record("quadrilateral", "not_quadrilateral");
+        continue;
+      }
       const fraction = area(corners) / length;
-      if (fraction < 0.025 || fraction > 0.95) continue;
+      if (fraction < 0.025 || fraction > 0.95) {
+        record("area", "area_out_of_range", corners);
+        continue;
+      }
       const clipped =
         fraction > 0.82 ||
         corners.some(
@@ -256,8 +333,10 @@ export function detectCover(frame: DetectorFrame): Detection {
       if (
         Math.min(...sides) < 25 ||
         Math.max(...sides) / Math.min(...sides) > 1.65
-      )
+      ) {
+        record("shape", "side_length_or_ratio", corners);
         continue;
+      }
       const tilted = corners.some((p, i) => {
         const a = corners[(i + 3) % 4],
           b = corners[(i + 1) % 4];
@@ -331,6 +410,14 @@ export function detectCover(frame: DetectorFrame): Detection {
             luminance: null,
           },
         });
+        const proposal = proposals.at(-1)!;
+        if (trace) proposalIds.set(proposal, id);
+        record(
+          reason === "weak_boundary" ? "boundary" : "framing",
+          reason,
+          corners,
+          proposal,
+        );
         continue;
       }
       const fingerprint: number[] = [];
@@ -391,24 +478,41 @@ export function detectCover(frame: DetectorFrame): Detection {
           luminance: mean,
         },
       });
+      const proposal = proposals.at(-1)!;
+      if (trace) proposalIds.set(proposal, id);
+      record(
+        proposal.reason === "ready" ? "ready" : "detail",
+        proposal.reason,
+        corners,
+        proposal,
+      );
     }
   }
   // Nested artwork edges describe the same presentation. Disjoint targets are
   // ambiguous and must never create two records from one frame.
   proposals.sort((a, b) => area(b.outline) - area(a.outline));
   const selected = proposals[0];
+  if (trace) {
+    trace.selection.rankedIds = proposals.map((p) => proposalIds.get(p)!);
+    trace.selection.selectedId = selected ? proposalIds.get(selected)! : null;
+    trace.selection.reason = selected ? "largest_area" : "no_proposal";
+  }
   if (!selected) return { candidate: null, reason: "searching" };
   const center = project(selected.outline, 0.5, 0.5);
-  if (
-    proposals.slice(1).some((other) => {
-      const p = project(other.outline, 0.5, 0.5);
-      return (
-        area(other.outline) >= 0.1 &&
-        Math.hypot(p.x - center.x, p.y - center.y) > 0.25
-      );
-    })
-  )
+  const vetoes = proposals.slice(1).filter((other) => {
+    const p = project(other.outline, 0.5, 0.5);
+    return (
+      area(other.outline) >= 0.1 &&
+      Math.hypot(p.x - center.x, p.y - center.y) > 0.25
+    );
+  });
+  if (vetoes.length) {
+    if (trace) {
+      trace.selection.vetoIds = vetoes.map((p) => proposalIds.get(p)!);
+      trace.selection.reason = "disjoint_veto";
+    }
     return { candidate: null, reason: "multiple" };
+  }
   // A larger incomplete boundary must block a tempting inner-artwork crop.
   return selected;
 }

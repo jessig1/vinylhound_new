@@ -6,6 +6,7 @@ import {
 } from "./cover-detector";
 import { CoverTracker, type CapturePhase } from "./cover-tracker";
 import { CaptureGuidance, type GuidanceReason } from "./capture-guidance";
+import type { CaptureDiagnostics } from "./capture-diagnostics";
 
 export type CameraFeedback = {
   phase: CapturePhase;
@@ -41,11 +42,20 @@ export class CoverCamera {
   private stopped = false;
   private busy = false;
   private encoding = false;
+  private encodingSource: HTMLCanvasElement | null = null;
   private sequence = 0;
   private callback: number | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private deadline: ReturnType<typeof setTimeout> | null = null;
   private lastSample = -Infinity;
+  private diagnostics: CaptureDiagnostics | null = null;
+  private sentAt = 0;
+  private captureFrameId: number | null = null;
+
+  setDiagnostics(recorder: CaptureDiagnostics) {
+    this.diagnostics?.stop("replaced");
+    this.diagnostics = recorder;
+  }
 
   constructor(
     private video: HTMLVideoElement,
@@ -62,11 +72,12 @@ export class CoverCamera {
     );
     this.worker.onmessage = ({ data }: MessageEvent<DetectorResult>) =>
       this.receive(data);
-    this.worker.onerror = () => this.fail();
+    this.worker.onerror = () => this.fail("worker_error");
     this.schedule();
   }
 
   stop() {
+    this.diagnostics?.stop("camera_stop");
     this.stopped = true;
     if (this.callback !== null && this.video.cancelVideoFrameCallback)
       this.video.cancelVideoFrameCallback(this.callback);
@@ -81,6 +92,10 @@ export class CoverCamera {
   /** Explicit override also allows scanning another physical copy. */
   async manual() {
     if (this.stopped || this.encoding) return;
+    this.diagnostics?.event("manual_capture", {
+      supersededFrameIds: [...this.frames.keys()],
+    });
+    this.diagnostics?.stop("manual_capture");
     const source = freezeFrame(this.video);
     if (!source) return;
     this.releaseFrames();
@@ -89,11 +104,16 @@ export class CoverCamera {
 
   private schedule() {
     if (this.stopped) return;
-    const tick = (time: number) => {
+    const tick = (time: number, metadata?: VideoFrameCallbackMetadata) => {
       if (this.stopped) return;
       if (time - this.lastSample >= 150 && !this.busy && !this.encoding) {
         this.lastSample = time;
-        this.inspect(time);
+        this.inspect(time, metadata);
+      } else if (time - this.lastSample >= 150) {
+        this.diagnostics?.event("skipped_input", {
+          time,
+          reason: this.busy ? "worker_busy" : "capture_encoding",
+        });
       }
       this.schedule();
     };
@@ -104,15 +124,22 @@ export class CoverCamera {
     }
   }
 
-  private inspect(time: number) {
+  private inspect(time: number, metadata?: VideoFrameCallbackMetadata) {
     if (!this.worker) return;
     const source = freezeFrame(this.video);
-    if (!source) return;
+    if (!source) {
+      this.diagnostics?.event("skipped_input", {
+        time,
+        reason: "video_not_ready",
+      });
+      return;
+    }
     const scale = Math.min(1, 320 / Math.max(source.width, source.height));
     this.sample.width = Math.round(source.width * scale);
     this.sample.height = Math.round(source.height * scale);
     const context = this.sample.getContext("2d", { willReadFrequently: true });
     if (!context) {
+      source.width = source.height = 0;
       this.fail();
       return;
     }
@@ -125,10 +152,11 @@ export class CoverCamera {
         this.sample.height,
       ).data;
       const id = ++this.sequence;
-      this.frames.set(id, { source, capturedAt: new Date().toISOString() });
-      this.busy = true;
-      this.deadline = setTimeout(() => this.fail(), 5_000);
-      this.worker.postMessage(
+      const capturedAt = new Date().toISOString();
+      this.frames.set(id, { source, capturedAt });
+      const diagnosticsStarted = performance.now();
+      const diagnosticFrame = this.diagnostics?.active === true;
+      this.diagnostics?.frame(
         {
           id,
           time,
@@ -136,9 +164,37 @@ export class CoverCamera {
           height: this.sample.height,
           pixels,
         },
+        {
+          cameraWidth: this.video.videoWidth,
+          cameraHeight: this.video.videoHeight,
+          sourceWidth: source.width,
+          sourceHeight: source.height,
+          capturedAt,
+          mediaTime: metadata?.mediaTime ?? null,
+          presentedFrames: metadata?.presentedFrames ?? null,
+        },
+      );
+      if (diagnosticFrame)
+        this.diagnostics?.event("recording_cost", {
+          id,
+          ms: performance.now() - diagnosticsStarted,
+        });
+      this.busy = true;
+      this.deadline = setTimeout(() => this.fail("worker_timeout"), 5_000);
+      this.sentAt = performance.now();
+      this.worker.postMessage(
+        {
+          id,
+          time,
+          width: this.sample.width,
+          height: this.sample.height,
+          pixels,
+          ...(diagnosticFrame ? { diagnostics: true } : {}),
+        },
         [pixels.buffer],
       );
     } catch {
+      source.width = source.height = 0;
       this.fail();
     }
   }
@@ -149,24 +205,59 @@ export class CoverCamera {
     if (this.deadline) clearTimeout(this.deadline);
     // Manual capture can supersede an in-flight detection. Its snapshot no
     // longer exists, so a late result cannot alter the new presentation.
-    if (!this.frames.has(data.id) || this.encoding) return;
+    if (!this.frames.has(data.id) || this.encoding) {
+      this.diagnostics?.event("ignored_result", {
+        id: data.id,
+        reason: "superseded_or_encoding",
+      });
+      return;
+    }
     const update = this.tracker.inspect(data.id, data.time, data);
-    this.feedback({
+    const feedback = {
       phase: update.phase,
       corners: data.outline ?? data.candidate?.corners ?? null,
       reason: this.guidance.inspect(data.reason, update.moving, data.time),
       checks: data.checks,
       progress: data.reason === "ready" ? update.progress : 0,
+    };
+    this.diagnostics?.event("decision", {
+      id: data.id,
+      time: data.time,
+      workerRoundTripMs: performance.now() - this.sentAt,
+      detector: data.diagnostics ?? null,
+      reason: data.reason,
+      // Fingerprints are not needed to explain the UI; never export pixel-like arrays in numeric traces.
+      assessment: {
+        ...data.signals,
+        detail:
+          data.signals?.sharpness == null
+            ? "not_evaluated"
+            : data.checks?.detail
+              ? "passed"
+              : "failed",
+      },
+      tracker: {
+        phase: update.phase,
+        bestFrameId: update.best?.id ?? null,
+        captureFrameId: update.capture?.id ?? null,
+        resetReason: update.resetReason,
+        moving: update.moving,
+        progress: update.progress,
+      },
+      feedback,
     });
+    this.feedback(feedback);
     if (update.capture) {
       const frame = this.frames.get(update.capture.id);
-      if (frame)
+      if (frame) {
+        this.captureFrameId = update.capture.id;
         void this.capture(
           frame.source,
           update.capture.candidate.corners,
           update.capture.candidate,
           frame.capturedAt,
         );
+      }
       this.releaseFrames();
     } else {
       this.releaseFrames(update.best?.id);
@@ -180,14 +271,24 @@ export class CoverCamera {
     capturedAt = new Date().toISOString(),
   ) {
     if (!this.admit(source.width * source.height * 4)) {
+      this.diagnostics?.event("capture_rejected", {
+        frameId: this.captureFrameId,
+        reason: "admission",
+      });
       source.width = source.height = 0;
       return;
     }
     this.encoding = true;
+    this.encodingSource = source;
+    this.diagnostics?.event("capture_started", {
+      frameId: this.captureFrameId,
+      path: corners ? "crop" : "source",
+    });
     this.feedback({ phase: "capturing", corners, reason: "ready" });
+    let crop: HTMLCanvasElement | null = null;
     try {
       // Freeze and encode from the selected source, never a newer video frame.
-      const crop = corners ? renderCrop(source, corners) : null;
+      crop = corners ? renderCrop(source, corners) : null;
       const [original, preview] = await Promise.all([
         encode(source),
         crop ? encode(crop) : Promise.resolve(null),
@@ -215,12 +316,17 @@ export class CoverCamera {
           : {}),
       });
       this.tracker.capturedFrame(candidate);
+      this.diagnostics?.event("capture_delivered", {
+        frameId: this.captureFrameId,
+      });
       this.feedback({ phase: "waiting", corners, reason: "ready" });
     } catch {
-      if (!this.stopped) this.fail();
+      if (!this.stopped) this.fail("encoding_error");
     } finally {
+      if (crop) crop.width = crop.height = 0;
       source.width = source.height = 0;
       this.encoding = false;
+      this.encodingSource = null;
     }
   }
 
@@ -228,13 +334,19 @@ export class CoverCamera {
     for (const [id, frame] of this.frames) {
       if (id === keep) continue;
       // A selected source is being encoded; the encoder retains it until done.
-      if (!this.encoding) frame.source.width = frame.source.height = 0;
+      if (frame.source !== this.encodingSource)
+        frame.source.width = frame.source.height = 0;
       this.frames.delete(id);
     }
   }
 
-  private fail() {
+  private fail(reason = "camera_error") {
     if (this.stopped) return;
+    this.diagnostics?.event("worker_or_camera_failure", {
+      frameIds: [...this.frames.keys()],
+      reason,
+    });
+    this.diagnostics?.stop("worker_or_camera_failure");
     this.stop();
     this.error();
   }

@@ -33,6 +33,7 @@ import {
 } from "./camera/cover-camera";
 import { captureGuidance } from "./camera/capture-guidance";
 import type { Corners } from "./camera/cover-detector";
+import { CaptureDiagnosticsPanel } from "./camera/capture-diagnostics-panel";
 
 const UPLOAD_CONCURRENCY = 3;
 const CAPTURE_SESSION_STORAGE_KEY = "vinylhound.captureSession.v1";
@@ -1315,6 +1316,10 @@ export function CaptureSession({
               </button>
             </div>
           </section>
+        ) : null}
+
+        {process.env.NODE_ENV === "development" && candidateCaptureEnabled ? (
+          <CaptureDiagnosticsPanel camera={coverCameraRef} />
         ) : null}
 
         {cameraError ? (

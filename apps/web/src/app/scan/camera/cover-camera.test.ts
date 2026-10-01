@@ -5,6 +5,7 @@ import type {
   DetectorFrame,
   DetectorResult,
 } from "./cover-detector";
+import { CaptureDiagnostics } from "./capture-diagnostics";
 
 const target: CoverCandidate = {
   corners: [
@@ -118,6 +119,7 @@ it("keeps worker jobs serial and releases snapshots during a long empty session"
   h.tick(0);
   h.tick(150);
   expect(h.worker.postMessage).toHaveBeenCalledTimes(1);
+  expect(h.worker.postMessage.mock.calls[0][0].diagnostics).toBeUndefined();
   h.respond(0, true);
   for (let time = 300; time < 10_000; time += 150) {
     h.tick(time);
@@ -159,4 +161,70 @@ it("discards encoded originals and crops when stopped before encoding returns", 
   await Promise.resolve();
   expect(h.photos).toHaveLength(0);
   expect(h.error).not.toHaveBeenCalled();
+});
+
+it.each(["stop", "manual", "failure"] as const)(
+  "stops diagnostic recording on %s and releases sampled sources",
+  async (action) => {
+    const h = harness();
+    const recorder = new CaptureDiagnostics(true, "camera-fixture");
+    h.camera.setDiagnostics(recorder);
+    h.tick(0);
+    h.tick(150);
+    expect(h.worker.postMessage.mock.calls[0][0].diagnostics).toBe(true);
+    if (action === "stop") h.camera.stop();
+    if (action === "failure") h.worker.onerror();
+    if (action === "manual") {
+      const pending = h.camera.manual();
+      h.encodings.forEach((resolve) => resolve());
+      await pending;
+      h.camera.stop();
+    }
+    expect(recorder.active).toBe(false);
+    expect(recorder.summary().reason).toBe(
+      action === "failure"
+        ? "worker_or_camera_failure"
+        : action === "manual"
+          ? "manual_capture"
+          : "camera_stop",
+    );
+    expect(h.snapshots.every((s) => s.width === 0)).toBe(true);
+    expect(recorder.manifest().events).toContainEqual(
+      expect.objectContaining({
+        type: "skipped_input",
+        payload: { time: 150, reason: "worker_busy" },
+      }),
+    );
+    recorder.discard();
+  },
+);
+
+it("links automatic capture and visible feedback to the frozen best frame", async () => {
+  const h = harness();
+  const recorder = new CaptureDiagnostics(false, "camera-fixture");
+  h.camera.setDiagnostics(recorder);
+  for (let time = 0; time <= 600; time += 150) {
+    h.tick(time);
+    h.respond(time === 150 ? 30 : 10);
+  }
+  h.encodings.forEach((resolve) => resolve());
+  await vi.waitFor(() => expect(h.photos).toHaveLength(1));
+  h.camera.stop();
+  const events = recorder.manifest().events;
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "capture_delivered",
+      payload: { frameId: 2 },
+    }),
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "decision",
+      payload: expect.objectContaining({
+        id: 5,
+        tracker: expect.objectContaining({ captureFrameId: 2 }),
+        feedback: expect.objectContaining({ phase: "capturing" }),
+      }),
+    }),
+  );
 });

@@ -1,5 +1,11 @@
 # Session handoff
 
+> **2026-09-30 P5.1-D01:** local numeric decision diagnostics and bounded,
+> explicit raw detector-input export are implemented. See
+> `docs/CAPTURE_DIAGNOSTICS_D01.md` for operation and synthetic browser evidence.
+> D02's consented webcam corpus and verified labels are next; detector behavior
+> and public rollout gates remain unchanged.
+
 > **2026-09-28 P5.1 Task 1 implementation:** added candidate-based camera
 > capture with a bundled local worker, time-based tracking, best frozen frame
 > selection, perspective crop preview, removal/replacement handling, and
@@ -120,7 +126,18 @@ the log.
 
 ## Current state — updated 2026-09-30
 
-- **P5.1 now has a discrete album-detection iteration subplan.**
+- **P5.1-D01 diagnostic tooling is implemented and synthetically verified.**
+  Development-only opt-in recording links frame IDs to component rejections,
+  selection, unknown/evaluated detail, tracker resets, visible feedback, and
+  frozen capture lineage. Separate private exports retain exact 320px RGBA
+  detector inputs before overlays/transfer, bounded at 15 seconds / 16 MiB raw /
+  2 MiB trace / 1,500 events, with zero write queue. Camera/manual/failure stops
+  terminate recording. A local extractor and synthetic Chromium verification
+  script accompany the guide in `docs/CAPTURE_DIAGNOSTICS_D01.md`. Detector
+  selection and thresholds are unchanged. D02 still needs consented raw webcam
+  sessions and maintainer-verified labels; no physical accuracy gain is claimed.
+
+- **P5.1 has a discrete album-detection iteration subplan.**
   `docs/roadmap/p5.1-album-detection-iterations.md` defines D01-D12, including
   conditional D08a/D08b learned-model feasibility/experiment tasks. Every task
   has dependencies, a deliverable, and completion evidence. Start with D01's
@@ -128,8 +145,8 @@ the log.
   replay baseline. Selection, guidance, tracking, detector comparison, crop
   policy, integration, and device evaluation follow in measured iterations.
   P5.2/P5.3 retain their evidence ownership and public release gates; training
-  retains the product baseline/scope prerequisite. All tasks are planned,
-  not implemented. The main and Phase 5 roadmaps link to the subplan.
+  retains the product baseline/scope prerequisite. D01 is now implemented;
+  D02-D12 remain open. The main and Phase 5 roadmaps link to the subplan.
 
 - **The second physical webcam trial failed after the guidance changes.**
   Sampled review of the private 4m06s recording shows six distinct sleeves
@@ -3897,10 +3914,11 @@ DELETE` intended only to inspect response headers while manually verifying
 
 ## Resume point
 
-**Latest resume (2026-09-30): implement P5.1-D01 from
-`docs/roadmap/p5.1-album-detection-iterations.md`.** Add opt-in numeric decision
-traces and bounded private raw-frame export before changing detector behavior.
-Then D02 establishes the labeled development replay baseline. Use the subplan's
+**Latest resume (2026-09-30): review D01 exports and begin P5.1-D02 from
+`docs/roadmap/p5.1-album-detection-iterations.md`.** D01's development diagnostic
+panel and private raw-input export now work; follow `docs/CAPTURE_DIAGNOSTICS_D01.md`
+to collect consented webcam clips and verify labels with the maintainer.
+D02 establishes the labeled development replay baseline before detector changes. Use the subplan's
 task IDs and keep/revise/revert records for each subsequent iteration. The
 existing pipeline's synthetic tests pass, but the physical trials fail; public
 automatic capture remains default-off and P5.1 Task 4 remains open. This
@@ -8662,3 +8680,25 @@ discovery`. Broadened the harness's retry to cover it too
   Verification: `npm run check` passed (50 files, 480 tests); local roadmap
   links, final formatting, and diff whitespace checks passed. No application
   build was required for these documentation changes.
+
+- **2026-09-30 - Codex. Implemented P5.1-D01 local diagnostics.** Added an
+  opt-in development panel, numeric proposal/selection/tracking/capture traces,
+  explicit bounded raw RGBA export, a private PNG extractor, and a synthetic
+  Chromium verification script. Input IDs/dimensions/transforms, selection
+  rationale, unknown detail, skipped inputs, timing, reset reasons, and frozen
+  capture lineage are retained without image logging or diagnostic uploads.
+  Limits stop recording at 15 seconds, 16 MiB raw, 2 MiB trace, or 1,500 events;
+  stop/manual/failure ends recording and there is no queued write backlog.
+  Also released non-selected canvases during encoding and cleaned up crop
+  buffers on encoding errors. Detection/selection/qualification behavior stays
+  unchanged. Updated task status, current state, resume point, and the testing
+  guide; detailed evidence is in `docs/CAPTURE_DIAGNOSTICS_D01.md`.
+  Verification: full `npm run check` and workspace `npm run build`; synthetic
+  Chromium capture/export/replay and clipped-cover rejection/guidance checks;
+  synthetic extractor PNG output and refusal of overwrite, in-repo output,
+  and truncated data. Local Windows setup required replacing two unreadable
+  WSL workspace links with junctions (original links preserved in node_modules)
+  and downloading Next's Windows compiler to the workspace cache. No tracked
+  dependency changes were needed; pre-existing `.gitignore`/lockfile edits
+  were preserved. D02 needs consented webcam clips and verified labels; no
+  real-camera recall, AI accuracy, database preflight, or rollout pass is claimed.

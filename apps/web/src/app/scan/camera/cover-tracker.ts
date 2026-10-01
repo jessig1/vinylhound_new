@@ -8,6 +8,13 @@ export type TrackingUpdate = {
   capture: TrackedFrame | null;
   progress: number;
   moving: boolean;
+  resetReason:
+    | "removal"
+    | "replacement"
+    | "detection_gap"
+    | "new_target"
+    | "motion"
+    | null;
 };
 
 export function fingerprintDifference(a: number[], b: number[]) {
@@ -34,6 +41,7 @@ export class CoverTracker {
   private absentSince: number | null = null;
   private replacementSince: number | null = null;
   private moving = false;
+  private resetReason: TrackingUpdate["resetReason"] = null;
 
   reset() {
     this.phase = "searching";
@@ -52,6 +60,7 @@ export class CoverTracker {
 
   inspect(id: number, time: number, detection: Detection): TrackingUpdate {
     this.moving = false;
+    this.resetReason = null;
     const candidate = detection.candidate;
     if (this.phase === "capturing") return this.update();
     if (this.phase === "waiting") {
@@ -59,7 +68,10 @@ export class CoverTracker {
         // Competing candidates/poor quality do not prove removal.
         if (detection.reason === "searching") {
           this.absentSince ??= time;
-          if (time - this.absentSince >= 350) this.reset();
+          if (time - this.absentSince >= 350) {
+            this.reset();
+            this.resetReason = "removal";
+          }
         } else this.absentSince = null;
         this.replacementSince = null;
         return this.update();
@@ -78,9 +90,14 @@ export class CoverTracker {
       this.replacementSince ??= time;
       if (time - this.replacementSince < 400) return this.update();
       this.reset();
+      this.resetReason = "replacement";
     }
     if (!candidate || detection.reason !== "ready") {
-      if (time - this.lastSeen > 300) this.reset();
+      if (time - this.lastSeen > 300) {
+        const active = this.phase !== "searching";
+        this.reset();
+        if (active) this.resetReason = "detection_gap";
+      }
       return this.update();
     }
     this.moving =
@@ -89,6 +106,11 @@ export class CoverTracker {
         fingerprintDifference(candidate.fingerprint, this.prior.fingerprint) >
           0.35);
     if (!this.prior || time - this.lastSeen > 300 || this.moving) {
+      this.resetReason ??= !this.prior
+        ? "new_target"
+        : time - this.lastSeen > 300
+          ? "detection_gap"
+          : "motion";
       this.since = time;
       this.best = null;
     }
@@ -114,6 +136,7 @@ export class CoverTracker {
           ? Math.max(0, Math.min(1, (this.lastSeen - this.since) / 600))
           : 0,
       moving: this.moving,
+      resetReason: this.resetReason,
     };
   }
 }

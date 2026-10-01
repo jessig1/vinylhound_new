@@ -15,6 +15,7 @@ coverage/
 .env.*
 !.env.example
 certificates/
+env
 
 # Local data
 .data/

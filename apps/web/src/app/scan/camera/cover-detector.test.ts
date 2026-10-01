@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  createDetectorTrace,
+  MAX_COMPONENT_TRACES,
+} from "./detector-diagnostics";
+import {
   detectCover,
   project,
   type Corners,
@@ -33,6 +37,36 @@ function scene(kind: "empty" | "cover" | "document" | "clipped" | "person") {
 }
 
 describe("experimental cover geometry", () => {
+  it.each(["empty", "cover", "document", "clipped", "person"] as const)(
+    "diagnostics preserve %s decisions and explain every component",
+    (kind) => {
+      const frame = scene(kind);
+      const trace = createDetectorTrace();
+      expect(detectCover(frame, trace)).toEqual(detectCover(frame));
+      expect(trace.components.length).toBeLessThanOrEqual(MAX_COMPONENT_TRACES);
+      expect(trace.selection.rankedIds.every(id => trace.proposals.some(proposal => proposal.id === id))).toBe(true);
+      expect(
+        Object.values(trace.rejectionCounts).reduce((sum, n) => sum + n, 0),
+      ).toBe(trace.components.length + trace.omittedComponents);
+      for (const component of trace.components) {
+        if (component.signals?.sharpness == null)
+          expect(component.detail).toBe("not_evaluated");
+      }
+      if (kind === "cover") {
+        const selected = trace.components.find(
+          (c) => c.id === trace.selection.selectedId,
+        );
+        expect(selected?.stage).toBe("ready");
+        expect(trace.selection.reason).toBe("largest_area");
+      }
+      if (kind === "clipped")
+        expect(
+          trace.components.some(
+            (c) => c.reason === "clipped" && c.detail === "not_evaluated",
+          ),
+        ).toBe(true);
+    },
+  );
   it.each(["gradient", "noise"] as const)(
     "keeps %s backgrounds out of automatic capture",
     (kind) => {

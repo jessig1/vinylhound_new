@@ -19,6 +19,11 @@ CI should never require production secrets or make billable OpenAI calls. Provid
 
 ## Experimental cover capture (P5.1 Task 1)
 
+For P5.1-D01's opt-in development diagnostics, private raw-frame exports,
+recording bounds, and synthetic replay/overhead checks, see the
+[local diagnostic guide](CAPTURE_DIAGNOSTICS_D01.md). D02's real-camera corpus
+and accuracy baseline remain pending.
+
 `CAPTURE_CANDIDATE_MODE_ENABLED=false` is the default; live camera capture
 uses a manual shutter. For local candidate-mode trials, set it to `true` in
 the root `.env` and restart the web process. Do not enable public automatic
